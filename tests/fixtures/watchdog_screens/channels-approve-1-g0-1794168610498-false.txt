@@ -1,0 +1,35 @@
+  1. Where the user path hooks in. The new check goes in Watchdog.tick (watchdog.py:445), just
+     before the "transcript hasn't moved → skip" step. The approval record is written in
+     wait_for_user (watchdog.py:628) and to_user (:525). Key presses follow the same checks as
+     answer_dialog (:575). No existing route changes.
+  2. The supervisor can't approve deletes. Approvals live under a separate key, fx:approve:<id>,
+     not in fx:escalations. The supervisor's escalations JSON only accepts dialog: / blocked: keys
+     (fleet.py:1418). Each approval also needs a one-time token that only goes out on the card;
+     Redis stores just its sha256 hash.
+  3. The only edit to shared fleet.py is daemon_down_section (:7070). P6 does not edit
+     parse_service_decision, escalation_apply or dialog_answer, which is where P7 works. P6 ③ waits
+     until P1 has fixed the channel send arguments.
+  4. Gaps in the ported sources. The Feishu card callback in feishu_ws.py:164 does not check the
+     operator against a whitelist, so P3 must add that check. Telegram's allowed_updates in
+     telegram_poll.py:108 leaves out callback_query, so P2 must add it or approve buttons won't
+     arrive.
+
+  Not done: phase B code (waiting for 「通道接口已冻结」). Five questions for you in survey §6:
+  - Q1: delete dialogs such as dangerous rm have no registered "approve" key in the dialog table. I
+    suggest a new user_approve: section in the table, which also needs an edit to
+    config/fleet.yaml, a file no package owns.
+  - Q2: after the phone answers, should dispatch resume automatically? prompt_wait pauses the whole
+    fleet (runtime_v2.py:1996).
+  - Q3: how long the confirm step and the approval record stay valid (I suggest 120 s and 1800 s).
+  - Q4: whether opencode/dsh delete-class permission requests are covered this round.
+  - Q5: whether runs without channels: still write the approval record (I suggest not).
+
+  Blocked: none
+
+✽ Beaming… (running Stop hooks… 6/7 · 5m 58s · ↓ 24.5k tokens)
+
+───────────────────────────────────────────────────────────────────────────── f91472563-approve-1 ─
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────
+  173.7k tok · $0.535 · Ctx:17% (~95% cmpct) | Opus 5.5 (1M context) | 5h:—% 7d:29%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents

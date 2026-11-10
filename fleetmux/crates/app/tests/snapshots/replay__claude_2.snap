@@ -1,0 +1,34 @@
+---
+source: crates/app/tests/replay.rs
+expression: t.text(rows as usize)
+---
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Sonnet 5 · Claude Max
+  ▝▝ ▝▝    /private/tmp/fmdemo/claude-2
+
+
+❯ Create hello.py that prints hello, then run it.
+
+⏺ Write(hello.py)
+  ⎿  Wrote 1 line to hello.py
+      1 print("hello")
+
+⏺ Bash(python3 hello.py)
+  ⎿  hello
+
+⏺ Created hello.py and ran it — output: hello.
+
+✻ Cogitated for 12s · done 4:18 AM
+
+❯ /exit
+
+✢ Crunching…
+  ⎿  Tip: Use /statusline to set up a custom status line that will display beneath the input box
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← 1 agent
+
+Resume this session with:
+claude --resume XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX

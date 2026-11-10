@@ -1,0 +1,53 @@
+      224 +    }                                                                                                  
+      225 +                                                                                                       
+      226 +    // Read-only accessors: plain field reads, no rules.                                               
+      227 +                                                                                                       
+      228 +    /// Panes of group `g`, in tab order.                                                              
+      229 +    pub fn group(&self, g: Group) -> &[PaneId] {                                                       
+      230 +        &self.groups[g.index()]                                                                        
+      231 +    }                                                                                                  
+      232 +                                                                                                       
+      233 +    /// Selected tab of group `g`.                                                                     
+      234 +    pub fn selected(&self, g: Group) -> Option<&PaneId> {                                              
+      235 +        self.selected[g.index()].as_ref()                                                              
+      236 +    }                                                                                                  
+      237 +                                                                                                       
+      238 +    /// The group that has keyboard focus.                                                             
+      239 +    pub fn focus(&self) -> Group {                                                                     
+      240 +        self.focus                                                                                     
+      241 +    }                                                                                                  
+      242 +                                                                                                       
+      243 +    /// `(h_ratio, v_ratio)` in percent.                                                               
+      244 +    pub fn ratios(&self) -> (u8, u8) {                                                                 
+      245 +        (self.h_ratio, self.v_ratio)                                                                   
+      246 +    }                                                                                                  
+      247 +                                                                                                       
+      248 +    /// The zoomed pane, if any.                                                                       
+      249 +    pub fn zoom(&self) -> Option<&PaneId> {                                                            
+      250 +        self.zoom.as_ref()                                                                             
+      251 +    }                                                                                                  
+      252 +                                                                                                       
+      253 +    /// Recorded type of pane `id`.                                                                    
+      254 +    pub fn pane_type(&self, id: &str) -> Option<PaneType> {                                            
+      255 +        self.types.get(id).copied()                                                                    
+      256 +    }                                                                                                  
+      257 +}                                                                                                      
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ LSP plugin recommendation
+
+   LSP provides code intelligence like go-to-definition and error checking
+
+   Plugin: rust-analyzer-lsp
+   Marketplace: claude-plugins-official
+   Triggered by: .rs files
+   Description: Rust language server for code intelligence and analysis
+
+   Would you like to install this LSP plugin?
+   ❯ 1. Yes, install
+     2. No, not now
+     3. Never for this plugin
+     4. Disable all LSP recommendations
+
+
+✢ Channeling… (9m 55s · ↓ 18.1k tokens · thinking with high effort)

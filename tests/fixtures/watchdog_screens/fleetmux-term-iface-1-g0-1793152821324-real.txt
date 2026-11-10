@@ -1,0 +1,53 @@
+      189 +                                                                               
+      190 +        fn cursor(&self) -> Cursor {                                           
+      191 +            todo!()                                                            
+      192 +        }                                                                      
+      193 +                                                                               
+      194 +        fn modes(&self) -> Modes {                                             
+      195 +            todo!()                                                            
+      196 +        }                                                                      
+      197 +                                                                               
+      198 +        fn take_replies(&mut self) -> Vec<u8> {                                
+      199 +            todo!()                                                            
+      200 +        }                                                                      
+      201 +                                                                               
+      202 +        fn resize(&mut self, cols: u16, rows: u16) {                           
+      203 +            let _ = (cols, rows);                                              
+      204 +            todo!()                                                            
+      205 +        }                                                                      
+      206 +                                                                               
+      207 +        fn text(&self, lines: usize) -> String {                               
+      208 +            let _ = lines;                                                     
+      209 +            todo!()                                                            
+      210 +        }                                                                      
+      211 +                                                                               
+      212 +        fn take_dirty(&mut self) -> bool {                                     
+      213 +            todo!()                                                            
+      214 +        }                                                                      
+      215 +    }                                                                          
+      216 +                                                                               
+      217 +    /// A `cols` × `rows` terminal keeping `scrollback` lines of history.      
+      218 +    pub fn new(cols: u16, rows: u16, scrollback: usize) -> Alacritty {         
+      219 +        let _ = (cols, rows, scrollback);                                      
+      220 +        todo!()                                                                
+      221 +    }                                                                          
+      222 +}                                                                              
+
+─────────────────────────────────────────────────────────────────────────────────────────────────
+ LSP plugin recommendation
+
+   LSP provides code intelligence like go-to-definition and error checking
+
+   Plugin: rust-analyzer-lsp
+   Marketplace: claude-plugins-official
+   Triggered by: .rs files
+   Description: Rust language server for code intelligence and analysis
+
+   Would you like to install this LSP plugin?
+   ❯ 1. Yes, install
+     2. No, not now
+     3. Never for this plugin
+     4. Disable all LSP recommendations
+
+
+✽ Actioning… (6m 50s · ↓ 11.7k tokens)

@@ -1,0 +1,53 @@
+       74 +    use super::*;                                                              
+       75 +                                                                               
+       76 +    fn parse(args: &[&str]) -> Result<Parsed, String> {                        
+       77 +        parse_args(args.iter().map(|s| s.to_string()))                         
+       78 +    }                                                                          
+       79 +                                                                               
+       80 +    #[test]                                                                    
+       81 +    fn defaults_turn_mouse_and_paste_on() {                                    
+       82 +        let want = Opts { mouse: true, paste: true, ..Opts::default() };       
+       83 +        assert_eq!(parse(&[]), Ok(Parsed::Run(want)));                         
+       84 +    }                                                                          
+       85 +                                                                               
+       86 +    #[test]                                                                    
+       87 +    fn every_flag_is_recognised() {                                            
+       88 +        let got = parse(&["--no-mouse", "--no-paste", "--kitty-query", "--app-c
+          +ursor", "--exit-after", "1500"]);                                              
+       89 +        let want = Opts {                                                      
+       90 +            mouse: false,                                                      
+       91 +            paste: false,                                                      
+       92 +            kitty_query: true,                                                 
+       93 +            app_cursor: true,                                                  
+       94 +            exit_after: Some(Duration::from_millis(1500)),                     
+       95 +        };                                                                     
+       96 +        assert_eq!(got, Ok(Parsed::Run(want)));                                
+       97 +    }                                                                          
+       98 +                                                                               
+       99 +    #[test]                                                                    
+      100 +    fn bad_arguments_are_errors() {                                            
+      101 +        assert!(parse(&["--exit-after"]).is_err());                            
+      102 +        assert!(parse(&["--exit-after", "soon"]).is_err());                    
+      103 +        assert!(parse(&["--bogus"]).is_err());                                 
+      104 +        assert_eq!(parse(&["--help"]), Ok(Parsed::Help));                      
+      105 +    }                                                                          
+      106 +}                                                                              
+
+─────────────────────────────────────────────────────────────────────────────────────────────────
+ LSP plugin recommendation
+
+   LSP provides code intelligence like go-to-definition and error checking
+
+   Plugin: rust-analyzer-lsp
+   Marketplace: claude-plugins-official
+   Triggered by: .rs files
+   Description: Rust language server for code intelligence and analysis
+
+   Would you like to install this LSP plugin?
+   ❯ 1. Yes, install
+     2. No, not now
+     3. Never for this plugin
+     4. Disable all LSP recommendations
+
+
+· Proofing… (9m 49s · ↓ 27.1k tokens · still thinking with high effort)

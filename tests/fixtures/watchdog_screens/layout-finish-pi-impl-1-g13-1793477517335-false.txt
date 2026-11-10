@@ -1,0 +1,200 @@
+ scripts/install_release.sh, tests/test_install_release.py,
+ README.md.
+
+ Check git status and diff stat first. Then commit with a
+ message.
+
+ Before commit: is README change OK given "只改安装器、必要
+ 测试、使用文档"? Yes.
+
+ Let me also run bash -n and shellcheck? Not installed
+ maybe. bash -n done earlier; re-run after edits.
+
+ Commit message:
+
+ ```
+   fix(scripts): keep the install log, own only the created
+ release dir, print the release start command (M60)
+ ```
+
+ Body: P1-01/02/03 + 记录-01/02, hex sha, json parse/dump.
+
+ Then the second commit: setup_fixture.py.
+
+ Let me check git status/diff stat now.
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && bash -n scripts/install_release.sh && echo "BASH SYNTAX
+ OK" && git status --porcelain && git diff --stat
+
+ ... (5 earlier lines, ctrl+o to expand)
+  scripts/install_release.sh    | 150
+ +++++++++++++++++++++++++++---------
+  tests/test_install_release.py | 174
+ ++++++++++++++++++++++++++++++++++++++++--
+  3 files changed, 308 insertions(+), 41 deletions(-)
+
+ Took 0.1s
+
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && git add README.md scripts/install_release.sh
+ tests/test_install_release.py && git commit -q -F - <<'EOF'
+ fix(scripts): keep the install log, own only the created
+ release dir, print the release start command (M60)
+
+ Installer review r1 (reviewer-1/linux-delivery-review.json)
+ found three P1s in the 9c20a32f installer:
+
+ - P1-01: `--test` wrote $REL/release-tests.log and
+ cleanup() rm -rf'd $REL, so a red UTM run lost the
+   whole log. The complete log now lives at
+ $RELEASES/.logs/<sha>-<ts>-<pid>.log (outside the release
+   dir) and its path is printed on failure and on success.
+ - P1-02: `[ -e "$REL" ]` + `mkdir -p` was not atomic and
+ <sha> was unvalidated, so a second install could
+   join and then delete the first run's release, and a
+ non-hex <sha> sent `rm -rf` outside $RELEASES.
+   <sha> must now be 7-40 hex (upper case normalised; older
+ short-SHA callers keep working) and the release
+   dir is created with a bare `mkdir`; CREATED is only set
+ by the run whose mkdir succeeded.
+ - P1-03: nothing printed or recorded <release>/bin on PATH,
+ so a normal shell ran the stale ~/.local/bin
+   build. Success now prints `PATH=<release>/bin:$PATH
+ <release>/.venv/bin/cmux-fleet --help` (console
+   script first, `python -m cmux_fleet.fleet` fallback) and
+ records it as `start_command`.
+
+ Also the recorded items: manifest.json is parsed with
+ json.load instead of a sed regex (a valid
+ pretty-printed manifest is accepted, a non-JSON one is
+ refused with the parse error), and installed.json
+ is written by json.dump and re-parsed before the release is
+ declared ready, so a --tool-sha with a quote
+ or a path with backslashes stays valid JSON. The
+ interpreter is now picked before the binaries are
+ verified because it does the parsing.
+
+ README gets the release-install usage (release-local bin/,
+ log location, start command, hex <sha>).
+
+ Targeted: tests/test_install_release.py 22 passed (13
+ existing + 9 new); against the 9c20a32f installer
+ the same file is 8 failed / 14 passed. reviewer-1's
+ repro_m52.py re-run from a copy with a stub that
+ implements `python - <script>`: R1 LOG KEPT, R2a canary
+ survived, R2b release survived, R3-hex refused,
+ R4 valid manifest accepted, R5 valid JSON, R6 console
+ command printed. The application release stays
+ 35670632 source + binaries; this commit changes only how it
+ is installed.
+ EOF
+ git log --oneline -1
+
+ 0622dba1 fix(scripts): keep the install log, own only the
+ created release dir, print the release start command (M60)
+
+ Took 0.1s
+
+
+ Commit 1: 0622dba1.
+
+ Now commit 2: setup_fixture.py daemon exec sleep 3600 vs
+ "never exits on its own".
+
+ Fix design:
+ - Replace the daemon command with a POSIX infinite wait
+   that both macOS and Linux support and that is terminable:
+   exec /bin/sh -c 'while :; do sleep 3600; done'.
+ - Keep the printed synthetic marker line.
+ - Update the module docstring line 9.
+ - Maybe add a comment explaining the baseline observation
+   (fixture-only repair 2026-10-31T15:36, no product code)
+   and that sleep infinity is GNU-only.
+
+ Also: "保留可清理进程组及合成fixture标识" — keep cleanable
+ process group and synthetic fixture marker. The
+ spawn_window runs bash -lc 'cd <cwd> && exec <command>' per
+ the docstring. So the pane's process is the exec'd sh loop
+ → killing the pane kills it; and the loop's sleep 3600
+ child is in the same process group → cleanable. Good;
+ document that.
+
+ Should I also add a marker env/print? The current printf
+ prints 'fixture daemon — no real task'. I'll extend to
+ include a stable synthetic marker token so acceptance can
+ grep: e.g. A42_FIXTURE_DAEMON=synthetic. Hmm, "合成fixture
+ 标识" = synthetic fixture identifier. The existing printed
+ line is the marker. I'll keep it and add the token in the
+ same line:
+
+ printf 'fixture daemon — synthetic, no real task
+ (A42_FIXTURE=synthetic-daemon)\\n'
+
+ But changing the printed text may break other docs that
+ quote it. grep for 'no real task': let me check. Earlier
+ grep for "sleep 3600|never exits" found only setup_fixture
+ lines. Let me grep "fixture daemon".
+
+ Also is there a test for setup_fixture? Let me grep tests
+ for setup_fixture.
+
+ Also maybe expose the daemon command as a module constant
+ DAEMON_COMMAND so a test can assert it terminates and never
+ exits? Dispatch says "只改安装器、必要测试" for commit 1;
+ commit 2 is about setup_fixture.py with baseline evidence;
+ tests: "必要测试" applies to installer only? The dispatch:
+ "再独立commit修 scripts/acceptance42/setup_fixture.py 的
+ exec sleep3600与never-exits声明矛盾" — no test requirement
+ mentioned. But a small test would be good if a test file
+ exists for the helper. Let me check scripts/acceptance42
+ tests.
+
+ Let me grep.
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && grep -rn "fixture daemon" --include=* . | head; echo
+ "=== tests for setup_fixture ==="; grep -rln
+ "setup_fixture" tests/ scripts/ docs/ 2>/dev/null | head
+
+ ... (20 earlier lines, ctrl+o to expand)
+ 314.pyc
+ scripts/acceptance42/__pycache__/setup_fixture.cpython-314.
+ pyc
+ scripts/acceptance42/__pycache__/claude_readiness.cpython-3
+ 14.pyc
+
+ Took 46.1s
+
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && grep -n "setup_fixture\|spawn_panes\|daemon"
+ tests/test_acceptance42_fixture_readiness.py | head -20;
+ echo "=== head of test file ==="; sed -n 1,30p
+ tests/test_acceptance42_fixture_readiness.py
+
+ ... (53 earlier lines, ctrl+o to expand)
+     '   /home/USER/a42/fixture-final/iso/claude-input',
+     '',
+     ' ❯ 1. Yes, I trust this folder',
+     '   2. No, exit',
+ ]
+
+ Took 0.0s
+
+
+── ⠧ Working ────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────
+~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+↑58k ↓38k R2.0M CH99.5% 23.2%/400k (auto)  workbuddy-ai/deeps
+执行派工任务

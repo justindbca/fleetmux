@@ -1,0 +1,200 @@
+
+ Also top-level result maybe 'fixture_ready' — put inside
+ ready plus top-level 'fixture_ready' for easy gating? Add
+ to ready dict: 'fixture_ready'. And keep top-level 'note'.
+
+ lifecycle_fixture: replace constants+claude_ui with
+ delegation too, and add input_ready into its output where
+ it uses ui['logged_in_ui'].
+
+ Let me look at lifecycle_fixture lines 36-50 and 120-140,
+ 190-225.
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && sed -n 30,50p scripts/acceptance42/lifecycle_fixture.py;
+ echo '---'; sed -n 120,140p
+ scripts/acceptance42/lifecycle_fixture.py; echo '---'; sed
+ -n 188,226p scripts/acceptance42/lifecycle_fixture.py
+
+ ... (108 earlier lines, ctrl+o to expand)
+         'commands': {
+             'gui': '%s gui --runtime %s' % (bin_path,
+ live['runtime']),
+             'attach': '%s attach --runtime %s' % (bin_path,
+ live['runtime']),
+
+ Took 0.0s
+
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && python3 - <<'PY'
+ from pathlib import Path
+
+ # ---------------- setup_fixture.py
+ p = Path('scripts/acceptance42/setup_fixture.py'); s =
+ p.read_text()
+ s = s.replace("""sys.path.insert(0,
+ str(Path(__file__).resolve().parent))
+ import history_theme  # noqa: E402""",
+ """sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import claude_readiness  # noqa: E402
+ import history_theme  # noqa: E402""", 1)
+
+ old = '''# Markers that mean "claude is NOT logged in" /
+ "claude is at the normal input box" (read-only screen
+ text).
+ LOGIN_MARKERS = ('Select login method', 'Sign in with',
+ 'Paste code', 'Log in to Claude',
+                  'Choose a theme', 'first-time setup',
+ 'OAuth')
+ INPUT_MARKERS = ('❯', 'bypass permissions', 'for
+ shortcuts', 'Claude Code v')
+
+
+ def claude_ui(tail_lines) -> dict:
+     text = '\\n'.join(tail_lines)
+     login = [m for m in LOGIN_MARKERS if m in text]
+     inp = [m for m in INPUT_MARKERS if m in text]
+     return {'login_prompt_seen': login,
+ 'input_box_markers': inp,
+             'logged_in_ui': bool(inp) and not login}'''
+ new = '''# Claude pane readiness comes from ONE shared
+ classifier (claude_readiness): a `❯` marker inside a trust
+ /
+ # setup / login dialog is NOT input readiness, and `❯`
+ never authenticates the CLI.  Reproduced bug: the
+ # first-run trust screen ("Accessing workspace / ❯ 1. Yes,
+ I trust this folder / 2. No, exit") was reported
+ # as a logged-in input box because it contains `❯`.
+ def claude_ui(tail_lines) -> dict:
+     return claude_readiness.classify(tail_lines or [])'''
+ assert old in s; s = s.replace(old, new, 1)
+
+ old_result = '''    result = {
+         'platform': a.platform,'''
+ new_result = '''    claude_screen =
+ screens['worker-2'].get('screen_lines') or []
+     claude = claude_ui(claude_screen)
+     claude_gate = claude_readiness.readiness_gate(claude)
+
+     result = {
+         'platform': a.platform,'''
+ assert old_result in s; s = s.replace(old_result,
+ new_result, 1)
+
+ old_pane = """            'claude_pane': {'name':
+ 'worker-2', 'pane': w2.pane_id, 'cwd': claude_cwd,
+                             'tail':
+ screens['worker-2']['tail'],
+                             'ui':
+ claude_ui(screens['worker-2'].get('screen_lines') or
+ [])},"""
+ new_pane = """            'claude_pane': {'name':
+ 'worker-2', 'pane': w2.pane_id, 'cwd': claude_cwd,
+                             'tail':
+ screens['worker-2']['tail'], 'ui': claude,
+                             'input_ready':
+ claude_gate['input_ready'],
+                             'blocked_by':
+ claude_gate['blocked_by'],
+                             'authentication':
+ claude_gate['authentication']},
+             # A fixture is ready only on a genuine
+ logged-in input box: a pending trust/setup/login dialog
+             # (even one that shows `❯`) forces
+ fixture_ready=false.
+             'claude_input_ready':
+ claude_gate['input_ready'],
+             'fixture_ready': claude_gate['fixture_ready'],
+             'blocked_by': claude_gate['blocked_by'],"""
+ assert old_pane in s; s = s.replace(old_pane, new_pane, 1)
+ p.write_text(s)
+
+ # ---------------- lifecycle_fixture.py
+ q = Path('scripts/acceptance42/lifecycle_fixture.py'); t =
+ q.read_text()
+ t = t.replace("""REPO = Path(__file__).resolve().parents[2]
+ WORK =
+ Path('/Users/USER/Documents/Codex/2026-10-30/new-chat/wor
+ k/acceptance42')""",
+ """sys.path.insert(0, str(Path(__file__).resolve().parent))
+ import claude_readiness  # noqa: E402
+
+ REPO = Path(__file__).resolve().parents[2]
+ WORK =
+ Path('/Users/USER/Documents/Codex/2026-10-30/new-chat/wor
+ k/acceptance42')""", 1)
+
+ old_lc = '''LOGIN_MARKERS = ('Select login method', 'Sign
+ in with', 'Paste code', 'Log in to Claude', 'Choose a
+ theme')
+ INPUT_MARKERS = ('❯', 'bypass permissions', 'for
+ shortcuts', 'Claude Code v')
+ '''
+ assert old_lc in t; t = t.replace(old_lc, '', 1)
+
+ old_ui = '''def claude_ui(tails: dict) -> dict:
+     text = '\\n'.join('\\n'.join(v) for k, v in
+ tails.items() if k.startswith('fx-worker'))
+     return {'login_prompt_seen': [m for m in LOGIN_MARKERS
+ if m in text],
+             'input_box_markers': [m for m in INPUT_MARKERS
+ if m in text],
+             'logged_in_ui': any(m in text for m in
+ INPUT_MARKERS) and not any(m in text for m in
+ LOGIN_MARKERS)}'''
+ new_ui = '''def claude_ui(tails: dict) -> dict:
+     """Worker screens through the SHARED classifier (same
+ trust/setup/login rules as setup_fixture)."""
+     text = '\\n'.join('\\n'.join(v) for k, v in
+ tails.items() if k.startswith('fx-worker'))
+     return claude_readiness.classify(text)'''
+ assert old_ui in t; t = t.replace(old_ui, new_ui, 1)
+
+ old_ready = """            'claude_logged_in_ui':
+ ui['logged_in_ui'],"""
+ new_ready = """            'claude_logged_in_ui':
+ ui['logged_in_ui'],
+             'claude_input_ready': ui['input_ready'],
+             'claude_dialog_pending':
+ ui['dialog_pending'],"""
+ assert old_ready in t; t = t.replace(old_ready, new_ready,
+ 1)
+ q.write_text(t)
+ print('patched setup_fixture + lifecycle_fixture')
+ PY
+ python3 -m py_compile
+ scripts/acceptance42/claude_readiness.py
+ scripts/acceptance42/setup_fixture.py
+ scripts/acceptance42/lifecycle_fixture.py && echo compiled
+
+ patched setup_fixture + lifecycle_fixture
+ compiled
+
+ Took 0.1s
+
+
+ Now tests: tests/test_acceptance42_fixture_readiness.py.
+
+ Screens:
+ 1. Trust dialog (the reproduced bug):
+ ```
+    Accessing workspace:
+      /home/USER/a42/fixture-final/iso/claude-input
+
+    ❯ 1. Yes, I trust this folder
+      2. No, exit
+ ```
+
+ → input_
+
+── ⠧ Working ────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────
+~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+↑215k ↓106k R10M CH99.4% 45.1%/400k (auto)  workbuddy-ai/deep
+执行派工任务

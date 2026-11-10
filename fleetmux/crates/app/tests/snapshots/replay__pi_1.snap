@@ -1,0 +1,32 @@
+---
+source: crates/app/tests/replay.rs
+expression: t.text(rows as usize)
+---
+
+ ▀▀█  v1.4.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+
+ List the files in this directory and say how many there are.
+
+
+
+ $ ls -la /private/tmp/fmdemo/pi-1
+
+ total 0
+ drwxr-xr-x   2 xxxxxx  wheel   64 Oct 28 04:23 .
+ drwxr-xr-x  12 xxxxxx  wheel  384 Oct 28 04:23 ..
+
+ Took 0.0s
+
+
+ The directory /private/tmp/fmdemo/pi-1 is empty — there are 0 files (only the . and .. entries).
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/fmdemo/pi-1
+↑112 ↓68 R3.3k CH95.4% 0.4%/400k (auto)                         (flashnext) Qwen3.8-Flash-Next-Uncensored-MLX-Serve-4bit

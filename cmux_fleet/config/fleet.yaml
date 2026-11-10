@@ -1,0 +1,736 @@
+# cmux-fleet configuration: one file, one block per table.
+#
+# This file ships the defaults. The operator's private file has the same format:
+#   $CMUX_FLEET_CONFIG, else ~/.fleetmux/fleet.yaml   (legacy ~/.cmux-fleet/fleet.yaml until
+#   `fleetmux home migrate`; never part of this repository)
+# A top-level block there replaces the shipped block as a whole (no deep merge). Only these blocks may
+# be overridden there: accounts, tools, walls, lifecycle_modes. cli_pairs (the real-smoke gate),
+# watchdog_prompts (the dialog whitelist), models, profiles and capability_matrix change only here,
+# through a reviewed commit.
+#
+# Blocks
+#   cli_pairs          supervisor CLI x worker CLI x mode: which pairs passed a real smoke   (cli_pairs.py)
+#   lifecycle_modes    what "done" means for a run and how it is closed                       (lifecycle.py)
+#   walls              usage-wall wording, same-CLI downgrade, model aliases                  (brake.py)
+#   watchdog_prompts   dialogs the watchdog may answer, markers it must hold                  (watchdog.py)
+#   capability_matrix  domain x task type x model card -> enough / not enough                 (advisor.py)
+#   models             model cards, keyed by card id                                          (agent_registry.py)
+#   profiles           agent profiles (CLI + model card + role file), keyed by profile id     (agent_registry.py)
+#   accounts           account pools for budget cards (empty here; fill in the private file)  (brake.py)
+#   tools              tool pools reached through thin MCP servers (empty here)
+#   pi_context         context window written into each run's pi models.json            (pi_adapter.py)
+#   fresh_dispatch     when a reused worker earns the supervisor a "fresh" hint               (fleet_config.py)
+#   dsh                dsh workers: the model when `start --dsh-model` is not given             (fleet_config.py)
+
+cli_pairs:
+  # Transport v2 supervisor_cli x worker_cli x mode table (read by cmux_fleet/cli_pairs.py).
+  # Re-read on every check: an edit takes effect at the next start.
+  #   status: verified   -> runs normally
+  #           unverified -> runs only with --lifecycle smoke (cfg lifecycle == 'smoke')
+  #           forbidden  -> refused; a pair/mode missing from this table is forbidden too
+  #   adapter_missing: non-empty -> refused even for smoke
+  #   reason: the refusal text shown to the user (unverified / forbidden / adapter_missing rows)
+  #   verified_by: the real smoke (scripts/smoke_pair.sh, 1 supervisor + 2 workers, 4 v2 checks) that flipped it
+  # Exception kept in code: claude+claude task or service with cfg adopt (docs/design.md §19 sub-fleet, §29 named).
+  # CLI boundary (docs/design.md §6, §11 2026-10-13 "Codex/FlashNext via pi"): Claude agents run only the
+  # official `claude` CLI; pi never uses Claude subscription credentials. Codex models (openai-codex/*, ChatGPT
+  # login) and FlashNext run through pi. The official Codex TUI supervisor stays optional:
+  # `start --supervisor-cli codex [--supervisor-profile X]` (codex+* rows below).
+  # default keys: supervisor_cli, worker_cli, mode, supervisor_profile (Codex supervisor only),
+  #   supervisor_pi_model / supervisor_pi_thinking (a defaulted pi supervisor only; used only when neither
+  #   --supervisor-pi-model/-thinking nor an explicit --pi-model/--pi-thinking is given -- a typed flag always wins).
+  #   Any other default key is a load error.
+  # Night pair (no extra schema): pi+pi rows with per-agent models, e.g.
+  #   start --supervisor-cli pi --worker-cli pi --supervisor-pi-model openai-codex/gpt-6-astra
+  #     --supervisor-pi-thinking high --pi-model flashnext/<local-model> --lifecycle <mode>
+  #   (or roster rows `pi_model:` per worker). An explicit --supervisor-cli pi does not read default.supervisor_pi_*;
+  #   --supervisor-pi-model is required there, else --pi-model would put the supervisor on FlashNext too.
+  version: 1
+  # start fills unset --supervisor-cli/--worker-cli (and, for a pi supervisor, its pi model/thinking) from here.
+  # User decision 2026-10-13: pi supervisor on openai-codex/gpt-6-astra (thinking high) + official Claude Code workers.
+  default: {supervisor_cli: pi, worker_cli: claude, mode: task,
+            supervisor_pi_model: openai-codex/gpt-6-astra, supervisor_pi_thinking: high}
+  pairs:
+    - {supervisor_cli: pi, worker_cli: pi, mode: task, status: verified, adapter_missing: [],
+       verified_by: "design.md §11 §14", notes: "all-Pi bridge"}
+    - {supervisor_cli: pi, worker_cli: pi, mode: service, status: verified, adapter_missing: [],
+       verified_by: "design.md §11 §14", notes: "all-Pi bridge; night pair = pi Astra supervisor + pi FlashNext workers via per-agent models"}
+    - {supervisor_cli: pi, worker_cli: claude, mode: task, status: verified, adapter_missing: [],
+       verified_by: "real smoke scripts/smoke_pair.sh pi claude task: fleet-20261013-115145-828661b9 2026-10-13 @3421f0d8+feat/codex-via-pi worktree, 4/4 checks PASS",
+       reason: "transport v2 pi supervisor + official Claude Code workers: verified by a real smoke (scripts/smoke_pair.sh pi claude task, see verified_by); shown only if this row is set back to unverified",
+       notes: "default (user decision 2026-10-13): pi Astra/high supervisor + official Claude Code workers"}
+    - {supervisor_cli: pi, worker_cli: claude, mode: service, status: verified, adapter_missing: [],
+       verified_by: "real smoke scripts/smoke_pair.sh pi claude service: fleet-20261013-115347-7e61f9af 2026-10-13 @3421f0d8+feat/codex-via-pi worktree, 4/4 checks PASS",
+       reason: "transport v2 pi supervisor + official Claude Code workers: verified by a real smoke (scripts/smoke_pair.sh pi claude service, see verified_by); shown only if this row is set back to unverified"}
+    - {supervisor_cli: codex, worker_cli: claude, mode: task, status: verified, adapter_missing: [],
+       verified_by: "user decision 2026-10-12; design.md §18", notes: "optional official Codex TUI supervisor + official Claude Code workers (default until 2026-10-13)"}
+    - {supervisor_cli: codex, worker_cli: claude, mode: service, status: verified,
+       adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh codex claude service: fleet-20261012-155328-b5e88a63 2026-10-12 @8a31c3c7, 4/4 checks PASS",
+       reason: "transport v2 Codex supervisor + Claude workers supports task mode only until service mode passes a real smoke (scripts/smoke_pair.sh codex claude service); result cards render off-model via tui_cards",
+       notes: "auto_apply (Claude experts); cards -> <run>/cards/<slot>.log + history page Cards view"}
+    - {supervisor_cli: codex, worker_cli: pi, mode: task, status: verified, adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh codex pi task: fleet-20261012-153556-1888b011 2026-10-12 @8a31c3c7, 4/4 checks PASS",
+       reason: "transport v2 mixed Pi/Codex fleets are unvalidated (supported: all-Pi, or Codex supervisor + Claude workers)",
+       notes: "night pair (Codex supervisor + pi FlashNext workers); daemon wiring tested in tests/test_v2_codex_pi.py"}
+    - {supervisor_cli: codex, worker_cli: pi, mode: service, status: verified, adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh codex pi service: fleet-20261012-155132-be46943c 2026-10-12 @8a31c3c7, 4/4 checks PASS",
+       reason: "transport v2 mixed Pi/Codex fleets are unvalidated (supported: all-Pi, or Codex supervisor + Claude workers)"}
+    - {supervisor_cli: claude, worker_cli: pi, mode: task, status: verified,
+       adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh claude pi task: fleet-20261012-155507-b74b7b86 2026-10-12 @8a31c3c7, 4/4 checks PASS + scripts/smoke_claude_input.sh fleet-20261012-160527-a590623c",
+       reason: "transport v2 Claude supervisor pairs are unverified (adapter: Stop-hook decision JSON, READY gate, UserPromptSubmit operator queue; live smoke pending)"}
+    - {supervisor_cli: claude, worker_cli: pi, mode: service, status: verified,
+       adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh claude pi service: fleet-20261012-155802-2f8d1fac 2026-10-12 @8a31c3c7, 4/4 checks PASS",
+       reason: "transport v2 Claude supervisor pairs are unverified (adapter: Stop-hook decision JSON, READY gate, UserPromptSubmit operator queue; live smoke pending)"}
+    - {supervisor_cli: claude, worker_cli: claude, mode: task, status: verified,
+       adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh claude claude task: fleet-20261012-161127-cf26826f 2026-10-12 @8a31c3c7, 4/4 checks PASS",
+       reason: "transport v2 Claude supervisor pairs are unverified (adapter: Stop-hook decision JSON, READY gate, UserPromptSubmit operator queue; live smoke pending)",
+       notes: "adopted sub-fleet supervisor (cfg adopt, design.md §19) is allowed in code without smoke"}
+    - {supervisor_cli: claude, worker_cli: claude, mode: service, status: verified,
+       adapter_missing: [], verified_by: "real smoke scripts/smoke_pair.sh claude claude service (SUPERVISOR_MODEL=claude-opus-5-5, Studio, Claude Code 2.1.311): fleet-20261103-002352-7bf14526 2026-11-03 @22d269cc, 4/4 checks PASS",
+       reason: "transport v2 Claude supervisor + Claude workers in service mode is unverified until scripts/smoke_pair.sh claude claude service passes 4/4",
+       notes: "user decision 2026-11-03: Opus 5.5 replaces the walled Astra supervisor of the ops service fleet (Claude workers, service)"}
+    - {supervisor_cli: codex, worker_cli: codex, mode: task, status: unverified, adapter_missing: [], verified_by: null,
+       reason: "transport v2 Codex workers are unvalidated (supported: all-Pi, or Codex supervisor + Claude workers)"}
+  # opencode workers (brief fleet-opencode-worker-20261016): the free OpenCode Zen model runs only inside the
+  # opencode client (`opencode --standalone`, fleet plugin + agent_bridge.py); opencode is never a supervisor.
+  # The model name comes from config (--opencode-model), never from code. Free tier: 200K window, concurrency
+  # untested (default max_busy 2). Unverified until scripts/smoke_pair.sh <sup> opencode <mode> passes 4/4.
+    - {supervisor_cli: pi, worker_cli: opencode, mode: task, status: unverified, adapter_missing: [], verified_by: null,
+       reason: "transport v2 pi supervisor + opencode workers is unverified until a real smoke (scripts/smoke_pair.sh pi opencode task)"}
+    - {supervisor_cli: pi, worker_cli: opencode, mode: service, status: verified, adapter_missing: [],
+       verified_by: "real smoke scripts/smoke_pair.sh pi opencode service: fleet-20261017-092035-71528818 2026-10-17 @b49eb2e8 feat/opencode-worker worktree, 4/4 checks PASS; P1-01 TUI-session fix @704d2173 checked by real-TUI regression T4/T3 13/13 + repro GREEN (smoke not re-run)",
+       reason: "transport v2 pi supervisor + opencode workers: verified by a real smoke (scripts/smoke_pair.sh pi opencode service, see verified_by); shown only if this row is set back to unverified"}
+    - {supervisor_cli: codex, worker_cli: opencode, mode: task, status: verified, adapter_missing: [],
+       verified_by: "real smoke scripts/smoke_pair.sh codex opencode task: fleet-20261017-091736-e572f3cb 2026-10-17 @b49eb2e8 feat/opencode-worker worktree, 4/4 checks PASS; P1-01 TUI-session fix @704d2173 checked by real-TUI regression T4/T3 13/13 + repro GREEN (smoke not re-run)",
+       reason: "transport v2 Codex supervisor + opencode workers: verified by a real smoke (scripts/smoke_pair.sh codex opencode task, see verified_by); shown only if this row is set back to unverified"}
+    - {supervisor_cli: codex, worker_cli: opencode, mode: service, status: unverified, adapter_missing: [], verified_by: null,
+       reason: "transport v2 Codex supervisor + opencode workers is unverified until a real smoke (scripts/smoke_pair.sh codex opencode service)"}
+  # dsh workers (design §41, plan dsh-fleet-worker-20261104): fleet's pane front-end drives `dsh --profile acp`
+  # (DeepSeek Harness, exact 0.2.1-rc.5) on a pi models.json model (--dsh-model); worker-only, for comparison
+  # with pi workers, not a default pair. FlashNext is shared: default max_busy 2.
+    - {supervisor_cli: pi, worker_cli: dsh, mode: task, status: verified, adapter_missing: [],
+       verified_by: "real smoke scripts/smoke_pair.sh pi dsh task: fleet-20261104-132341-aa15ae1d (BACKEND=cmux) + fleet-20261104-132632-237dacd8 (BACKEND=fleetmux) 2026-11-04 @84d226b2 feat/dsh-worker worktree (+ smoke script DSH_MODEL / BACKEND), 4/4 checks PASS each; pi Astra supervisor, 2 dsh workers on flashnext/Qwen3.8-Flash-Next-Uncensored-MLX-Serve-4bit",
+       reason: "transport v2 pi supervisor + dsh workers: verified by a real smoke (scripts/smoke_pair.sh pi dsh task, see verified_by); shown only if this row is set back to unverified"}
+
+lifecycle_modes:
+  # Lifecycle modes (docs/design.md).
+  # A lifecycle decides what "done" means and how a run is closed after done / blocked / timeout.
+  # `start --lifecycle <mode>` is required; `base` maps it onto the transport mode (cfg['mode']:
+  # task | service). The daemon re-reads this file when its mtime changes (no restart needed).
+  version: 1
+  require_mode_on_start: true          # start without --lifecycle -> refused
+  common:
+    on_blocked: {hold_hours: 12, then: stop_keep_resumable, notify: [tg, parent]}
+    on_budget_exhausted: {hold_hours: 12, then: stop_keep_resumable, notify: [tg, parent]}
+    close_workspace_after_stop: true
+    notify_parent_session: true
+  modes:
+    service:
+      base: service
+      on_complete: never
+      worker_idle_reclaim_min: 30
+      idle_stop_hours: null            # null = never stops by itself
+      stop: user_only
+      clock_gate: false
+    dev_task:
+      base: task
+      done_when: merged_to_deploy_branch_and_enqueued
+      require_integrator_worker: true
+      # master design v2 §4.14 (draft said fable). Review rounds are capped (10/13 codex-notype ran to r16):
+      # a FAIL verdict at round max_rounds stops the rounds; the open P0/P1 go to the user in the result
+      # (outstanding.json / .md), no new round. Reviewers in a fleet follow cmux_fleet/agents/reviewer.md.
+      review_step: {reviewer: opus, must_pass: true, max_rounds: 3, on_cap: stop_and_report}
+      on_complete: stop_and_close
+      notify: [tg, parent]
+    program:
+      base: task                       # each phase runs as a child dev_task fleet
+      resident: false
+      child_mode: dev_task
+      ledger: program_ledger.json
+      done_when: last_phase_merged_and_review_pass
+    scheduled:
+      base: task
+      hard_timeout_min: 150            # sector rotation: 150-minute budget, task dispatched within 90 min
+      on_complete: stop_and_close
+      on_fail: stop_and_close
+      clock_gate: true                 # trading-day gate via global_clock; market closed -> not launched
+      clock_market: US
+    review_loop:
+      base: task
+      max_rounds: 3
+      on_pass: stop_and_close
+      on_cap: stop_and_report
+    smoke:
+      base: task
+      bases: [task, service]           # pair acceptance (A cli_pairs): `--mode service` smokes a service pair
+      on_any_end: stop_and_close
+
+walls:
+  # Wall table (one table for the whole fleet; brake.py reads it, the watchdog only "sees").
+  # Absorbs the operator's cli_tier_map.yaml (same_cli_downgrade / aliases / default) and
+  # the wall regexes of OpenClaw multi_agent_daemon.py (_RATE_LIMIT_PATTERNS, _MODEL_POOL_WALL_PATTERNS).
+  # MAD keeps its own copy: change the CLI wall wording in both together (generic patterns: see below).
+  #
+  # account   : the whole account / CLI is walled (weekly / session / usage limit): every model of that account
+  #             is skipped on the chain (an official CLI is one account; pi / opencode / dsh one per provider).
+  # model_pool: only one model is walled ("You've reached your Fable limit"): only that model is skipped.
+  # Either way the brake pauses and the slot (worker, or a main fleet's supervisor) moves to the next usable model
+  # of its role's chain = the discovery block below (user 2026-11-11; docs/design.md §23); none left -> stop.
+  # Only the CLIs' own wall wording (Claude / Codex) belongs here. Generic "rate limited" / "429 Too Many
+  # Requests" / "quota exceeded" are NOT walls: third-party tools (Tavily, reddit, WebFetch) print them, and a
+  # worker report pasted into the supervisor pane puts them on that screen (EF review r1 P1-01). MAD keeps
+  # them because it only judges `-p` text; the two tables differ on purpose here.
+  # Account patterns are checked first: a weekly-limit screen that also says /usage-credits is account-level.
+  # Auth errors (401, Not logged in, expired OAuth) are not walls: the watchdog handles them.
+  account:
+    - "You've (?:hit|reached) your (?:usage|weekly|session|daily|monthly|5-hour) limit"
+    - "\\b(?:weekly|session|daily|5-hour|usage) limit reached"
+    - "Claude (?:AI )?usage limit reached"
+    # Codex / pi (Astra, Sol, Terra) as seen 2026-11-09 on the strategy-engine Astra supervisor:
+    # "Codex error: The usage limit has been reached".
+    - "\\busage limit has been reached"
+    # pi's own wording for a Codex 429 / usage_limit_reached without a server message (pi 1.5.0):
+    # "You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min."
+    - "You (?:have|'ve) (?:hit|reached) your ChatGPT usage limit"
+  model_pool:
+    - "You've (?:hit|reached) your\\s+(?!(?:usage|weekly|session|daily|monthly|5-hour)\\b)[\\w.\\-]+.{0,20}?\\blimit\\b"
+    - "Run /usage-credits to continue"   # the wall's own line; a bare /usage-credits is also on the reminder
+    - "Set up usage credits"
+  # Reminders, never walls (2026-11-09, design §48.4): Claude Code 2.1.316 prints "You've used 78% of your weekly
+  # limit · resets 3am (…) · /usage-credits to keep using…" while there is quota left. A line matching one of
+  # these is skipped before the account / model_pool rules (both scopes); only spent wording is a wall.
+  notices:
+    - "You've used \\d+(?:\\.\\d+)?% of your\\b"
+    - "/usage-credits to keep using"
+  # Same CLI one tier down (2026-09-20). Codex gpt-5.6-* names are copied as-is: v1 design §91
+  # flags them as stale; fix them here when the Codex catalogue is confirmed. Not read by the wall decision since
+  # 2026-11-11 (the discovery chain replaced it); kept as the copy of the operator's cli_tier_map.yaml.
+  same_cli_downgrade:
+    claude-fable-5: claude-sonnet-5
+    claude-opus-5: claude-sonnet-5
+    gpt-5.6-sol: gpt-5.6-luna
+    gpt-5.6-terra: gpt-5.6-luna
+  aliases:
+    fable: claude-fable-5
+    opus: claude-opus-5
+    sonnet: claude-sonnet-5
+    haiku: claude-haiku-5-5          # 2026-10-14: Claude Code 2.1.296 resolves the haiku alias to 5.5 (cli_tier_map d45fe764)
+    claude-haiku-4-5-20251001: claude-haiku-4-5
+    claude-opus-4-8: claude-opus-5
+    gpt-5.5: gpt-5.6-terra
+    gpt-reserve: gpt-5.6-luna
+  # Model assumed when a slot names none.
+  default:
+    codex: gpt-5.6-terra
+    claude: claude-fable-5
+
+watchdog_prompts:
+  # Watchdog prompt table (docs/design.md §24). Hot-reloaded: the daemon re-reads this file when it
+  # changes; an invalid edit is refused (audited) and the previous table stays in force.
+  #
+  # prompts: whitelist of KNOWN, harmless confirmation dialogs. When every string in `match` (case-
+  #   insensitive, literal) is on the last `tail_lines` lines of the agent's screen, the watchdog
+  #   saves the screen and sends `keys` (cmux send-key names). The same dialog answered `max_hits`
+  #   times within one delivery stops being answered: the slot is treated as stalled.
+  #   `any` (optional) additionally needs at least one of its strings.
+  #   `verify` (required): matching text is NOT an authorisation. Before any key is sent the watchdog
+  #   checks that the pane is this run's own (cmux registry, not an adopted pane) and that the
+  #   dialog's concrete operation / path lies inside a grant the run already has:
+  #     own_cwd       every path shown is the slot's own directory (trusted at spawn)
+  #     paths_in_run  every path shown is inside the slot directory or <run>/workspace (--add-dir)
+  #   If the scope cannot be read off the screen, nothing is pressed: screen saved, the slot is marked
+  #   prompt_wait and dispatch pauses (not a hold: once a human answers in the pane the turn settles).
+  # unknown_markers: a screen that shows one of these but matches no whitelist entry is an UNKNOWN
+  #   dialog: the screen is saved, the slot is marked prompt_wait, and nothing is pressed (an Enter
+  #   could approve something the task never authorised).
+  #   For claude / pi slots a marker (or a whitelist match) counts only when the screen does not end in the
+  #   CLI's own input box (2026-11-09, watchdog.input_box): text the agent writes above its prompt is not a dialog.
+  #   Deletions are always the user's call (2026-10-14): "dangerous rm" is an unknown marker, never a
+  #   whitelist entry, and nothing in the fleet answers a delete confirmation (no PermissionRequest hook).
+  # delete_markers (optional): extra words / phrases that make a dialog a delete (moves / renames count).
+  #   The built-in list (cmux_fleet/watchdog.py DELETE_MARKERS: rm, unlink, delete, remove, mv, rename,
+  #   git clean, DROP TABLE, 删除, 移动 ...) is always in force; this list can only add to it. Any of them
+  #   in the last tail_lines rows means no key is ever pressed by the program, even on a whitelisted dialog.
+  tail_lines: 25
+  max_hits: 3
+  prompts:
+    - name: read_outside
+      # "Read outside the working directories?" (E2: hub stuck 26 days on it).
+      match: ["outside the working director"]
+      keys: [Enter]
+      verify: paths_in_run
+    - name: trust_folder
+      # Claude Code 2.1.280, captured live 2026-10-12 in a throwaway PTY: "Accessing workspace: <path>
+      # ... Is this a project you created or one you trust?" with "❯ No, exit" PRESELECTED; Enter alone
+      # would close the session. Down was verified live to move the cursor to "Yes, I trust this folder".
+      match: ["yes, i trust this folder", "❯ no, exit"]
+      keys: [Down, Enter]
+      verify: own_cwd
+    - name: trust_folder_legacy
+      # Codex "Trust this folder?" / older Claude "Do you trust the files in this folder?" (default Yes).
+      # Text NOT reproduced live: Codex 0.162.1 showed no trust dialog in a non-git directory.
+      match: ["trust"]
+      any: ["trust this folder?", "trust the files in this folder"]
+      keys: [Enter]
+      verify: own_cwd
+  unknown_markers:
+    # Claude Code asks for `rm` on a possibly-empty variable even under --dangerously-skip-permissions
+    # (10/12 E16). Every delete is confirmed by the user: screen saved, slot marked, no key pressed.
+    - "Dangerous rm"
+    - "Do you want to proceed?"
+    - "Do you want to make this edit"
+    - "Do you want to create"
+    - "❯ 1. Yes"
+  delete_markers: []
+
+capability_matrix:
+  # 模型能力实验表（顾问的唯一软依据；advisor 设计稿 §7）。数据不是代码，每次会诊现读（热载）。
+  # 结构：<领域（= context_domains.yaml 的键）>: <任务类型>: <模型卡 id>: {verdict, effort?, evidence?, note?}
+  # verdict ∈ enough / enough_simple / not_enough / overkill / untested / reserve
+  # untested 的格禁选，除非这一行所有已测格都是 not_enough（daemon 记 capability.gap）。
+  # evidence 只引实验编号 / 规则页 / tasks/lessons.md / 复核报告 / 日记，不引 memory。
+  research_web:
+    web-research:
+      sonnet: {verdict: enough, effort: medium, evidence: "E-03 2026-10-07 板块轮动两次对比，研究质量 ≥ 本机直派（tasks/plans/sector-fleet-*-review-fable-r2-20261013.md）；用户 10-14：联网搜索 sonnet 够用不派 opus"}
+      opus: {verdict: overkill, evidence: "同上，质量无差，token 更多"}
+      haiku: {verdict: untested}
+    long-form-summary:
+      sonnet: {verdict: enough_simple}
+  fleet:
+    code-edit:
+      sonnet: {verdict: enough_simple, note: "单文件、路径已明"}
+      opus: {verdict: enough}
+      fable: {verdict: reserve, note: "只做复核 / 会诊"}
+    review:
+      opus: {verdict: enough, evidence: "R-WKF-033 ~28 个系列"}
+      sonnet: {verdict: not_enough, evidence: "复核卡已由 sonnet 改 opus（model-cards sonnet.evidence）"}
+
+models:
+  astra:
+    id: astra
+    display_name: Codex Astra
+    cli: codex
+    model: gpt-6-astra
+    quota_pool: codex
+    hosts: null
+    domains: null
+    context_window: null
+    handoff_ratio: null
+    max_concurrent: 1
+    roles_allowed:
+    - supervisor
+    - reviewer
+    - plan-reviewer
+    - incident-analyst
+    roles_denied: null
+    judgement: high
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：R-WKF-033 约 18 个系列；10/12 四次 fleet 监工（M0–M3 实证可拆解、可裁 BLOCKED）；日间与夜间监工缺省（用户 10/13）；真钱路径首轮复核；r2 起收窄轮会重扫；不兼验收（E8 worker-5 打回 7 版）。上下文未核实。reasoning high。
+    unverified:
+    - context_window
+  fable:
+    id: fable
+    display_name: Claude Fable
+    cli: claude
+    model: fable
+    quota_pool: claude
+    hosts: null
+    domains: null
+    context_window: 200000
+    handoff_ratio: null
+    max_concurrent: 1
+    roles_allowed:
+    - orchestrator
+    - falsifier
+    - supervisor
+    - consultant
+    - final-writer
+    roles_denied:
+    - long-runner
+    - implementer
+    - line-checker
+    judgement: high
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：R-WKF-033 约 28 个复核系列 1–2 轮 PASS，假 P0 1 例；能力上限 1M、预算 200K；fleet 监工零样本，Claude 监工适配层不存在（runtime_v2.py:40），夜间监工先补适配；CLI --model fable 未验（★2）。夜间只做监工或一次性会诊。不审自己写的方案。 model=fable 未在 CLI 上验过 --model fable（★2，未核实）。
+    unverified:
+    - model
+  flashnext:
+    id: flashnext
+    display_name: FlashNext (Qwen3.8 Flash Next)
+    cli: pi
+    model: flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP
+    quota_pool: free-studio
+    hosts:
+    - studio
+    domains:
+    - futures
+    - fleet
+    context_window: 100000
+    handoff_ratio: 0.5
+    max_concurrent: 2
+    roles_allowed:
+    - implementer
+    - material
+    - proposal-expert
+    - reconciler
+    roles_denied:
+    - supervisor
+    - reviewer
+    - final-writer
+    judgement: low-mid
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：memory flashnext-fleet-20260925、cmux-fleet-service-mode（Studio 三 agent READY、换代通过）；夜间 worker 缺省（用户 10/13）；机械实现待影子验证（批 3.2）；空回复会被当成功（E15），READY 都会跑偏（E14）；oMLX 预填充闸 2 票（E15 E19）；只在 Studio；美股代码不碰（T-36 / ★10 缺省）；skills.include_instructions=false 必带。 implementer 在 roles_allowed 只是现状（已部署的 pi 路由与「夜间 worker 全部 FlashNext」）；总设计 §5 批 3.2 要求影子验证通过前先列 roles_denied，两处矛盾，待拍板，未核实。hosts 的 studio 是机器叫法，Studio 的真实主机名未核实。
+    unverified:
+    - hosts
+    - roles_allowed
+  haiku:
+    id: haiku
+    display_name: Claude Haiku
+    cli: claude
+    model: haiku
+    quota_pool: claude
+    hosts: null
+    domains: null
+    context_window: 200000
+    handoff_ratio: null
+    max_concurrent: null
+    roles_allowed:
+    - summarizer
+    roles_denied:
+    - reviewer
+    - supervisor
+    - implementer
+    - plan-reviewer
+    - falsifier
+    - protocol-json
+    judgement: low
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：fleet 零样本，暂定。说人话员摘要、格式类、日期正则兜底；不做任何判断与协议 JSON 产出（协议解析失败由 Python 宽容解析，不用它翻译）。
+    unverified:
+    - judgement
+  opencode-flash-free:
+    id: opencode-flash-free
+    display_name: DeepSeek V4.1 Flash (OpenCode Zen free tier)
+    cli: opencode
+    model: opencode/deepseek-v4.1-flash-free
+    quota_pool: opencode-free
+    hosts: null
+    domains:
+    - fleet
+    context_window: 200000
+    handoff_ratio: null
+    max_concurrent: 2
+    roles_allowed:
+    - implementer
+    - material
+    - summarizer
+    roles_denied:
+    - supervisor
+    - reviewer
+    - final-writer
+    judgement: low-mid
+    night_ok: true
+    measured: null
+    evidence: brief fleet-opencode-worker-20261016：免费档只能经 opencode 客户端调用（直调 Zen 返回 FreeTierError，10-16 实测）；deepseek-v4.1-flash-free 10-15 才开放免费（r/opencodeCLI redd.it/1x6fj3h），前身 v4-flash-free 8 月下架（anomalyco/opencode#43805），名单变动频繁，模型名只放配置；免费版上下文 200K（付费 1M）；并发高报 429（LINUX DO 反馈，数字未公布），未实测前 max_concurrent=2；推理在 OpenCode Zen 服务器上跑，账户 / 持仓 / 资金账号类任务不派（domains 只列 fleet）。judgement / roles 为初评，未做能力实测。
+    unverified:
+    - max_concurrent
+    - judgement
+    - roles_allowed
+  flashnext-dsh:
+    id: flashnext-dsh
+    display_name: FlashNext via DeepSeek Harness (dsh worker)
+    cli: dsh
+    model: flashnext/Qwen3.8-Flash-Next-Uncensored-MLX-Serve-4bit
+    quota_pool: free-studio
+    hosts: null
+    domains:
+    - fleet
+    context_window: 400000
+    handoff_ratio: null
+    max_concurrent: 2
+    roles_allowed:
+    - implementer
+    - material
+    roles_denied:
+    - supervisor
+    - reviewer
+    - final-writer
+    judgement: low-mid
+    night_ok: true
+    measured: null
+    evidence: plan dsh-fleet-worker-20261104（用户 11-04 点头：dsh 窗格前端不算 headless、FlashNext 另可走 DSH worker）；同一 pi models.json 条目（本地 mlx-serve 端点，与 pi worker 共用一台，合计忙 ≤ 2）；dsh workspace-write 只管文件、不拦联网；定位是跟 pi worker 评测对比，不进缺省组合。judgement / roles 照 flashnext 初评，未做能力实测。
+    unverified:
+    - judgement
+    - roles_allowed
+  workbuddy-ds-dsh:
+    id: workbuddy-ds-dsh
+    display_name: DeepSeek V4.1 Flash (WorkBuddy AI via a local gateway) via DeepSeek Harness (dsh worker)
+    cli: dsh
+    model: workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg
+    quota_pool: workbuddy
+    hosts: null
+    domains:
+    - fleet
+    context_window: 400000
+    handoff_ratio: null
+    max_concurrent: 2
+    roles_allowed:
+    - implementer
+    - material
+    roles_denied:
+    - supervisor
+    - reviewer
+    - final-writer
+    judgement: low-mid
+    night_ok: true
+    measured: null
+    evidence: 用户 11-05 定 dsh worker 缺省模型改 WorkBuddy DeepSeek（fleet.yaml#dsh.default_model）；同一 pi models.json 条目 workbuddy-ds（本机网关，contextWindow 400000、maxTokens 32768），推理在 WorkBuddy 服务端跑，账户 / 持仓 / 资金账号类任务不派（domains 只列 fleet）；dsh workspace-write 只管文件、不拦联网；并发 / 限流未实测，先 max_concurrent 2。judgement / roles 为初评，未做能力实测。
+    unverified:
+    - max_concurrent
+    - judgement
+    - roles_allowed
+  opus:
+    id: opus
+    display_name: Claude Opus
+    cli: claude
+    model: opus
+    quota_pool: claude
+    hosts: null
+    domains: null
+    context_window: 200000
+    handoff_ratio: 0.6
+    max_concurrent: null
+    roles_allowed:
+    - implementer
+    - fixer
+    - plan-reviewer
+    - falsifier
+    - reviewer
+    roles_denied:
+    - long-runner
+    judgement: high
+    night_ok: false
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：R-WKF-033 约 10 个系列，方案审最稳、无假 P0；10/12 M0–M3 六 worker 开发实证；能力上限 1M、预算 200K（claude_window 200000 × 0.6 换代）；无硬超时长跑 14 小时 1,256 次调用（E3），夜间封顶；不审自己写的码。
+  sol:
+    id: sol
+    display_name: Codex Sol
+    cli: codex
+    model: gpt-6.1-sol
+    quota_pool: codex
+    hosts: null
+    domains: null
+    context_window: null
+    handoff_ratio: null
+    max_concurrent: 1
+    roles_allowed:
+    - supervisor
+    - reviewer
+    - researcher
+    roles_denied:
+    - plan-reviewer
+    judgement: high
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：R-WKF-033 约 20 个系列；板块轮动定时研究监工 10/7 起稳定；代码验收首轮、两轮内修复复审；第 3 轮以后钻边角；方案审样本少。上下文未核实（Codex 界面值 400K）。reasoning high。
+    unverified:
+    - context_window
+  sonnet:
+    id: sonnet
+    display_name: Claude Sonnet
+    cli: claude
+    model: sonnet
+    quota_pool: claude
+    hosts: null
+    domains: null
+    context_window: 200000
+    handoff_ratio: null
+    max_concurrent: null
+    roles_allowed:
+    - researcher
+    - reconciler
+    roles_denied:
+    - reviewer
+    - supervisor
+    judgement: mid
+    night_ok: true
+    measured: null
+    evidence: design v2 §3（2026-10-13 初评）：memory sector-premarket-agent（10/7 两次对比，研究质量 ≥ 本机直派）；对账员断言抽取、日期核实、网搜员；同 CLI 降档目标（cli_tier_map）；复核卡已由 sonnet 改 opus；不做拆解型监工。
+
+profiles:
+  claude-coder:
+    id: claude-coder
+    display_name: Claude Coder
+    cli: claude
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    cost_rank: 3
+    latency_rank: 2
+    risk_rank: 2
+    model: opus
+    model_card: opus
+  claude-fable:
+    id: claude-fable
+    display_name: Claude Fable (advisor)
+    cli: claude
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    model: fable
+    model_card: fable
+  claude-haiku:
+    id: claude-haiku
+    display_name: Claude Haiku (advisor)
+    cli: claude
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    model: haiku
+    model_card: haiku
+  claude-opus:
+    id: claude-opus
+    display_name: Claude Opus (advisor)
+    cli: claude
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    model: opus
+    model_card: opus
+  claude-reviewer:
+    id: claude-reviewer
+    display_name: Claude Reviewer
+    cli: claude
+    capabilities:
+    - code-review
+    - safety-audit
+    - planning
+    role_file: reviewer.md
+    cost_rank: 3
+    latency_rank: 3
+    risk_rank: 1
+    model: opus
+    model_card: opus
+  claude-sonnet:
+    id: claude-sonnet
+    display_name: Claude Sonnet (advisor)
+    cli: claude
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    model: sonnet
+    model_card: sonnet
+  flashnext-coder:
+    id: flashnext-coder
+    display_name: FlashNext Coder
+    cli: pi
+    capabilities:
+    - code-edit
+    - test-fix
+    - planning
+    role_file: worker.md
+    cost_rank: 1
+    latency_rank: 1
+    risk_rank: 3
+    model: flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP
+    model_card: flashnext
+  researcher:
+    id: researcher
+    display_name: Web Researcher
+    cli: codex
+    capabilities:
+    - web-research
+    - planning
+    role_file: worker.md
+    cost_rank: 2
+    latency_rank: 2
+    risk_rank: 2
+
+# accounts: a budget card's "pool" names an account by id or alias; meter picks the budget line:
+#   usd_equiv -> max_usd (equivalent USD since the card started; caps.day_usd / night_usd is the default
+#                cap when the card has none, else 40 / 10), week_pct -> max_week_pct (absolute weekly %),
+#   calls / none -> no pool line. Readings come from quota.json (rows keyed by account id).
+# Example for the private file:
+#   accounts:
+#     - {id: pool-a, provider: claude, aliases: [], meter: usd_equiv, hosts: [host-1], caps: {day_usd: 40, night_usd: 10}}
+#     - {id: pool-b, provider: claude, meter: week_pct, hosts: [host-2]}
+#     - {id: codex-a, provider: codex, meter: week_pct}
+accounts: []
+
+# tools: tool pools (Tavily keys, X accounts, ...) behind thin MCP servers; filled in the private file.
+tools: {}
+
+pi_context:
+  # Context window of pi models in every run (user 2026-10-27: default 400K, with a place to change it).
+  # start writes <run>/pi-home/models.json as a copy of the source models.json with these applied
+  # (no block, or neither key set: the source file is linked as before).
+  #   default_window: custom models (providers.*.models[]) that set no contextWindow get this value.
+  #                   Models that set their own window keep it (e.g. a local model capped by memory).
+  #   per_model:      "<provider>/<model id>" -> window, set even when the model has its own value;
+  #                   a built-in model (not in the source file) goes to providers.<p>.modelOverrides.
+  # The fleet's handoff thresholds read the window pi reports, so fleet and pi always agree.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
+  default_window: 400000
+  per_model: {}
+
+daemon_watch:
+  # The supervisor's daemon watchdog (docs/design.md §36; pi supervisor: fleet's pi extension). Every
+  # check_interval_s it asks its bridge for fx:daemon:beat. Older than stale_after_s, no daemon holding the run's
+  # lock and the run unfinished -> one supervisor turn with the log facts; the supervisor runs the restart command
+  # its AGENTS.md names. No second turn within realert_after_s. Read when a supervisor generation starts.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml); seconds > 0.
+  check_interval_s: 120
+  stale_after_s: 120
+  realert_after_s: 600
+
+fresh_dispatch:
+  # docs/design.md §37. A dispatch without "fresh": true to a worker already above this share of its context
+  # window is delivered as usual, and the supervisor's next message gets one [Hint] line suggesting
+  # "fresh": true for unrelated work. Never resets anything by itself. A number in (0, 1].
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
+  fresh_hint_ratio: 0.3
+
+dsh:
+  # dsh workers (docs/design.md §41). `start` without --dsh-model runs this pi models.json entry
+  # (provider/model) and records it as the run's dsh_model; --dsh-model overrides it (e.g. flashnext/...).
+  # User 2026-11-05: WorkBuddy DeepSeek through a local gateway. Changes only here (reviewed commit).
+  default_model: workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg
+
+discovery:
+  # First-run discovery (docs/design.md §52). `fleetmux setup`, and `start` / `gui` when <fleet home>/discovered.yaml
+  # is missing, probe the agent CLIs below (version minimums from deps.yaml), their login state and the models each
+  # can run, rank the models with this block and pick the default supervisor x worker pair from cli_pairs rows that
+  # are verified for `mode`. `start` uses that pair only when neither --supervisor-cli nor --worker-cli is typed.
+  # A pattern matches a model id lowercased and cut at - / _ . and spaces (contiguous tokens, e.g. qwen3.8 matches
+  # Qwen3.8-Flash-Next); within one pattern the newest version wins, then cli_order.
+  # User 2026-11-11 (replaces the 11-09 order): "对于supervisor，撞墙前优先级依次是Astra, fable, opus sol deepseek
+  # flash,对于worker 撞墙前依次是opus, sol,sonnet,terra,deepseek flash" (list order = priority; unlisted models after
+  # them). The same lists are the wall chains: after a usage wall a slot takes the next usable listed model
+  # (unlisted ones are never a fallback; brake.wall_action). A model matching `supervisor` but no `worker` pattern (astra, fable) is supervisor-only. A space in a
+  # pattern = words in that order, not necessarily adjacent ("deepseek flash" -> deepseek-v4.1-flash, not -v4-pro).
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
+  supervisor: [astra, fable, opus, sol, deepseek flash]
+  worker: [opus, sol, sonnet, terra, deepseek flash]
+  mode: task
+  supervisor_pi_thinking: high
+  # A worker's default thinking when nothing names its own (user 2026-11-11 「默认worker也是high」): pi --thinking for a
+  # pi worker, Claude --effort for a Claude worker, and the level a worker gets when a wall moves it to pi.
+  worker_thinking: high
+  # CLIs whose models become candidates, in tie-break order; claude models come from the claude model cards above.
+  cli_order: [claude, pi, opencode]
+  # Design §6: Claude models only through the official claude CLI, Codex (gpt) models only through pi.
+  only_via: {claude: claude, fable: claude, opus: claude, sonnet: claude, haiku: claude, gpt: pi}
+  # Found and shown in the table, never a default candidate (no model listing, or not in the default pairs).
+  report_only: [codex, dsh, gemini, ollama]

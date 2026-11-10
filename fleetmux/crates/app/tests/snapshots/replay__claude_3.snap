@@ -1,0 +1,30 @@
+---
+source: crates/app/tests/replay.rs
+expression: t.text(rows as usize)
+---
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Sonnet 5 · Claude Max
+  ▝▝ ▝▝    /private/tmp/fmdemo/claude-3
+
+
+❯ Explain in two sentences what a fixed-layout terminal is.
+
+⏺ A fixed-layout terminal is a terminal emulator or interface whose display area has a set number of rows and columns
+  (or fixed pixel dimensions) that doesn't dynamically resize or reflow to fit varying content or window sizes. This
+  makes it well-suited for applications like TUIs, old-school BBS systems, or games that rely on precise, predictable
+  character positioning rather than responsive text wrapping.
+
+✻ Crunched for 3s · done 4:18 AM
+
+❯ /exit
+
+✳ Razzmatazzing…
+  ⎿  Tip: Use /config to change your default permission mode (including Plan Mode)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← 1 agent
+
+Resume this session with:
+claude --resume XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX

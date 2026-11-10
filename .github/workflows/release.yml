@@ -1,0 +1,194 @@
+name: release-fleetmux
+
+# Prebuilt fleetmux binaries (fleetmux design §8 item 5, plan §5 ci-release): four targets, each as
+#   fleetmux-<ver>-<triple>.tar.gz          top-level `fleetmux` executable + `LICENSE` + `THIRD-PARTY-LICENSES`
+#                                           (MIT / Apache crates require their notices to travel with binaries;
+#                                           `cargo about` renders them from fleetmux/about.toml, design §8 item 12)
+#   fleetmux-<ver>-<triple>.tar.gz.sha256   one sha256sum line: `<hex>  fleetmux-<ver>-<triple>.tar.gz`
+# attached to the GitHub release `v<ver>`, which is exactly the layout scripts/install_fleetmux.sh downloads
+# ($FLEETMUX_RELEASE_BASE/v<ver>/<asset>; tests/test_install_fleetmux.py pins it). <ver> is the fleetmux
+# workspace version and must equal the tag; deps.yaml's programs.fleetmux.min picks which release installs.
+# The same tag also carries the fleetmux-web window (brief-m25 §3.6 W5), four targets (gnu, dynamically linked
+# against webkit2gtk on Linux; glibc >= 2.39), each as
+#   fleetmux-web-<ver>-<triple>.tar.gz      top-level `fleetmux-web` + `LICENSE` + `THIRD-PARTY-LICENSES`
+#   fleetmux-web-<ver>-<triple>.tar.gz.sha256
+# Each tarball's THIRD-PARTY-LICENSES lists only its own package's crates: `cargo about generate -m
+# crates/<app|web>/Cargo.toml` (cargo-about 0.9.3 has no -p; the manifest path picks the active package, and
+# --workspace would widen it to the whole workspace).
+# The fleetmux-web one also ends with the vendored xterm.js notices (crates/web/assets/xterm/THIRD-PARTY-JS.txt;
+# npm packages, invisible to cargo about; brief-m26 §3.6).
+# A manual run (workflow_dispatch) builds and uploads the assets as workflow artifacts only, no release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {triple: x86_64-unknown-linux-musl, os: ubuntu-latest, run: true}
+          - {triple: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, run: true}
+          - {triple: aarch64-apple-darwin, os: macos-latest, run: true}
+          - {triple: x86_64-apple-darwin, os: macos-latest, run: false}  # cross-built on arm64; not executed here
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version 0.9.3 --features cli
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Version (workspace version; equals the tag on a tag push)
+        id: ver
+        run: |
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' fleetmux/Cargo.toml)
+          [ -n "$ver" ] || { echo "no [workspace.package] version in fleetmux/Cargo.toml" >&2; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$ver" ]; then
+            echo "tag $GITHUB_REF_NAME does not match fleetmux version $ver" >&2; exit 1
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+      - name: Build (release, locked)
+        run: cd fleetmux && cargo build --release --locked -p fleetmux --target ${{ matrix.triple }}
+      - name: Check the binary reports the version
+        if: matrix.run
+        run: |
+          got=$(fleetmux/target/${{ matrix.triple }}/release/fleetmux --version)
+          echo "$got"
+          case $got in "fleetmux ${{ steps.ver.outputs.ver }} "*) ;; *) echo "unexpected --version: $got" >&2; exit 1 ;; esac
+      - name: Check the Linux binary is static
+        if: runner.os == 'Linux'
+        run: |
+          file fleetmux/target/${{ matrix.triple }}/release/fleetmux
+          file fleetmux/target/${{ matrix.triple }}/release/fleetmux | grep -Eq 'statically linked|static-pie linked'
+      - name: Package tarball + sha256
+        run: |
+          name=fleetmux-${{ steps.ver.outputs.ver }}-${{ matrix.triple }}.tar.gz
+          mkdir -p stage dist
+          cp fleetmux/target/${{ matrix.triple }}/release/fleetmux stage/fleetmux
+          chmod 755 stage/fleetmux
+          cp LICENSE stage/LICENSE
+          (cd fleetmux && cargo about generate --locked --fail -c about.toml -m crates/app/Cargo.toml \
+            -o ../stage/THIRD-PARTY-LICENSES about.hbs)  # the fleetmux package only
+          grep -q 'alacritty_terminal' stage/THIRD-PARTY-LICENSES  # the notices really list our crates
+          tar -C stage -czf "dist/$name" fleetmux LICENSE THIRD-PARTY-LICENSES
+          cd dist
+          shasum -a 256 "$name" > "$name.sha256"
+          cat "$name.sha256"
+          tar -tzf "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleetmux-${{ matrix.triple }}
+          path: dist/*
+          if-no-files-found: error
+
+  build-web:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {triple: x86_64-unknown-linux-gnu, os: ubuntu-latest, run: true}
+          - {triple: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, run: true}  # native arm runner, no cross
+          - {triple: aarch64-apple-darwin, os: macos-latest, run: true}
+          - {triple: x86_64-apple-darwin, os: macos-latest, run: false}  # cross-built on arm64; not executed here
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version 0.9.3 --features cli
+      - name: Install webkit2gtk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev
+      - name: Version (workspace version; equals the tag on a tag push)
+        id: ver
+        run: |
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' fleetmux/Cargo.toml)
+          [ -n "$ver" ] || { echo "no [workspace.package] version in fleetmux/Cargo.toml" >&2; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$ver" ]; then
+            echo "tag $GITHUB_REF_NAME does not match fleetmux version $ver" >&2; exit 1
+          fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+      - name: Build (release, locked)
+        run: cd fleetmux && cargo build --release --locked -p fleetmux-web --target ${{ matrix.triple }}
+      - name: Check the binary reports the version
+        if: matrix.run
+        run: |
+          got=$(fleetmux/target/${{ matrix.triple }}/release/fleetmux-web --version)
+          echo "$got"
+          case $got in "fleetmux-web ${{ steps.ver.outputs.ver }} "*) ;; *) echo "unexpected --version: $got" >&2; exit 1 ;; esac
+      - name: Show the Linux binary's linkage (gnu, dynamic; no static check)
+        if: runner.os == 'Linux'
+        run: file fleetmux/target/${{ matrix.triple }}/release/fleetmux-web
+      - name: Package tarball + sha256
+        run: |
+          name=fleetmux-web-${{ steps.ver.outputs.ver }}-${{ matrix.triple }}.tar.gz
+          mkdir -p stage dist
+          cp fleetmux/target/${{ matrix.triple }}/release/fleetmux-web stage/fleetmux-web
+          chmod 755 stage/fleetmux-web
+          cp LICENSE stage/LICENSE
+          (cd fleetmux && cargo about generate --locked --fail -c about.toml -m crates/web/Cargo.toml \
+            -o ../stage/THIRD-PARTY-LICENSES about.hbs)  # the fleetmux-web package only
+          grep -q 'wry' stage/THIRD-PARTY-LICENSES  # the notices really list the webview crate
+          # the vendored xterm.js (not a crate: cargo about cannot see it; design §3.6.9) travels with its notices
+          cat fleetmux/crates/web/assets/xterm/THIRD-PARTY-JS.txt >> stage/THIRD-PARTY-LICENSES
+          grep -q '@xterm/xterm 6.0.0' stage/THIRD-PARTY-LICENSES
+          tar -C stage -czf "dist/$name" fleetmux-web LICENSE THIRD-PARTY-LICENSES
+          cd dist
+          shasum -a 256 "$name" > "$name.sha256"
+          cat "$name.sha256"
+          tar -tzf "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleetmux-web-${{ matrix.triple }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [build, build-web]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: fleetmux-*
+          merge-multiple: true
+      - name: Verify every sha256 before publishing
+        run: |
+          cd dist
+          ls -l
+          [ "$(ls fleetmux-web-*.tar.gz | wc -l)" -eq 4 ] || { echo "expected 4 fleetmux-web tarballs" >&2; exit 1; }
+          [ "$(ls *.tar.gz | grep -vc '^fleetmux-web-')" -eq 4 ] || { echo "expected 4 fleetmux tarballs" >&2; exit 1; }
+          [ "$(ls *.tar.gz | wc -l)" -eq 8 ] || { echo "expected 8 tarballs" >&2; exit 1; }
+          [ "$(ls *.tar.gz.sha256 | wc -l)" -eq 8 ] || { echo "expected 8 sha256 files" >&2; exit 1; }
+          for f in *.tar.gz.sha256; do sha256sum -c "$f"; done
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "fleetmux $GITHUB_REF_NAME" --notes "Prebuilt fleetmux and the fleetmux-web window; install with scripts/install_fleetmux.sh (verifies sha256; adds fleetmux-web on a desktop session). Linux fleetmux-web is gnu, dynamically linked against webkit2gtk-4.1: it needs glibc >= 2.39 (Ubuntu 24.04 or newer)."
+          fi

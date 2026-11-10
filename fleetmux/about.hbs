@@ -1,0 +1,21 @@
+Third-party licences for fleetmux / fleetmux-web
+================================================
+
+fleetmux and fleetmux-web are themselves MIT-licensed (see LICENSE). The program in this archive is built
+from the Rust crates below; each is listed with the licence it is used under and that licence's full text.
+
+{{#each overview}}
+- {{{name}}} ({{count}} crates)
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

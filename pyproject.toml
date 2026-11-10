@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fleetmux"
+version = "0.1.0"
+description = "Run AI teams: a supervisor agent leads worker agents (Claude Code, Codex, Pi, opencode), and the program, not the model, accepts the work."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = ["redis>=4.0", "PyYAML>=5.1"]
+classifiers = [
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+cmux-fleet = "cmux_fleet.fleet:main"
+
+[tool.setuptools]
+packages = ["cmux_fleet"]
+
+[tool.setuptools.package-data]
+cmux_fleet = ["agents/*.md", "agents/devflow/*.md", "agents/devflow/*.yaml", "pi_extension*.ts", "config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,200 @@
+ instead (pane layout JSON may hold rects).                                                        
+
+                                                                                                   
+ $ ssh -T utm-linux 'python3 -c "                                                                  
+ import                                                                                            
+ json;d=json.load(open(\"/home/USER/a42/v2/state/fleetmux/a42-linux-639062c8/layout.json\"));pri 
+ nt(json.dumps(d)[:1500])"'                                                                        
+                                                                                                   
+ {"focus": "workers", "groups": {"lower": ["emf5-5", "emf5-4"], "supervisor": ["emf5-1"],          
+ "workers": ["emf5-2", "emf5-3", "emf5-6"]}, "h_ratio": 50, "selected": {"lower": "emf5-4",        
+ "supervisor": "emf5-1", "workers": "emf5-3"}, "v_ratio": 60, "version": 1, "zoom": null}          
+                                                                                                   
+ Took 0.1s                                                                                         
+                                                                                                   
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && grep -rn                      
+ "pane.select\|pane.focus\|\"focus\"\|'focus'" fleetmux/src/*.rs fleetmux/src/**/*.rs 2>/dev/null  
+ | grep -i "method\|match\|\"" | head -20                                                          
+                                                                                                   
+ (no output)                                                                                       
+                                                                                                   
+ Took 0.0s                                                                                         
+                                                                                                   
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && ls; grep -rn         
+ "pane.select\|select" --include=*.rs -l . | head                                                  
+                                                                                                   
+ ... (17 earlier lines, ctrl+o to expand)                                                          
+ ./crates/app/tests/views.rs                                                                       
+ ./crates/app/tests/gui_client.rs                                                                  
+ ./crates/app/tests/mouse.rs                                                                       
+ ./crates/app/tests/pane_store.rs                                                                  
+ ./crates/app/src/render/sidebar.rs                                                                
+                                                                                                   
+ Took 1.6s                                                                                         
+                                                                                                   
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && grep -n              
+ "'select'\|pane.select\|\"select\"\|zoom" protocol/*.md 2>/dev/null | head -20; echo ===; grep    
+ -rn "pane.select\|pane.zoom\|\"zoom\"" --include=*.rs crates/ | head -10                          
+                                                                                                   
+ ... (7 earlier lines, ctrl+o to expand)                                                           
+ crates/app/tests/render.rs:2203:        l["zoom"] == json!(id)                                    
+ crates/app/tests/render.rs:2223:    srv.wait_layout("the bash page zoomed", T, |l| l["zoom"] ==   
+ json!(id));                                                                                       
+ crates/app/tests/render.rs:2227:        l["zoom"].is_null()                                       
+ crates/app/tests/render.rs:2231:        l["zoom"] == json!(id)                                    
+                                                                                                   
+ Took 0.0s                                                                                         
+                                                                                                   
+
+ layout.set controls focus/selected/zoom. I'll select the claude-input pane in the workers group   
+ (a UI layout change only, no pane/process touched), then read its screen and take a screenshot.   
+
+                                                                                                   
+ $ ssh -T utm-linux 'python3 - <<PY                                                                
+ import json,subprocess                                                                            
+ sock="/home/USER/a42/v2/state/fleetmux/a42-linux-639062c8/ctl.sock"                             
+ req={"id":1,"method":"layout.set","params":{"focus":"workers","selected":{"workers":"emf5-6"}}}   
+ r=subprocess.run(["socat","-","unix-connect:"+sock],input=(json.dumps(req)+"\n").encode(),capture 
+ _output=True)                                                                                     
+ print(r.returncode, r.stdout.decode()[:300], r.stderr.decode()[:200])                             
+ PY' 2>&1 | head; echo "=== layout ==="; ssh -T utm-linux 'cat                                     
+ /home/USER/a42/v2/state/fleetmux/a42-linux-639062c8/layout.json'                                
+                                                                                                   
+ ... (9 earlier lines, ctrl+o to expand)                                                           
+ FileNotFoundError: [Errno 2] No such file or directory: 'socat'                                   
+ === layout ===                                                                                    
+ {"focus":"workers","groups":{"lower":["emf5-5","emf5-4"],"supervisor":["emf5-1"],"workers":["emf5 
+ -2","emf5-3","emf5-6"]},"h_ratio":50,"selected":{"lower":"emf5-4","supervisor":"emf5-1","workers" 
+ :"emf5-3"},"v_ratio":60,"version":1,"zoom":null}                                                  
+                                                                                                   
+ Took 0.3s                                                                                         
+                                                                                                   
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && grep -n "def _call" -A 30     
+ cmux_fleet/backends/fleetmux.py | head -40                                                        
+                                                                                                   
+ ... (32 earlier lines, ctrl+o to expand)                                                          
+ exc                                                                                               
+ 418-        except OSError as exc:                                                                
+ 419-            raise FleetmuxError('fleetmux %s failed: %s' % (cmd, exc)) from exc               
+ 420-                                                                                              
+ 421-    def _hello(self) -> Optional[Dict]:                                                       
+                                                                                                   
+ Took 0.0s                                                                                         
+                                                                                                   
+
+ Targeted layout.set on the fixture server socket (via the backend's own client), selecting the    
+ claude-input pane.                                                                                
+
+                                                                                                   
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
+ CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ import sys, json                                                                                  
+ sys.path.insert(0,"/home/USER/cmux-fleet-current")                                              
+ from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
+ print(m._call("layout.set", focus="workers", selected={"workers":"emf5-6"}))                      
+ PY' 2>&1 | head -10; sleep 2; ssh -T utm-linux 'cat                                               
+ /home/USER/a42/v2/state/fleetmux/a42-linux-639062c8/layout.json'                                
+                                                                                                   
+ ... (1 earlier lines, ctrl+o to expand)                                                           
+ 'workers': ['emf5-2', 'emf5-3', 'emf5-6']}, 'h_ratio': 50, 'id': 2, 'ok': True, 'selected':       
+ {'lower': 'emf5-4', 'supervisor': 'emf5-1', 'workers': 'emf5-3'}, 'v_ratio': 60, 'zoom': None}    
+ {"focus":"workers","groups":{"lower":["emf5-5","emf5-4"],"supervisor":["emf5-1"],"workers":["emf5 
+ -2","emf5-3","emf5-6"]},"h_ratio":50,"selected":{"lower":"emf5-4","supervisor":"emf5-1","workers" 
+ :"emf5-3"},"v_ratio":60,"version":1,"zoom":null}                                                  
+                                                                                                   
+ Took 2.3s                                                                                         
+                                                                                                   
+
+ Selection field name differs. Let me check layout.set params in the protocol.                     
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && grep -rn             
+ "layout.set" --include=*.md --include=*.rs . | grep -v "tests/" | head -10                        
+                                                                                                   
+ ... (10 earlier lines, ctrl+o to expand)                                                          
+ layout.set_ratios(h.saturating_sub(RATIO_STEP), v),                                               
+ ./crates/app/src/server/views.rs:106:        b">" =>                                              
+ layout.set_ratios(h.saturating_add(RATIO_STEP), v),                                               
+ ./crates/app/src/server/views.rs:107:        b"+" => layout.set_ratios(h,                         
+ v.saturating_add(RATIO_STEP)),                                                                    
+                                                                                                   
+ Took 0.5s                                                                                         
+                                                                                                   
+
+                                                                                                   
+ $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && sed -n 170,200p      
+ crates/app/src/server/handlers.rs; grep -n "select" PROTOCOL.md | head -20; grep -rn "def         
+ _tag\|def _set_layout\|layout_set" cmux_fleet 2>/dev/null | head -3; sed -n 100,120p              
+ crates/app/src/server/views.rs                                                                    
+                                                                                                   
+ ... (97 earlier lines, ctrl+o to expand)                                                          
+ fn focused_pane(layout: &Layout) -> Option<String> {                                              
+     layout.zoom().or(layout.selected(layout.focus())).cloned()                                    
+ }                                                                                                 
+                                                                                                   
+ /// `0x83` payload for `o`: kv `history_url` without `file://`, empty when unset.                 
+                                                                                                   
+ Took 0.0s                                                                                         
+                                                                                                   
+
+ pane.focus is the right command. Using it on the claude-input pane.                               
+
+                                                                                                   
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
+ CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ import sys                                                                                        
+ sys.path.insert(0,"/home/USER/cmux-fleet-current")                                              
+ from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
+ print("focus:", m._call("pane.focus", pane="emf5-6"))                                             
+ print("layout:", m._call("layout.get"))                                                           
+ PY' 2>&1 | head -10                                                                               
+                                                                                                   
+ focus: {'id': 2, 'ok': True}                                                                      
+ layout: {'focus': 'workers', 'groups': {'lower': ['emf5-5', 'emf5-4'], 'supervisor': ['emf5-1'],  
+ 'workers': ['emf5-2', 'emf5-3', 'emf5-6']}, 'h_ratio': 50, 'id': 4, 'ok': True, 'selected':       
+ {'lower': 'emf5-4', 'supervisor': 'emf5-1', 'workers': 'emf5-6'}, 'v_ratio': 60, 'zoom': None}    
+                                                                                                   
+ Took 0.2s                                                                                         
+                                                                                                   
+
+ Pane emf5-6 is now the selected/focused tab. Taking a screenshot and re-reading the pane text.    
+
+                                                                                                   
+ $ cd /Users/USER/.cmux-fleet-acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 
+ && /Users/USER/Documents/projects/host-project/scripts/utm/vm_gui.sh shot                    
+ ./m3-vm-claude-input-focused.png && ls -la m3-vm-claude-input-focused.png; ssh -T utm-linux 'cd   
+ /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current                                 
+ CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 -c "                              
+ import sys;sys.path.insert(0,\"/home/USER/cmux-fleet-current\")                                 
+ from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ m=FleetmuxSessionManager(\"a42-linux-639062c8\", state_dir=\"/home/USER/a42/v2/state\")         
+ t=m.capture_output(\"emf5-6\", lines=80) or \"\"                                                  
+ print(\"\n\".join([l for l in t.splitlines() if l.strip()][-18:]))                                
+ "' 2>&1 | tail -22 (timeout 90s)                                                                  
+                                                                                                   
+ ... (10 earlier lines, ctrl+o to expand)                                                          
+  files here.                                                                                      
+  Security guide                                                                                   
+  ❯ No, exit                                                                                       
+    Yes, I trust this folder                                                                       
+  Enter to confirm · Esc to cancel                                                                 
+                                                                                                   
+ Took 0.3s                                                                                         
+                                                                                                   
+
+── ⠋ Working ──────────────────────────────────────────────────────────────────────────────────────
+                                                                                                   
+───────────────────────────────────────────────────────────────────────────────────────────────────
+~/.cmux-fleet-acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 • build-1
+↑33k ↓6.9k R1.0M CH99.6% 9.4%/400k (auto)           workbuddy-ai/deepseek-v4.1-flash • thinking off
+执行派工任务

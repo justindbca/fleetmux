@@ -1,0 +1,33 @@
+# Example Codex profile for cmux-fleet.
+#
+# Every fleet agent is started with `codex --profile fleet` (change with `start --profile`).
+# Codex >= 0.156 keeps each profile in its own file: ~/.codex/<profile>.config.toml.
+# Save this file as ~/.codex/fleet.config.toml. (The old `[profiles.fleet]` table inside
+# config.toml is rejected by `--profile` on these versions.)
+#
+# Any model Codex can talk to works: the OpenAI API, a ChatGPT login, or a local
+# OpenAI-compatible server (Ollama, LM Studio, vLLM, mlx servers, ...). The daemon reads the
+# context window from Codex's own rollout files, so no window size needs to be configured here.
+#
+# NOTE: do not set `notify` here. The daemon passes its own notify hook on the command line.
+
+# --- Option A: hosted model via the OpenAI API / ChatGPT login ---------------------------
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+# Optional safety net for a single runaway turn; the daemon rotates sessions before this
+# would normally trigger (start --handoff-ratio). You can also pass `start --compact-limit`.
+# model_auto_compact_token_limit = 180000
+
+# --- Option B: local OpenAI-compatible server -----------------------------------------
+# model = "qwen3-coder-30b"
+# model_provider = "local"
+# model_context_window = 96000   # only needed if the server does not report usage
+#
+# [model_providers.local]
+# name = "local"
+# base_url = "http://127.0.0.1:8000/v1"
+# wire_api = "chat"            # or "responses" if the server implements it
+
+# No trust entries are needed: the fleet runs agents in its own Codex home
+# (start --codex-home, default ~/.fleetmux/codex-home) and answers the
+# "trust this folder?" prompt per agent directory there.

@@ -1,0 +1,154 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    # Hosted macOS arm64 runners are often out of capacity: the job is never picked up and GitHub marks it
+    # failed with no test run (10-28 runs 40682419373 / 40697835435). The run's status follows Linux; macOS
+    # results still show per job, and the full suite runs on a Mac before every merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install redis-server, tmux, and the e2e TUIs (vim / less ship with macOS)
+        run: |
+          brew install redis tmux htop
+          vim --version | sed -n 1p
+          less --version | sed -n 1p
+          htop --version
+      - name: Install package
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fleetmux
+      - name: Pick the fleetmux milestone gate (fleetmux/GATE)
+        # The integrator bumps fleetmux/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
+        # every later step: Rust runs that milestone's ignored groups, pytest skips @milestone tests above it.
+        run: |
+          gate=$(tr -d '[:space:]' < fleetmux/GATE)
+          case $gate in m0|m12|m3) ;; *) echo "fleetmux/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
+          echo "FLEETMUX_GATE=$gate" >> "$GITHUB_ENV"
+      - name: Build and test fleetmux (Rust, milestone groups by fleetmux/GATE)
+        # Same groups as scripts/fleetmux_gate.sh; perf is never run with --include-ignored (manual only).
+        # fleetmux-web window tests (crates/web/tests/sock.rs) must open a real window here: FLEETMUX_WEB_E2E=1
+        # turns "no display" into a failure instead of a skip (brief-m25 §5). macOS opens it directly.
+        env:
+          FLEETMUX_WEB_E2E: "1"
+        run: |
+          cd fleetmux
+          run_tests=""
+          cargo build --workspace --locked
+          $run_tests cargo test --workspace --locked
+          m12_bins="--test mouse --test scroll --test views --test takeover --test paths --test attach_cli"
+          case $FLEETMUX_GATE in
+            m12)
+              $run_tests cargo test --locked -p fleetmux $m12_bins -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-term --test color -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-layout --test hit -- --include-ignored ;;
+            m3)
+              $run_tests cargo test --locked -p fleetmux $m12_bins --test replay --test stats --test record --test web_relay --test overlay --test gui_client --test attach_peer -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-term --test color --test parser_contract -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-layout --test hit -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-web -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-proto --test codec -- --include-ignored ;;
+          esac
+      - name: Run tests
+        env:
+          CMUX_FLEET_FLEETMUX_REAL: ${{ github.workspace }}/fleetmux/target/debug/fleetmux
+        run: |
+          echo "FLEETMUX_GATE=$FLEETMUX_GATE"
+          python -m pytest -q tests
+
+  # Linux is the other supported host (incl. Windows via WSL2, design §0 / §8). Same suite, same
+  # tests: a test that cannot run here is skipped in the test itself (skipif + reason), never
+  # weakened or deleted for CI. WezTerm is not installed: the real mux server integration tests
+  # (design §7.3) skip themselves when `wezterm-mux-server` is absent, like the real-Redis tests.
+  pytest-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install redis-server, tmux, and the helpers the suite shells out to
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends redis-server tmux procps passwd coreutils vim less htop \
+            libwebkit2gtk-4.1-dev xvfb  # crates/web (wry) needs webkit2gtk to build; xvfb for its window tests
+      - name: Install package
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+      - name: Show tool versions
+        run: |
+          redis-server --version
+          tmux -V
+          node --version
+          python --version
+          which systemd-inhibit || echo 'systemd-inhibit: absent (keep_awake_prefix returns [])'
+          vim --version | sed -n 1p
+          less --version | sed -n 1p
+          htop --version
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fleetmux
+      - name: Pick the fleetmux milestone gate (fleetmux/GATE)
+        # The integrator bumps fleetmux/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
+        # every later step: Rust runs that milestone's ignored groups, pytest skips @milestone tests above it.
+        run: |
+          gate=$(tr -d '[:space:]' < fleetmux/GATE)
+          case $gate in m0|m12|m3) ;; *) echo "fleetmux/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
+          echo "FLEETMUX_GATE=$gate" >> "$GITHUB_ENV"
+      - name: Build and test fleetmux (Rust, milestone groups by fleetmux/GATE)
+        # Same groups as scripts/fleetmux_gate.sh; perf is never run with --include-ignored (manual only).
+        # fleetmux-web window tests (crates/web/tests/sock.rs) must open a real window here: FLEETMUX_WEB_E2E=1
+        # turns "no display" into a failure instead of a skip (brief-m25 §5). Linux opens it on Xvfb (`xvfb-run -a` wraps only the Rust tests; pytest below never inherits a display).
+        env:
+          FLEETMUX_WEB_E2E: "1"
+        run: |
+          cd fleetmux
+          run_tests="xvfb-run -a"
+          cargo build --workspace --locked
+          $run_tests cargo test --workspace --locked
+          m12_bins="--test mouse --test scroll --test views --test takeover --test paths --test attach_cli"
+          case $FLEETMUX_GATE in
+            m12)
+              $run_tests cargo test --locked -p fleetmux $m12_bins -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-term --test color -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-layout --test hit -- --include-ignored ;;
+            m3)
+              $run_tests cargo test --locked -p fleetmux $m12_bins --test replay --test stats --test record --test web_relay --test overlay --test gui_client --test attach_peer -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-term --test color --test parser_contract -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-layout --test hit -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-web -- --include-ignored
+              $run_tests cargo test --locked -p fleetmux-proto --test codec -- --include-ignored ;;
+          esac
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: fleetmux/Cargo.toml
+          command: check licenses
+      - name: Run tests
+        env:
+          CMUX_FLEET_FLEETMUX_REAL: ${{ github.workspace }}/fleetmux/target/debug/fleetmux
+        run: |
+          echo "FLEETMUX_GATE=$FLEETMUX_GATE"
+          python -m pytest -q tests

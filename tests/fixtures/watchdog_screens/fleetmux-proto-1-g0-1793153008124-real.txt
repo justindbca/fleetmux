@@ -1,0 +1,53 @@
+      365 +            todo!("{}", line.len())                                                                    
+      366 +        }                                                                                              
+      367 +    }                                                                                                  
+      368 +}                                                                                                      
+      369 +                                                                                                       
+      370 +/// PTY output recordings, `<pane id>.rec` (PROTOCOL.md §7).                                           
+      371 +pub mod record {                                                                                       
+      372 +    use std::io::{self, Read, Write};                                                                  
+      373 +                                                                                                       
+      374 +    /// Largest `bytes` in one entry.                                                                  
+      375 +    pub const MAX_ENTRY: usize = 1024 * 1024;                                                          
+      376 +                                                                                                       
+      377 +    /// One entry: u64 BE microseconds since spawn + u32 BE length + bytes. No file header.            
+      378 +    #[derive(Debug, Clone, PartialEq, Eq)]                                                             
+      379 +    pub struct Entry {                                                                                 
+      380 +        pub offset_us: u64,                                                                            
+      381 +        pub bytes: Vec<u8>,                                                                            
+      382 +    }                                                                                                  
+      383 +                                                                                                       
+      384 +    /// Append one entry. `InvalidInput` for empty or over-`MAX_ENTRY` bytes.                          
+      385 +    pub fn write<W: Write>(w: &mut W, entry: &Entry) -> io::Result<()> {                               
+      386 +        let _ = w;                                                                                     
+      387 +        todo!("{entry:?}")                                                                             
+      388 +    }                                                                                                  
+      389 +                                                                                                       
+      390 +    /// Read the next entry. `Ok(None)` at EOF on an entry boundary; `UnexpectedEof` inside an entry;  
+      391 +    /// `InvalidData` for a length of 0 or over `MAX_ENTRY`.                                           
+      392 +    pub fn read<R: Read>(r: &mut R) -> io::Result<Option<Entry>> {                                     
+      393 +        let _ = r;                                                                                     
+      394 +        todo!()                                                                                        
+      395 +    }                                                                                                  
+      396 +}                                                                                                      
+
+⏺ Now the red codec tests.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ LSP plugin recommendation
+
+   LSP provides code intelligence like go-to-definition and error checking
+
+   Plugin: rust-analyzer-lsp
+   Marketplace: claude-plugins-official
+   Triggered by: .rs files
+   Description: Rust language server for code intelligence and analysis
+   
+   Would you like to install this LSP plugin?
+   ❯ 1. Yes, install
+     2. No, not now
+     3. Never for this plugin
+     4. Disable all LSP recommendations
+
+
+✳ Zigzagging… (9m 58s · ↓ 57.4k tokens)

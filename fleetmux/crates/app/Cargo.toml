@@ -1,0 +1,26 @@
+[package]
+name = "fleetmux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fleetmux"
+path = "src/main.rs"
+
+[dependencies]
+fleetmux-proto.workspace = true
+fleetmux-term.workspace = true
+fleetmux-layout.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+portable-pty.workspace = true
+tokio.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

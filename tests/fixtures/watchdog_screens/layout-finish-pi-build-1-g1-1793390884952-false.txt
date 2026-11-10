@@ -1,0 +1,200 @@
+   compute_ready(claude_ui) or gate; test that fixture_ready
+   false when input not ready. Implement helper
+   readiness_gate(ui) in setup_fixture and test it.
+ - authentication evidence separated:
+   authentication.logged_in is None/'unverified' for ❯-only.
+
+ Also update operator-requests.json readiness rules +
+ uncommitted paths + tests. And write helper-ready.md.
+
+ Avoid publication-file edits: I will not edit
+ build_gui.py/build_gui_linux.sh this turn (they're
+ "publication files" under reviewer check). Note: I must
+ preserve them (no edits). preview-handoff.json is a
+ publication-ish file too — avoid editing it; only
+ operator-requests.json is requested.
+
+ Let me read claude_ui and add_claude_input.
+
+
+ $ cd
+ /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ && sed -n 72,100p scripts/acceptance42/setup_fixture.py;
+ echo "=== add_claude_input:"; sed -n 1,80p
+ scripts/acceptance42/add_claude_input.py; echo "===
+ claude_ui uses:"; grep -rn
+ "claude_ui\|LOGIN_MARKERS\|INPUT_MARKERS\|logged_in_ui"
+ scripts/acceptance42/*.py | cut -c1-140
+
+ ... (184 earlier lines, ctrl+o to expand)
+ scripts/acceptance42/setup_fixture.py:94:
+ 'logged_in_ui': bool(inp) and not login}
+ scripts/acceptance42/setup_fixture.py:411:
+ 'ui': claude_ui(screens['worker-2'].get('screen_lines') or
+ [])},
+
+ Took 0.0s
+
+
+ There is a directly shared classifier duplicated in
+ lifecycle_fixture.py. Best: extract a shared module
+ scripts/acceptance42/claude_readiness.py with the
+ classifier, and have both setup_fixture.py and
+ lifecycle_fixture.py import it (that's "any directly shared
+ classifier").
+
+ Design claude_readiness.py:
+
+ ```python
+   DIALOG_MARKERS = {
+     'trust': ('Accessing workspace', 'Yes, I trust', 'No,
+ exit', 'Do you trust', 'trust this folder', 'trust the
+ files'),
+     'setup': ('Choose a theme', 'Select login method',
+ 'first-time setup'),
+     'login': ('Sign in with', 'Paste code', 'Log in to
+ Claude', 'OAuth'),
+     'dialog': ('Press Enter to continue', 'Do you want to
+ proceed', 'Enter to confirm'),
+   }
+   INPUT_MARKERS = ('❯', 'bypass permissions', 'for
+ shortcuts', 'Claude Code v')
+   AUTH_MARKERS = ('bypass permissions', 'Claude Code v')  #
+ logged-in-only UI
+
+   def classify(lines) -> dict:
+     text = '\n'.join(lines)
+     dialogs = {kind: [m ...] for kind, markers in
+ DIALOG_MARKERS.items()}
+     pending = [k for k,v in dialogs.items() if v]
+     inp = [m for m in INPUT_MARKERS if m in text]
+     auth_evidence = [m for m in AUTH_MARKERS if m in text]
+     authenticated = bool(auth_evidence) and 'login' not in
+ pending and 'setup' not in pending
+     input_ready = bool(inp) and not pending and
+ authenticated?
+ ```
+
+ Careful: should input_ready require authenticated evidence?
+ A genuine input box without 'bypass permissions'/'Claude
+ Code v' markers... The requirement: "A ❯ marker inside
+ Accessing workspace / Yes trust / No exit is NOT real input
+ readiness... do not claim authentication from ❯ alone." So
+ input_ready must not be derived from ❯ alone. I'll require:
+ at least one INPUT marker, no dialog pending, AND
+ authentication evidence (a logged-in-only marker). That's
+ stricter but defensible and matches "genuine logged-in
+ input" test. But risk: real screens may not show 'bypass
+ permissions' (it only shows in some modes) — 'Claude Code
+ v' shows in the welcome box at startup, may scroll away.
+ Hmm. Then input_ready could be false for a genuine session
+ where those scrolled off. Trade-off: false negatives are
+ safer than false positives for acceptance readiness? But a
+ false negative blocks readiness wrongly.
+
+ Middle ground: input_ready requires no dialog pending AND
+ at least 2 distinct input markers OR a specific "input
+ line" pattern (line starts with '❯ ' and is the last prompt
+ line) — but that's still ❯. Requirement explicitly: ❯ alone
+ must not be enough. Let me define:
+ - prompt_line: a line matching ^\s*❯(\s|$) (a bare prompt)
+   → evidence but not sufficient alone.
+
+ - input_ready = prompt_line present AND no
+   dialog/login/setup pending AND
+   (authentication.authenticated is True or at least one
+   strong INPUT marker like 'bypass permissions'/'Claude
+   Code v'/'for shortcuts').
+   Since 'for shortcuts' appears in the input hint line ("?
+   for shortcuts"), it's part of the genuine input box; the
+   trust dialog wouldn't have it. So requiring one of
+   ('bypass permissions','for shortcuts','Claude Code v')
+   alongside the ❯ prompt is reasonable and clearly excludes
+   the trust dialog.
+
+ - authentication: separate dict {'status':
+   'logged_in'|'not_logged_in'|'unverified', 'evidence':
+   [...], 'note'}; logged_in only from AUTH_MARKERS (bypass
+   permissions / Claude Code v) with no login/setup pending;
+   'not_logged_in' when login markers; else 'unverified'. ❯
+   never contributes.
+
+ - fixture readiness gate: fixture_ready = input_ready and
+   not dialog_pending; expose blocked_by.
+
+ Then setup_fixture: replace claude_ui with thin wrapper
+ delegating to claude_readiness.classify;
+ result['ready']['claude_pane'] includes
+ input_ready/authentication/dialog_pending;
+ result['ready']['fixture_ready'], 'blocked_by', and 'note'.
+ Keep backward-compatible keys
+ login_prompt_seen/input_box_markers/logged_in_ui?
+ logged_in_ui is misleading; keep but define as
+ authentication.status=='logged_in'? Existing consumers:
+ build manifest records, preview-handoff? My earlier
+ manifest recorded claude_pane.logged_in_ui True. To avoid
+ breaking, keep 'logged_in_ui' but derive from
+ authentication; and add input_ready. Hmm "logged_in_ui"
+ claims authentication — keep it but only true with real
+ evidence.
+
+ lifecycle_fixture: replace its claude_ui with the shared
+ classifier too (it's "directly shared classifier"). It uses
+ ui['logged_in_ui'] and passes 'claude_ui': ui into output.
+ Keep key names: provide 'logged_in_ui' and add
+ input_ready/dialog_pending/authentication.
+
+ Implementation in claude_readiness.py:
+
+ ```python
+   PROMPT_RE = re.compile(r'^\s*❯(\s|$)', re.M)
+   def classify(lines): ...
+ ```
+
+ Let me write the module, patch both helpers, then tests.
+
+ Tests file: tests/test_acceptance42_fixture_readiness.py:
+ - trust dialog screen (with ❯) → input_ready False,
+   dialog_pending ['trust'], authenticated 'unverified',
+   fixture_ready False.
+ - theme/setup → False.
+ - login → authentication 'not_logged_in', input_ready
+   False.
+ - genuine logged-in (❯ + bypass permissions + Claude Code v
+   + 'for shortcuts') → True, authenticated 'logged_in'.
+ - bare ❯ only → False, authenticated 'unverified'.
+ - setup_fixture.classify/gate:
+   setup_fixture.readiness_gate(ui) returns
+   fixture_ready/blocked_by; also test main's result shape?
+   Use the module function.
+ - lifecycle_fixture.claude_ui delegates: same verdicts
+   (guards the shared classifier).
+ - history theme preserved: not needed here.
+
+ Write module now.
+
+
+ write ...
+
+ #!/usr/bin/env python3
+ """Claude pane readiness for acceptance fixtures — one
+ classifier, shared by every helper.
+
+ Reproduced bug: ``setup_fixture.claude_ui`` counted a ``❯``
+ marker anywhere in the pane tail as "logged in,
+ input ready".  A first-run **trust** screen prints exactly
+ that marker in its own selector::
+
+     Accessing workspace:
+       /path/to/dir
+     ❯ 1. Yes, I trust this folder
+       2. No, exit
+ ... (83 more lines, 93 total, ctrl+o to expand)
+
+
+── ⠧ Working ────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────
+~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+↑211k ↓101k R9.7M CH98.9% 43.5%/400k (auto)  workbuddy-ai/dee
+执行派工任务

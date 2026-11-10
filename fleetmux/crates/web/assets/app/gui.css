@@ -1,0 +1,36 @@
+/* #1e1e1e = Palette::CMUX bg: only the fallback until gui.js applies boot.theme (the real value comes from there). */
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1e1e1e; }
+#term { position: absolute; inset: 0; }
+/* The history overlay: inside .xterm-screen (position: relative), placed in CSS px by gui.js. */
+#history {
+  position: absolute; display: block; margin: 0; padding: 0; border: 0;
+  z-index: 20; background: #fff; visibility: hidden;
+}
+#notice {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 30;
+  padding: 6px 10px; border-radius: 4px; font: 13px -apple-system, system-ui, sans-serif;
+  color: #fff; background: rgba(160, 40, 40, 0.92); pointer-events: none;
+}
+/* Scrollbars: one per visible cell, inside .xterm-screen, placed in CSS px by gui.js; above the history iframe
+   (20), below #notice (30). Transient, cmux-like: invisible and taking no pointer at rest; gui.js adds `.show`
+   when that pane's offset changes, while the thumb is dragged, or while the pointer is over the right 12 px of
+   the cell, and removes it ~1 s after the last activity. `.show` disables the transition, so the bar appears at
+   once and only the way out fades (0.3 s). No track colour: the 6 px thumb sits 2 px from the edge and widens to
+   10 px (and gets more opaque) while hovered or dragged; the offset/total label is a drag affordance only. */
+.sb { position: absolute; z-index: 25; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
+.sb.show { opacity: 1; transition: none; pointer-events: auto; }
+.sb-thumb {
+  position: absolute; right: 2px; width: 6px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.35);
+}
+.sb.hover .sb-thumb, .sb:hover .sb-thumb, .sb.drag .sb-thumb {
+  width: 10px; background: rgba(255, 255, 255, 0.55);
+}
+.sb-label {
+  position: absolute; right: 14px; top: 0; padding: 0 3px; border-radius: 2px;
+  font: 10px -apple-system, system-ui, sans-serif; color: rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.5); white-space: nowrap; pointer-events: none;
+}
+/* A26 rev3 (CURRENT_REQUIREMENTS rev 4): no page-drawn window controls and no resize grips. Linux keeps its
+   window manager's native titlebar, close/minimize/maximize buttons and resize borders; macOS keeps its native
+   traffic lights (gui.js only pads row 0 to their measured centre). */

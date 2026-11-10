@@ -1,0 +1,41 @@
+   │ && rm -rf $N && mkdir -p $N &&
+   │ out=../lab3/negative-manual-combo.txt; : > $out; for case in
+   │ rewake dupsettle hookrow; do rm -rf $N/$case; cp -R
+   │ evidence/r7b-622aebea/check-v3 $N/$case; python3 - $N/$case
+   │ $case <<'EOF'
+   │ import json,sys 
+   │ d,case=sys.argv[1],sys.argv[2]
+   │ rows=[json.loads(l) for l in open(d+'/audit.jsonl')]
+   │ mid='m-2ea5f6c6304d296c8265d1980133931e'
+   │ if case=='rewake':
+   │     rows.append(dict(event='hook.rewake',slot='worker-2',mes
+   │ sage_id=mid,_at=1791912700.0,detail={}))
+   │ elif case=='dupsettle':
+   │     s=[x for x in rows if x.get('event')=='settled' and
+   │ x.get('message_id')==mid][0];
+   │ rows.append(dict(s,_at=s['_at']+5))
+   │ elif case=='hookrow':  # pretend the delivery was handed
+   │ mid-turn: settle before the operator turn ended
+   │     for x in rows:
+   │         if x.get('event')=='settled' and
+   │ x.get('message_id')==mid: x['_at']=1791912700.0
+   │ open(d+'/audit.jsonl','w').write(''.join(json.dumps(x)+'\n'
+   │ for x in rows))
+   │ EOF
+   │ echo "== negative: $case" | tee -a $out; python3
+   │ check_manual_combo.py $N/$case | grep -v '^PASS' | tee -a
+   │ $out; done; echo "== baseline r6 (9df19c2c, before fix)" |
+   │ tee -a $out; ls evidence/r6-baseline-9df19c2c/; python3
+   │ check_manual_combo.py evidence/r6-baseline-9df19c2c/check |
+   │ tee -a $out; rm -rf $N
+   Run negative tests and pre-fix baseline through combo checker
+
+ │ Dangerous rm operation on possibly-empty variable path: $N/$case
+ │ in `rm -rf $N/$case` (rewrite it as "${N:?}"/"${case:?}" or use
+ │ a literal path)
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend

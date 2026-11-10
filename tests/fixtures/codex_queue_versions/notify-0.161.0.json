@@ -1,0 +1,128 @@
+[
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138a8-debf-7fa2-b311-f7d5be11c4be",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY."
+   ],
+   "last-assistant-message": "READY"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-e46e-7330-b6b0-57e46b870e6f",
+   "turn-id": "01a138a8-e489-7fd1-8e9c-b0b44e260c62",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "Generate a concise, single-line task title of at most 36 characters and under five words where possible. Start with an imperative verb. Capitalize only the first word unless the user's language, proper nouns, acronyms, or code terms require otherwise. Preserve ticket references exactly. Write in the user's language. Do not use quotes, markdown, or trailing punctuation. Do not answer the request.\n\nUser prompt:\nYou are a probe. Reply exactly READY."
+   ],
+   "last-assistant-message": "{\"title\":\"Reply exactly READY\"}"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138a9-9f73-7ae0-85b7-505add992e7d",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)"
+   ],
+   "last-assistant-message": "ACK-Q1"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138aa-057b-7821-8b32-f14e28b1c8ed",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)",
+    "Reply exactly ACK-TYPED."
+   ],
+   "last-assistant-message": "ACK-TYPED"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138ab-4d20-7053-9ad0-dcd20eecf72e",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)",
+    "Reply exactly ACK-TYPED.",
+    "Run the shell command `sleep 12` and then reply exactly BUSY-DONE.\n\n(fleet delivery fx-lab0161busy)"
+   ],
+   "last-assistant-message": "BUSY-DONE"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138ab-9e91-7953-84be-e7b47e33f82d",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)",
+    "Reply exactly ACK-TYPED.",
+    "Run the shell command `sleep 12` and then reply exactly BUSY-DONE.\n\n(fleet delivery fx-lab0161busy)",
+    "Reply exactly ACK-Q2.\n\n(fleet delivery fx-lab0161q2)"
+   ],
+   "last-assistant-message": "ACK-Q2"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138ab-aba9-7a42-94a9-6efd61ffc6fb",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)",
+    "Reply exactly ACK-TYPED.",
+    "Run the shell command `sleep 12` and then reply exactly BUSY-DONE.\n\n(fleet delivery fx-lab0161busy)",
+    "Reply exactly ACK-Q2.\n\n(fleet delivery fx-lab0161q2)",
+    "Reply exactly ACK-Q3.\n\n(fleet delivery fx-lab0161q3)"
+   ],
+   "last-assistant-message": "ACK-Q3"
+  }
+ },
+ {
+  "payload": {
+   "type": "agent-turn-complete",
+   "thread-id": "01a138a8-de98-7a93-b83a-57293e07a1f1",
+   "turn-id": "01a138ac-5e91-71b1-91cb-4c54bb704cdd",
+   "cwd": "/LAB/cwd0161",
+   "client": "codex-tui",
+   "input-messages": [
+    "You are a probe. Reply exactly READY.",
+    "Reply exactly ACK-Q1.\n\n(fleet delivery fx-lab0161q1)",
+    "Reply exactly ACK-TYPED.",
+    "Run the shell command `sleep 12` and then reply exactly BUSY-DONE.\n\n(fleet delivery fx-lab0161busy)",
+    "Reply exactly ACK-Q2.\n\n(fleet delivery fx-lab0161q2)",
+    "Reply exactly ACK-Q3.\n\n(fleet delivery fx-lab0161q3)",
+    "Run the shell command `sleep 12` and then reply exactly BUSY2-DONE.\n\n(fleet delivery fx-lab0161busy2)",
+    "Reply exactly ACK-OP."
+   ],
+   "last-assistant-message": "ACK-OP"
+  }
+ }
+]

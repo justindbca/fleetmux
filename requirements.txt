@@ -1,0 +1,4 @@
+# Python packages of the release .venv, pinned to the versions the full test suite ran with.
+# Change a pin only in the same commit that re-runs the full suite on it (deps.yaml lists the programs).
+redis==7.3.0
+PyYAML==6.0.3

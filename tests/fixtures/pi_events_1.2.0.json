@@ -1,0 +1,124 @@
+{
+ "pi_version": "1.2.0",
+ "recorded_with": "tests/pi_event_recorder_fixture.ts (offline provider, real Pi TUI)",
+ "events": [
+  {
+   "hook": "session_start",
+   "phase": "startup",
+   "mode": "tui",
+   "idle": true
+  },
+  {
+   "hook": "input",
+   "phase": "startup",
+   "source": "interactive",
+   "idle": true
+  },
+  {
+   "hook": "before_agent_start",
+   "phase": "startup",
+   "idle": false,
+   "messageType": "user",
+   "hasPrompt": true,
+   "customType": null,
+   "detailsMessageId": null
+  },
+  {
+   "hook": "agent_start",
+   "phase": "startup",
+   "idle": false
+  },
+  {
+   "hook": "message_end",
+   "phase": "startup",
+   "role": "system",
+   "customType": null,
+   "stopReason": null
+  },
+  {
+   "hook": "message_end",
+   "phase": "startup",
+   "role": "user",
+   "customType": null,
+   "stopReason": null
+  },
+  {
+   "hook": "message_end",
+   "phase": "startup",
+   "role": "assistant",
+   "customType": null,
+   "stopReason": "stop"
+  },
+  {
+   "hook": "agent_settled",
+   "phase": "startup",
+   "aborted": false
+  },
+  {
+   "hook": "delivery_frame",
+   "phase": "delivery",
+   "idle": true,
+   "pending": false
+  },
+  {
+   "hook": "before_agent_start",
+   "phase": "delivery",
+   "idle": false,
+   "messageType": "custom",
+   "hasPrompt": false,
+   "customType": "fleet-delivery",
+   "detailsMessageId": "m-recorded"
+  },
+  {
+   "hook": "agent_start",
+   "phase": "delivery",
+   "idle": false
+  },
+  {
+   "hook": "message_end",
+   "phase": "delivery",
+   "role": "custom",
+   "customType": "fleet-delivery",
+   "stopReason": null
+  },
+  {
+   "hook": "message_end",
+   "phase": "delivery",
+   "role": "assistant",
+   "customType": null,
+   "stopReason": "toolUse"
+  },
+  {
+   "hook": "tool_execution_start",
+   "phase": "delivery",
+   "tool": "fleet_event_tool"
+  },
+  {
+   "hook": "tool_execute",
+   "phase": "delivery",
+   "idle": false
+  },
+  {
+   "hook": "tool_execution_end",
+   "phase": "delivery",
+   "tool": "fleet_event_tool",
+   "isError": false
+  },
+  {
+   "hook": "message_end",
+   "phase": "delivery",
+   "role": "toolResult",
+   "customType": null,
+   "stopReason": null
+  },
+  {
+   "hook": "agent_settled",
+   "phase": "delivery",
+   "aborted": false
+  },
+  {
+   "hook": "done",
+   "phase": "done"
+  }
+ ]
+}

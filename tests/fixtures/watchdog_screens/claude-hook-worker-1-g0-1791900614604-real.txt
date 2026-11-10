@@ -1,0 +1,35 @@
+   │ n = int(open(cnt).read()) if os.path.exists(cnt) else 0
+   │ n += 1; open(cnt, 'w').write(str(n))
+   │ with open(os.environ['HK_DIR'] + '/log.jsonl', 'a') as f:
+   │     f.write(json.dumps({'n': n, 'stop_hook_active': d.get('stop_hook_active'), 'last':
+   │ (d.get('last_assistant_message') or '')[:80], 'tp': d.get('transcript_path')}) + '\n')
+   │ lim = int(os.environ.get('HK_LIMIT', '12'))
+   │ if n <= lim:
+   │     print(json.dumps({'decision': 'block', 'reason': 'FLEETMSG-%d: reply with exactly the
+   │ word ACK%d and nothing else.' % (n, n)}))
+   │ EOF
+   │ cat > settings_block.json <<EOF
+   │ {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"python3
+   │ $M/hook_block.py","timeout":60}]}]}}
+   │ EOF
+   │ REAL=/Users/USER/.local/share/fnm/node-versions/v22.22.0/installation/lib/node_modules/@a
+   │ nthropic-ai/claude-code/bin/claude.exe
+   │ for mode in cap_default cap_zero; do rm -rf $M/$mode; mkdir -p $M/$mode; done
+   │ (cd $M/cap_default && HK_DIR=$M/cap_default env -u CLAUDECODE -u
+   │ CLAUDE_CODE_STOP_HOOK_BLOCK_CAP $REAL -p --model haiku --settings $M/settings_block.json
+   │ "Reply with exactly START" > out.txt 2>err.txt; echo exit=$? >> out.txt) &
+   │ (cd $M/cap_zero && HK_DIR=$M/cap_zero CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=0 env -u CLAUDECODE
+   │ $REAL -p --model haiku --settings $M/settings_block.json "Reply with exactly START" >
+   │ out.txt 2>err.txt; echo exit=$? >> out.txt) &
+   │ wait; for mode in cap_default cap_zero; do echo "== $mode"; cat $M/$mode/out.txt; tail -3
+   │ $M/$mode/err.txt; cat $M/$mode/log.jsonl | cut -c1-150; done
+   Measure Stop hook block cap with and without env
+
+ │ Dangerous rm operation on possibly-empty variable path: $M/$mode in `rm -rf $M/$mode` (rewrite
+ │ it as "${M:?}"/"${mode:?}" or use a literal path)
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend

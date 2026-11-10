@@ -1,0 +1,97 @@
+{
+  "at": "2026-11-01T06:00:51.179331+00:00",
+  "source_sha": "199f052030323458c575a8e02994c410a1655fd8",
+  "run": "/home/user/a42/life/fleet-home/runs/fleet-20261101-015809-dfbb26a4",
+  "runtime": "/home/user/a42/life/state/fleetmux/cmux-fleet",
+  "config": "/home/user/a42/life/fleet-home/runs/fleet-20261101-015809-dfbb26a4/config.json",
+  "result": {
+    "status": "stopped",
+    "reason": "fleetmux 侧栏「关闭整个 fleet」",
+    "task_id": "",
+    "goal": "",
+    "at": 1793512821.455294,
+    "artifacts": [],
+    "mode": "smoke",
+    "base_mode": "task",
+    "closed_by": "user",
+    "closed_at": 1793512821.4554846,
+    "closed_via": "fleetmux-sidebar",
+    "resumable": true,
+    "workspace": "closed (server kept for ↺)",
+    "workspace_closed_at": 1793512831.7771833
+  },
+  "hello": {
+    "epoch": "151n",
+    "id": 1,
+    "ok": true,
+    "pid": 65062,
+    "prefix": "C-b",
+    "protocol": 1,
+    "run": "/home/user/a42/life/fleet-home/runs/fleet-20261101-015809-dfbb26a4",
+    "theme": {
+      "ansi": [
+        "#1a1a1a",
+        "#cc372e",
+        "#26a439",
+        "#cdac08",
+        "#0869cb",
+        "#9647bf",
+        "#479ec2",
+        "#98989d",
+        "#464646",
+        "#ff453a",
+        "#32d74b",
+        "#ffd60a",
+        "#0a84ff",
+        "#bf5af2",
+        "#76d6ff",
+        "#ffffff"
+      ],
+      "bg": "#1e1e1e",
+      "cursor": "#98989d",
+      "fg": "#ffffff"
+    },
+    "uid": 1000,
+    "version": "0.1.0",
+    "viewers": 1
+  },
+  "panes": [],
+  "sidebar": {
+    "v": 1,
+    "current": "fleet-20261101-015809-dfbb26a4",
+    "fleets": [
+      {
+        "id": "fleet-20261101-015809-dfbb26a4",
+        "title": "A42 Linux lifecycle test subjects",
+        "state": "closed",
+        "line1": "已关闭 · 可恢复",
+        "line2": "关闭于 11-01 01:00"
+      }
+    ],
+    "close": {
+      "title": "关闭整个 fleet「A42 Linux lifecycle test subjects」？",
+      "body": "会停掉监工、1 个 worker。正在做的活会中断。运行记录保留，之后可以在侧栏点 ↺ 恢复，接着原来的活。"
+    }
+  },
+  "restorable": {
+    "present": true,
+    "runs": [
+      {
+        "title": "A42 Linux lifecycle test subjects"
+      }
+    ]
+  },
+  "gui_pid": 65393,
+  "launcher_pid": 65385,
+  "server_pid": 65062,
+  "gui_sha256": "e101cc3c61ed7041d48a1da080e31090dd38187d87ed68ddd087efd2dbe89c1c",
+  "server_sha256": "7a51dd1ca8330907250e173fae6b8ff71def8c195030c13320e08d06e75d3046",
+  "gui_exe": "/home/user/cmux-fleet-incoming/199f0520/utm-linux/fleetmux-web",
+  "server_exe": "/home/user/cmux-fleet-incoming/199f0520/utm-linux/fleetmux",
+  "active_window": "0x3800013",
+  "active_properties": "_NET_WM_PID(CARDINAL) = 65393\nWM_NAME(STRING) = \"fleetmux-web\"\n",
+  "daemon": null,
+  "agents": {},
+  "agents_available": false,
+  "agents_note": "Closed private Redis is not queried; closed-state proof comes from durable result, empty panes and restorable sidebar"
+}

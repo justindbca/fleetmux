@@ -1,0 +1,29 @@
+---
+source: crates/app/tests/replay.rs
+expression: t.text(rows as usize)
+---
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Sonnet 5 · Claude Max
+  ▝▝ ▝▝    /private/tmp/fmdemo/claude-1
+
+
+❯ List the files in this directory and say how many there are.
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ The directory /private/tmp/fmdemo/claude-1 is empty — 0 files.
+
+✻ Churned for 3s · done 4:17 AM
+
+❯ /exit
+
+✽ Precipitating…
+  ⎿  Tip: Try the new fullscreen renderer — flicker-free output, mouse support, auto-copy on select · /tui fullscreen
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← 1 agent
+
+Resume this session with:
+claude --resume XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
