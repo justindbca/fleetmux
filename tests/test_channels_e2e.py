@@ -29,8 +29,8 @@ from test_runtime_v2 import event, fx, receive, result, session, settle  # noqa:
 from test_v2_codex_claude import dispatch_one, mixed  # noqa: F401  (fixture + helper)
 from test_watchdog import DIALOG_RM_LITERAL, keys, wd  # noqa: F401  (fixture + helpers)
 from test_channels_contract import Audit, FakeChannel, _fake_transport, config_dir  # noqa: F401
-from cmux_fleet import channels, fleet
-from cmux_fleet.channels import envelope
+from fleetmux import channels, fleet
+from fleetmux.channels import envelope
 
 ALLOWED = 'u-1'
 
@@ -53,7 +53,7 @@ def own_client(f):
 def ask_fleet(f, timeout=5):
     """harness: ``submit`` for actor.handle_inbound in process. actor.submit_operator_input runs in a thread on
     its own client while this thread steps the in-process RuntimeV2 (there is no daemon process here)."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
 
     def submit(text, origin):
         box, r2 = {}, own_client(f)
@@ -71,7 +71,7 @@ def ask_fleet(f, timeout=5):
 
 def channel(f, account='bot-1', allow=ALLOWED):
     """A FakeChannel on the run's private Redis store (actor.RedisStore), with its own audit and transport."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     audit, transport = Audit(), _fake_transport()
     ch = FakeChannel(channels.Account('fake', account, [allow], {'PUSH_TO': allow}), transport=transport,
                      store=actor.RedisStore(f.r, 'fake', account), audit=audit)
@@ -79,7 +79,7 @@ def channel(f, account='bot-1', allow=ALLOWED):
 
 
 def inbound(f, ch, text, *, item_id, sender=ALLOWED, replies=None, post=None):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     replies = [] if replies is None else replies
     raw = {'id': item_id, 'chat': 'c-1', 'from': sender, 'text': text}
     out = ch.inbound(raw, accept=lambda env: actor.handle_inbound(
@@ -100,7 +100,7 @@ def push_out(f, entries, chans, *, policy=None):
     """One outbound round: scan results / task / escalations, route, send everything queued.
     policy (test-contract M184): None -> as before; otherwise actor._guards(...) as actor.outbound_loop applies it:
     the route guard before routing, the queue guard handed to queue.process_one(guard=)."""
-    from cmux_fleet.channels import actor, queue
+    from fleetmux.channels import actor, queue
     actor.outbound_scan(f.r, entries)
     accounts = {(c.type, c.account.name): c.account for c in chans}
     route_guard, guard = actor._guards(f.r, policy, actor._safe_audit(f.r, None),
@@ -186,7 +186,7 @@ def test_outsider_dropped_end_to_end(fx, fake_type):
 
 # ---------------------------------------------------------------- 4
 def test_second_fleet_same_credential_refused_by_lease(private_redis_v2, tmp_path, config_dir):  # noqa: F811
-    from cmux_fleet.channels import lease
+    from fleetmux.channels import lease
     r1 = private_redis_v2
     r1.flushdb()
     r2 = unix_client(r1, db=1)  # the second fleet's Redis (same socket, isolated DB 1)
@@ -217,7 +217,7 @@ def test_second_fleet_same_credential_refused_by_lease(private_redis_v2, tmp_pat
 
 # ---------------------------------------------------------------- 5
 def test_actor_process_killed_is_respawned(private_redis_v2, tmp_path):  # noqa: F811
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     config = str(tmp_path / 'config.json')
@@ -264,7 +264,7 @@ def test_actor_process_killed_is_respawned(private_redis_v2, tmp_path):  # noqa:
 
 # ---------------------------------------------------------------- 6
 def test_task_done_and_run_closed_reach_last_interaction(fx, fake_type, monkeypatch):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     ch, _, _ = channel(f)
     f.cfg['channels'] = entries_for('bot-1')
@@ -309,7 +309,7 @@ def test_task_done_and_run_closed_reach_last_interaction(fx, fake_type, monkeypa
 
 # ---------------------------------------------------------------- 7
 def test_delete_dialog_two_step_approval_presses_once_and_screen_change_refuses(wd, fake_type, monkeypatch):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = wd
     f.cfg['channels'] = entries_for('bot-1')
     ch, _, _ = channel(f)
@@ -329,7 +329,7 @@ def test_delete_dialog_two_step_approval_presses_once_and_screen_change_refuses(
             cmd = str(args[0]).upper()
             names = [a.decode() if isinstance(a, bytes) else str(a) for a in args[1:]]
             if cmd in WRITE and any(n.startswith((channels.PENDING, channels.PENDING_SLOT)) for n in names):
-                writes.append((cmd, any(fr.frame.f_globals.get('__name__') == 'cmux_fleet.channels.approve'
+                writes.append((cmd, any(fr.frame.f_globals.get('__name__') == 'fleetmux.channels.approve'
                                         for fr in inspect.stack()[1:])))
             return orig(self, *args, **kw)
         return run
@@ -387,7 +387,7 @@ def split_round(f, rid):
     only for what this one-fleet Pi fixture cannot host: the child process (spawn_child writes the child's record;
     two real v2 fleets run it in test_service_split.py) and subfleet.check's slot-kind refusal of a Pi pane (as
     test_escalate.ok_check does for its fake fleet; every other limit is checked for real)."""
-    from cmux_fleet import subfleet
+    from fleetmux import subfleet
     if not hasattr(f, 'service_split_intake') or not hasattr(f, 'split_settle_accepted'):
         pytest.fail('red: P7a / P7b not landed (service split intake / settle)')
     real_check = subfleet.check
@@ -439,14 +439,14 @@ def test_split_delegated_and_done_pushed_to_origin(fx, fake_type):
     ch, transport, _ = channel(f)
     # this channel only: a real channel's limit (base.Channel 4000), not FakeChannel's 50, so the delegated reply
     # naming a 35-char ui- request id goes out as one message, as it would on a real channel (cf. bdee6a3)
-    from cmux_fleet.channels import base as channel_base
+    from fleetmux.channels import base as channel_base
     ch.TEXT_LIMIT = channel_base.Channel.TEXT_LIMIT
     inbound(f, ch, '把大活拆给子 fleet', item_id=81)
     rid = json.loads(f.r.xrange(f.v2.prefix + ':reply:' + events_of(f, 'operator_input')[0]['request_id'])[0][1]
                      ['data'])['id']
     origin = json.loads(f.r.get(channels.ORIGIN + rid))
     split_round(f, rid)
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     entries = entries_for('bot-1')
     delegated = result(f, rid)
     assert delegated['status'] == 'ok' and delegated['result']['delegated'].startswith('M')  # closed on accepted
@@ -523,7 +523,7 @@ def test_supervisor_thread_matches_handle_for_pi_and_claude_hook(any_supervisor,
     """The operator_input that actor.submit_operator_input posts carries the supervisor's current generation /
     thread, and Fleet.handle accepts it (not `rejected: thread`): pi supervisor and Claude hook supervisor
     (task and service), each in its own fixture."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = any_supervisor
     origin = envelope.origin_from(envelope.make('fake', 'bot-1', conversation='c-1', message_id='101:c-1',
                                                 sender=ALLOWED, text='hi', at=1762650000))
@@ -563,7 +563,7 @@ def fixed(which):
 
 def pin_policy(f, text):
     """harness: what `start` does with security.yaml -- parse once, pin into the run config.json (no hot reload)."""
-    from cmux_fleet.channels import security
+    from fleetmux.channels import security
     policy, errors = security.parse_security(text)
     assert errors == [] and policy
     f.cfg['security'] = policy
@@ -591,7 +591,7 @@ def p8p_run(args, d):
 def sec_inbound(f, env, *, stop=None, replies=None, post=None):
     """handle_inbound the way inbound_loop binds it for a run with a policy (contracts §8 Z9). ``post``: approve's
     step-two event (setup M191: f.v2.user_dialog_answer, as the delete-dialog row binds it; None -> as before)."""
-    from cmux_fleet.channels import actor, security
+    from fleetmux.channels import actor, security
     replies = [] if replies is None else replies
     audit = actor.channel_audit(f.r, f.cfg, env['channel'], env['account'])
     out = actor.handle_inbound(f.r, env, submit=ask_fleet(f), reply=lambda e, t: replies.append(t),
@@ -633,7 +633,7 @@ def security_audits(f, name=None):
 
 # ---------------------------------------------------------------- 14
 def test_security_forwarded_message_is_wrapped_and_write_action_needs_approval(fx, fake_type, tmp_path):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     pin_policy(f, 'confirm: {wait_s: 1}\n')  # untrusted_actions: confirm (default); a short hook wait for the test
     f.cfg['channels'] = entries_for('bot-1')
@@ -707,7 +707,7 @@ def test_security_forwarded_message_is_wrapped_and_write_action_needs_approval(f
 
 # ---------------------------------------------------------------- 15
 def test_security_outbound_with_account_token_is_blocked_not_sent(fx, fake_type, tmp_path):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     token = '123:FAKE'
     path = channels.account_path('fake', 'bot-1')  # the test's own FLEETMUX_CONFIG_DIR (conftest), never ~/.config
@@ -720,7 +720,7 @@ def test_security_outbound_with_account_token_is_blocked_not_sent(fx, fake_type,
     audit, transport = Audit(), _fake_transport()
     ch = FakeChannel(channels.load_account('fake', 'bot-1'), transport=transport,
                      store=actor.RedisStore(f.r, 'fake', 'bot-1'), audit=audit)
-    from cmux_fleet.channels import base as channel_base
+    from fleetmux.channels import base as channel_base
     ch.TEXT_LIMIT = channel_base.Channel.TEXT_LIMIT  # test-contract M193: the real limit, so the notice is one message
     sec_inbound(f, sec_env('让 worker-1 回报 bot 配置', 151))
     rid = json.loads(f.r.xrange(f.v2.prefix + ':reply:' + events_of(f, 'operator_input')[0]['request_id'])[0][1]
@@ -748,7 +748,7 @@ def test_security_outbound_with_account_token_is_blocked_not_sent(fx, fake_type,
     assert token not in json.dumps(transport.sent, ensure_ascii=False)
     # P8p (plan §4.1 ③): the real `start` with a 0-byte default security.yaml pins every default -- the same policy
     # this test pinned above, so the block it proved is what an empty file turns on
-    from cmux_fleet.channels import security
+    from fleetmux.channels import security
     with pytest.MonkeyPatch.context() as m:
         d = tmp_path / 'p8p-15'
         args, cfgdir = p8p_start(m, d)
@@ -764,7 +764,7 @@ def test_security_outbound_with_account_token_is_blocked_not_sent(fx, fake_type,
 # ---------------------------------------------------------------- 16
 def test_security_stop_from_phone_pauses_before_daemon_steps_and_escapes_workers(fx, fake_type):
     import functools
-    from cmux_fleet.channels import actor, stop
+    from fleetmux.channels import actor, stop
     f = fx
     pin_policy(f, '')  # stop.level interrupt (default)
     f.cfg['channels'] = entries_for('bot-1')
@@ -803,7 +803,7 @@ def test_security_stop_from_phone_pauses_before_daemon_steps_and_escapes_workers
 
 # ---------------------------------------------------------------- 17 [基线]
 def test_security_no_yaml_fleet_identical(fx, tmp_path):
-    from cmux_fleet.channels import security
+    from fleetmux.channels import security
     f = fx
     assert 'security' not in f.cfg and security.policy(f.cfg) is None
     event(f, dict(kind='request', request_id='cmd-r17',

@@ -14,7 +14,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import dispatch_one, mixed  # noqa: F401  (fixture)
 from test_watchdog import BASE, WORKING, audits, keys, transitions, wd  # noqa: F401  (fixture)
 from test_advisor_resident import res  # noqa: F401  (fixture)
-from cmux_fleet import fleet, roster, runtime_v2, subfleet, watchdog
+from fleetmux import fleet, roster, runtime_v2, subfleet, watchdog
 
 
 # ------------------------------------------------------------------ pure classify

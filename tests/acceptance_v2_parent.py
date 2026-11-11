@@ -15,9 +15,9 @@ import uuid
 import redis
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import fleet
-from cmux_fleet.agent_bridge import AgentBridge
-from cmux_fleet.message_bus import BusError
+from fleetmux import fleet
+from fleetmux.agent_bridge import AgentBridge
+from fleetmux.message_bus import BusError
 from test_fleet import FakeMgr
 
 

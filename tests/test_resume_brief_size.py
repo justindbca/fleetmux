@@ -7,7 +7,7 @@ on every restart. The full summary now goes to a file under <run>/handoffs and t
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_resume import managed, task_run, half_done, crash_and_resume, answer_turn  # noqa: F401  (fixtures)
 from test_v2_codex_claude import typed
-from cmux_fleet import message_bus, runtime_v2
+from fleetmux import message_bus, runtime_v2
 
 HUGE = 400000  # bytes of progress: twice the bus limit
 

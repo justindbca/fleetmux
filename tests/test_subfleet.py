@@ -21,7 +21,7 @@ import pytest
 
 from test_fleet import codex_rows, received, write_rollout
 import hook_sim  # noqa: E402
-from cmux_fleet import clear_after_result, cmux_manager, fleet, redis_runtime, roster, runtime_v2, subfleet
+from fleetmux import clear_after_result, cmux_manager, fleet, redis_runtime, roster, runtime_v2, subfleet
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).
@@ -303,7 +303,7 @@ def spawn_m0(t, **kw):
 
 
 def child_daemon(t, rec):
-    """What `cmux-fleet daemon <child config>` does on its first boot, in process."""
+    """What `fleetmux daemon <child config>` does on its first boot, in process."""
     cfg = fleet.load(Path(rec['run']) / 'config.json')
     cf = fleet.Fleet(Path(rec['run']) / 'config.json', fleet.connect(cfg), t.world.manager(cfg), sessions=t.sessions)
     cf.lock = (Path(rec['run']) / 'daemon.lock').open('a+')  # a live daemon holds its run's lock
@@ -546,14 +546,14 @@ def test_deliverable_written_straight_into_the_task_directory_counts(tree):
 
 
 def page_data(run):
-    from cmux_fleet import history
+    from fleetmux import history
     page = history.page_path(run).read_text()
     return json.loads(page.split('const DATA=', 1)[1].split(';\n', 1)[0])
 
 
 def test_history_pages_link_parent_and_children_both_ways(tree):
     """Design §19 / nested §5.3: parent page lists its sub-fleets (jump), child page links back."""
-    from cmux_fleet import history
+    from fleetmux import history
     t, f = tree, tree.f
     f.refresh_history()
     assert page_data(f.run_dir)['children'] == [] and page_data(f.run_dir)['parent'] is None
@@ -583,7 +583,7 @@ def test_history_pages_link_parent_and_children_both_ways(tree):
 
 
 def test_history_page_link_text_is_escaped(tmp_path):
-    from cmux_fleet import history
+    from fleetmux import history
     links = {'parent': {'task_id': 'M0', 'url': 'file:///x', 'title': '"><img src=x onerror=alert(1)>'},
              'children': [{'task_id': '</script><b>', 'url': 'file:///y', 'title': 't', 'state': 'running'}]}
     page = history.write_page(tmp_path, [], links).read_text()
@@ -623,7 +623,7 @@ def jump(f, url, now=None):
 @pytest.fixture
 def linked(tree):
     """Parent with running sub-fleet M0 and its in-process child daemon; both history panes live."""
-    from cmux_fleet import history
+    from fleetmux import history
     t, f = tree, tree.f
     rec, out = spawn_m0(t)
     cf = child_daemon(t, rec)
@@ -639,7 +639,7 @@ def linked(tree):
 def test_clicked_page_links_switch_workspaces_both_ways_and_restore_the_source_page(linked):
     """Option (a): a link click (explicit marker) -> select-workspace of the matching fleet; the
     clicking pane goes back to its own page (last seen state), the target pane is not touched."""
-    from cmux_fleet import history
+    from fleetmux import history
     t, f, cf = linked, linked.f, linked.cf
     own, kid = history.page_url(f.run_dir), history.page_url(t.rec['run'])
     assert jump(f, own + '#agent=worker-2&gen=&view=note&q=') is None  # ordinary state: remembered only
@@ -658,7 +658,7 @@ def test_clicked_page_links_switch_workspaces_both_ways_and_restore_the_source_p
 
 
 def test_reload_repeated_tick_and_daemon_restart_never_switch_twice(linked):
-    from cmux_fleet import history
+    from fleetmux import history
     t, f = linked, linked.f
     own, kid = history.page_url(f.run_dir), history.page_url(t.rec['run'])
     url = click(kid, 'child')
@@ -684,7 +684,7 @@ def test_reload_repeated_tick_and_daemon_restart_never_switch_twice(linked):
 
 
 def test_only_registered_matching_relations_jump(linked, tmp_path):
-    from cmux_fleet import history
+    from fleetmux import history
     t, f, cf = linked, linked.f, linked.cf
     own, kid = history.page_url(f.run_dir), history.page_url(t.rec['run'])
     assert jump(f, click(kid, 'parent')) == 'unrelated'  # right page, wrong relation
@@ -700,7 +700,7 @@ def test_only_registered_matching_relations_jump(linked, tmp_path):
 
 
 def test_failed_switch_and_missing_registration_show_the_target_page_in_place(linked):
-    from cmux_fleet import history
+    from fleetmux import history
     t, f = linked, linked.f
     kid = history.page_url(t.rec['run'])
     t.world.select_ok = False
@@ -715,7 +715,7 @@ def test_failed_switch_and_missing_registration_show_the_target_page_in_place(li
 
 
 def test_returned_subfleet_keeps_a_readable_page_and_never_moves_the_view(linked):
-    from cmux_fleet import history
+    from fleetmux import history
     t, f, cf = linked, linked.f, linked.cf
     kid = history.page_url(t.rec['run'])
     t.out.write_text('done')
@@ -734,7 +734,7 @@ def test_returned_subfleet_keeps_a_readable_page_and_never_moves_the_view(linked
 
 
 def test_the_daemon_tick_follows_a_click(linked):
-    from cmux_fleet import history
+    from fleetmux import history
     t, f = linked, linked.f
     f.jump_next = 0
     f.world_url(click(history.page_url(t.rec['run']), 'child'))
@@ -767,7 +767,7 @@ def test_fleets_without_links_never_read_the_pane(tree):
 
 
 def test_page_links_carry_the_explicit_jump_marker(tmp_path):
-    from cmux_fleet import history
+    from fleetmux import history
     links = {'parent': {'task_id': '', 'url': 'file:///p/history.html', 'title': 'P'},
              'children': [{'task_id': 'M0', 'url': 'file:///c/history.html', 'title': 'C', 'state': 'failed',
                            'outcome': 'failed'}]}
@@ -1112,7 +1112,7 @@ def test_lost_session_is_replaced_by_the_next_generation_in_place(tree):
 
 
 # ------------------------------------------------------------------ §29 named sub-fleets
-from cmux_fleet import named_subfleet  # noqa: E402
+from fleetmux import named_subfleet  # noqa: E402
 
 
 
@@ -1499,7 +1499,7 @@ def hook_yielded(f):
 def returning_rewake(t, monkeypatch):
     """The session's own asyncRewake from its last Stop while it supervised the sub-fleet (real
     ``fleet.claude_rewake`` in a thread). Grace / stopping shortened; the rest is the real fallback."""
-    from cmux_fleet import claude_hook
+    from fleetmux import claude_hook
     monkeypatch.setattr(claude_hook, 'GRACE', 0)
     # The rewake runs in-process, so its "Claude Code parent" is pytest's parent: a detached pytest
     # (nohup ... &, ppid 1) reads as orphaned and the rewake quits at once. Pin a live-looking parent.
@@ -2063,7 +2063,7 @@ def sleep_holds_the_adopted_supervisor(t, monkeypatch):
     """The real-run sequence (fleet-20261109-053936-beb7e74c): the adopted supervisor's turn ends with an API error
     (the machine slept), its StopFailure starts the pane's rewake fallback (it follows the route into the child), the
     lease runs out while the daemon slept, and the child daemon holds the supervisor and pauses."""
-    from cmux_fleet import claude_hook
+    from fleetmux import claude_hook
     t.f.cfg['adopted_supervisor_hook_delivery'] = True
     route_on(t)
     rec, _ = spawn_m0(t)

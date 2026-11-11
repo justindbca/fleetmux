@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cmux_fleet import fleet, lifecycle_close, subfleet  # noqa: E402
+from fleetmux import fleet, lifecycle_close, subfleet  # noqa: E402
 
 
 # ---- 1. all_gone is backend-neutral ------------------------------------------------------------------
@@ -156,7 +156,7 @@ def test_start_with_a_subfleets_roster_is_refused_on_wezterm(tmp_path, monkeypat
 # ---- 4. default backend: a Mac with cmux installed stays on cmux (core review, production safety) ------
 
 def test_mac_with_cmux_installed_defaults_to_cmux_even_when_it_does_not_answer(monkeypatch):
-    from cmux_fleet.backends import base
+    from fleetmux.backends import base
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'cmux not available: run this inside a cmux terminal'
                         if name == 'cmux' else None)  # ssh / Terminal.app with WezTerm installed
@@ -166,7 +166,7 @@ def test_mac_with_cmux_installed_defaults_to_cmux_even_when_it_does_not_answer(m
 
 
 def test_wezterm_is_the_default_only_without_cmux_or_off_macos(monkeypatch):
-    from cmux_fleet.backends import base
+    from fleetmux.backends import base
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'no cmux' if name == 'cmux' else None)
     monkeypatch.setattr(base, 'cmux_installed', lambda: False)
     assert base.default_backend('darwin') == 'wezterm'
@@ -176,8 +176,8 @@ def test_wezterm_is_the_default_only_without_cmux_or_off_macos(monkeypatch):
 
 def test_start_without_backend_where_cmux_does_not_answer_gives_the_cmux_reason(tmp_path, monkeypatch):
     from test_pi import mock_start
-    from cmux_fleet import cmux_manager
-    from cmux_fleet.backends import base
+    from fleetmux import cmux_manager
+    from fleetmux.backends import base
     args, ran = mock_start(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)

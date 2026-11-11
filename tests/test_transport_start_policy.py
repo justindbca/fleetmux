@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import cmux_manager, fleet, runtime_v2
+from fleetmux import cmux_manager, fleet, runtime_v2
 
 
 def no_provisioning(monkeypatch):

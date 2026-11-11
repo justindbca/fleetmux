@@ -36,11 +36,11 @@ M3_BINS="$M12_BINS --test replay --test stats --test record --test web_relay --t
 TERM_M12_BINS="--test color"                              # fleetmux-term ignored M1 tests
 TERM_M3_BINS="--test color --test parser_contract"        # + M3 wide-char / memory
 LAYOUT_BINS="--test hit"                                  # fleetmux-layout ignored M1 tests
-export CMUX_FLEET_FLEETMUX_REAL=$PWD/fleetmux/target/debug/fleetmux
+export FLEETMUX_REAL_BIN=$PWD/rust/target/debug/fleetmux
 # M4 (brief-m4, m4-design v0.7 §8 / §10). Every file below is required: the m4 gate never skips a missing one.
 M4_BINS="$M3_BINS --test pages"                           # crates/app/tests/pages.rs (#[ignore = "m4"])
-M4_WEB_TEST=fleetmux/crates/web/tests/m4_pages.rs         # runs inside the m3 `cargo test -p fleetmux-web -- --include-ignored`
-M4_SHIM=fleetmux/crates/probe/examples/fake_cli_shim.rs   # e2e fake CLI shim (ft-probe example, no Cargo change)
+M4_WEB_TEST=rust/crates/web/tests/m4_pages.rs         # runs inside the m3 `cargo test -p fleetmux-web -- --include-ignored`
+M4_SHIM=rust/crates/probe/examples/fake_cli_shim.rs   # e2e fake CLI shim (ft-probe example, no Cargo change)
 M3_PY="$COMMON_PY tests/test_install_fleetmux.py tests/test_fleetmux_default_switch.py tests/test_redact_recording.py"
 # cmux backend sub-fleets do not regress, WezTerm still refuses (brief-m4 §3 item 14); test_subfleet.py is in COMMON_PY
 NOREGRESS_PY="tests/test_subfleet_tmux.py tests/test_subfleet_named_tmux.py tests/test_named_subfleet_resume.py \
@@ -51,7 +51,7 @@ M4_FAKE_KILL_PY="tests/test_fake_fleetmux_kill.py"   # fake server kill_group un
 M4_DRAIN_PY="tests/test_m4_drain_s_contract.py"   # named sub-fleet down waits the parent's declared drain_s (brief §7.2, M43)
 M4_TMUX_CLEANUP_PY="tests/test_m4_tmux_cleanup.py"   # fleet stop removes its own dead tmux socket, both backends (brief §7.1, M42)
 M4_E2E="tests/test_m4_fake_cli.py tests/test_m4_e2e_hygiene.py tests/test_m4_e2e_studio_ops.py"   # real E2 (brief-m4 §5 item 1)
-M4_REQUIRED="fleetmux/crates/app/tests/pages.rs $M4_WEB_TEST $M4_SHIM tests/m4e $M4_PY $M4_E2E"
+M4_REQUIRED="rust/crates/app/tests/pages.rs $M4_WEB_TEST $M4_SHIM tests/m4e $M4_PY $M4_E2E"
 m4_require() {   # list every missing M4 test file, then fail
   local f missing=0
   for f in $M4_REQUIRED; do
@@ -71,7 +71,7 @@ py_no_skip() {   # pytest that may not skip anything: in M4 tests a missing depe
 M4_SOCK_MAX=103     # macOS sockaddr_un path limit (bytes), used for every M4 test socket
 # Longest socket path below M4E_ROOT, in bytes including the leading '/', from the final fixtures (833d70c5 / d3f17df8):
 #   e2e child tmux  /<6hex id>/runs/fleet-YYYYmmdd-HHMMSS-<8hex>/sub/mayfly/tmux.sock     = 1+6+6+30+21 = 64
-#                   (run dir name and its uuid4().hex[:8] token: cmux_fleet/fleet.py:7532 / :7537; measured 92 B at 28 B)
+#                   (run dir name and its uuid4().hex[:8] token: fleetmux/fleet.py:7532 / :7537; measured 92 B at 28 B)
 #   Python          /<tag>-<8hex>/state/fleetmux/<session token>/ctl.sock, …/fleet-…/tmux.sock   = 53 measured
 #   Rust            /r.XXXXXX/<pid>-<seq>/rt/ctl.sock = 9+24 (7-digit Linux pid); web /r.XXXXXX/w<pid>-<n>/w/web.sock <= 9+22
 M4_SUFFIX_MAX=64    # the e2e child tmux socket is the longest, so M4E_ROOT may be at most 103 - 64 = 39 bytes
@@ -127,36 +127,36 @@ if [ "$phase" = m4 ]; then   # before building: report missing files / dependenc
   fi
   m4_roots   # both modes: collect mode's pytest calls need a kept basetemp too (it is still NOT acceptance)
 fi
-( cd fleetmux && cargo --version ) | grep -q 1.99.1
-( cd fleetmux && cargo build --workspace --locked && cargo deny check licenses )
+( cd rust && cargo --version ) | grep -q 1.99.1
+( cd rust && cargo build --workspace --locked && cargo deny check licenses )
 case $phase in
   p0|a)
-    ( cd fleetmux && cargo test --workspace --no-run )
+    ( cd rust && cargo test --workspace --no-run )
     $PY --collect-only $RED_PY
     $PY $WIRING tests/test_backend_selection.py tests/test_check_deps.py tests/test_subfleet.py ;;   # 97 条在 e474887d 已绿，阶段 A 必须保持
   m0)
-    ( cd fleetmux && cargo test --workspace )
+    ( cd rust && cargo test --workspace )
     $PY $COMMON_PY ;;
   m12)
-    ( cd fleetmux && cargo test --workspace && cargo test -p fleetmux $M12_BINS -- --include-ignored \
+    ( cd rust && cargo test --workspace && cargo test -p fleetmux $M12_BINS -- --include-ignored \
       && cargo test -p fleetmux-term $TERM_M12_BINS -- --include-ignored && cargo test -p fleetmux-layout $LAYOUT_BINS -- --include-ignored )
     $PY $COMMON_PY tests/test_install_fleetmux.py ;;
   m25)   # M2.5 web window (brief-m25 §3.7 item 2). pytest pins FLEETMUX_GATE=m3: RANK in tests/_fleetmux_milestone.py has no m25
-    ( cd fleetmux && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored \
+    ( cd rust && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored \
       && cargo test -p fleetmux --test web_relay --test attach_cli --test attach_peer -- --include-ignored )
     FLEETMUX_GATE=m3 $PY tests/test_fleetmux_backend.py tests/test_check_deps.py tests/test_install_fleetmux.py ;;
   m26)   # M2.6 GUI viewer (brief-m26 §3.7). pytest pins FLEETMUX_GATE=m3: RANK in tests/_fleetmux_milestone.py has no m26
-    ( cd fleetmux && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored \
+    ( cd rust && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored \
       && cargo test -p fleetmux --test overlay --test gui_client --test web_relay --test attach_cli --test attach_peer -- --include-ignored )
     FLEETMUX_GATE=m3 $PY tests/test_fleetmux_backend.py tests/test_fleetmux_start_attach.py tests/test_check_deps.py tests/test_install_fleetmux.py ;;
   m3)
-    ( cd fleetmux && cargo test --workspace && cargo test -p fleetmux $M3_BINS -- --include-ignored \
+    ( cd rust && cargo test --workspace && cargo test -p fleetmux $M3_BINS -- --include-ignored \
       && cargo test -p fleetmux-term $TERM_M3_BINS -- --include-ignored && cargo test -p fleetmux-layout $LAYOUT_BINS -- --include-ignored \
       && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored )
     $PY $COMMON_PY tests/test_install_fleetmux.py tests/test_fleetmux_default_switch.py tests/test_redact_recording.py ;;
   m4)    # pytest runs at FLEETMUX_GATE=m4 (RANK m4:4), never pinned to m3: that would skip every @milestone(4) test
     if [ $collect_only = 1 ]; then   # proves only: red tests collect, Rust compiles, the green phase A set stays green
-      ( cd fleetmux && cargo test --workspace --no-run && cargo build -p ft-probe --example fake_cli_shim --locked )
+      ( cd rust && cargo test --workspace --no-run && cargo build -p ft-probe --example fake_cli_shim --locked )
       m4_pt_leaf; $PY --basetemp="$M4_PT_LEAF" --collect-only $M4_PY $M4_E2E
       m4_pt_leaf; $PY --basetemp="$M4_PT_LEAF" $WIRING tests/test_backend_selection.py tests/test_check_deps.py tests/test_subfleet.py
       echo "$COLLECT_BANNER"
@@ -166,7 +166,7 @@ case $phase in
       # only: cargo builds stay parallel, pytest is outside this subshell). Tests that shell out to a --version stub
       # with a timeout (gui_client, app lib version_must_match_exactly) time out under parallel load. Nothing is
       # skipped or retried; the 7200 s deliver budget and the 5400 s report threshold are unchanged.
-      ( cd fleetmux && export RUST_TEST_THREADS=1 && cargo test --workspace && cargo test -p fleetmux $M4_BINS -- --include-ignored \
+      ( cd rust && export RUST_TEST_THREADS=1 && cargo test --workspace && cargo test -p fleetmux $M4_BINS -- --include-ignored \
         && cargo test -p fleetmux-term $TERM_M3_BINS -- --include-ignored && cargo test -p fleetmux-layout $LAYOUT_BINS -- --include-ignored \
         && cargo test -p fleetmux-web -- --include-ignored && cargo test -p fleetmux-proto --test codec -- --include-ignored \
         && cargo build -p ft-probe --example fake_cli_shim --locked )

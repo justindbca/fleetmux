@@ -53,4 +53,4 @@ def test_no_listener_and_no_real_cli_on_path():
         text = path.read_text(encoding='utf-8')
         assert not re.search(r'\.bind\(|\.listen\(|AF_INET|http\.server|socketserver', text), path.name
     fake = (TESTS / 'm4e' / 'fake_cli.py').read_text(encoding='utf-8')
-    assert 'cmux_fleet' not in re.sub(r'""".*?"""', '', fake, flags=re.S)
+    assert not re.search(r'^\s*(import|from)\s+fleetmux\b', fake, flags=re.M)

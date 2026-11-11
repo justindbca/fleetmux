@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from cmux_fleet.agent_registry import AgentRegistry
-from cmux_fleet.assignment import assign_profiles
-from cmux_fleet.planner import build_dispatch_plan
-from cmux_fleet.profile_runtime import (
+from fleetmux.agent_registry import AgentRegistry
+from fleetmux.assignment import assign_profiles
+from fleetmux.planner import build_dispatch_plan
+from fleetmux.profile_runtime import (
     ProfileRuntimeError, desired_profile, parse_recommended_profile,
     prepare_profile, profile_advisory,
 )

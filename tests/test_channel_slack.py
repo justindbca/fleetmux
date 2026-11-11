@@ -30,8 +30,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels
+from fleetmux.channels import base, envelope
 
 TOKEN = 'xoxb-FAKE'
 APP_TOKEN = 'xapp-FAKE'

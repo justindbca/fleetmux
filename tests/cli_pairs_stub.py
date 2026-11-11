@@ -1,6 +1,6 @@
-"""Test stub of feature A's cmux_fleet.cli_pairs (A-interface.md v1.2, feat/cli-pairs @ ac06eec6).
+"""Test stub of feature A's fleetmux.cli_pairs (A-interface.md v1.2, feat/cli-pairs @ ac06eec6).
 
-Only used while A is not merged: the night-switch tests install it as cmux_fleet.cli_pairs when the
+Only used while A is not merged: the night-switch tests install it as fleetmux.cli_pairs when the
 real module is missing, and use the real module otherwise, so the same tests check both.
 Contract copied: load_pairs(path=None) re-reads DEFAULT_PATH each call; PairTable.lookup returns the
 row (adapter_missing always a list) or None; pair_problem(cfg, table=None) applies, in order: adopt

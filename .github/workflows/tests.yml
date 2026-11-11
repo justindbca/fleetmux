@@ -34,22 +34,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: fleetmux
-      - name: Pick the fleetmux milestone gate (fleetmux/GATE)
-        # The integrator bumps fleetmux/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
+          workspaces: rust
+      - name: Pick the fleetmux milestone gate (rust/GATE)
+        # The integrator bumps rust/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
         # every later step: Rust runs that milestone's ignored groups, pytest skips @milestone tests above it.
         run: |
-          gate=$(tr -d '[:space:]' < fleetmux/GATE)
-          case $gate in m0|m12|m3) ;; *) echo "fleetmux/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
+          gate=$(tr -d '[:space:]' < rust/GATE)
+          case $gate in m0|m12|m3) ;; *) echo "rust/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
           echo "FLEETMUX_GATE=$gate" >> "$GITHUB_ENV"
-      - name: Build and test fleetmux (Rust, milestone groups by fleetmux/GATE)
+      - name: Build and test fleetmux (Rust, milestone groups by rust/GATE)
         # Same groups as scripts/fleetmux_gate.sh; perf is never run with --include-ignored (manual only).
         # fleetmux-web window tests (crates/web/tests/sock.rs) must open a real window here: FLEETMUX_WEB_E2E=1
         # turns "no display" into a failure instead of a skip (brief-m25 §5). macOS opens it directly.
         env:
           FLEETMUX_WEB_E2E: "1"
         run: |
-          cd fleetmux
+          cd rust
           run_tests=""
           cargo build --workspace --locked
           $run_tests cargo test --workspace --locked
@@ -68,7 +68,7 @@ jobs:
           esac
       - name: Run tests
         env:
-          CMUX_FLEET_FLEETMUX_REAL: ${{ github.workspace }}/fleetmux/target/debug/fleetmux
+          FLEETMUX_REAL_BIN: ${{ github.workspace }}/rust/target/debug/fleetmux
         run: |
           echo "FLEETMUX_GATE=$FLEETMUX_GATE"
           python -m pytest -q tests
@@ -110,22 +110,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: fleetmux
-      - name: Pick the fleetmux milestone gate (fleetmux/GATE)
-        # The integrator bumps fleetmux/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
+          workspaces: rust
+      - name: Pick the fleetmux milestone gate (rust/GATE)
+        # The integrator bumps rust/GATE (m0 / m12 / m3) at each checkpoint (brief-m03 §4.5). Exported for
         # every later step: Rust runs that milestone's ignored groups, pytest skips @milestone tests above it.
         run: |
-          gate=$(tr -d '[:space:]' < fleetmux/GATE)
-          case $gate in m0|m12|m3) ;; *) echo "fleetmux/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
+          gate=$(tr -d '[:space:]' < rust/GATE)
+          case $gate in m0|m12|m3) ;; *) echo "rust/GATE must be m0, m12 or m3, got '$gate'" >&2; exit 1 ;; esac
           echo "FLEETMUX_GATE=$gate" >> "$GITHUB_ENV"
-      - name: Build and test fleetmux (Rust, milestone groups by fleetmux/GATE)
+      - name: Build and test fleetmux (Rust, milestone groups by rust/GATE)
         # Same groups as scripts/fleetmux_gate.sh; perf is never run with --include-ignored (manual only).
         # fleetmux-web window tests (crates/web/tests/sock.rs) must open a real window here: FLEETMUX_WEB_E2E=1
         # turns "no display" into a failure instead of a skip (brief-m25 §5). Linux opens it on Xvfb (`xvfb-run -a` wraps only the Rust tests; pytest below never inherits a display).
         env:
           FLEETMUX_WEB_E2E: "1"
         run: |
-          cd fleetmux
+          cd rust
           run_tests="xvfb-run -a"
           cargo build --workspace --locked
           $run_tests cargo test --workspace --locked
@@ -144,11 +144,11 @@ jobs:
           esac
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          manifest-path: fleetmux/Cargo.toml
+          manifest-path: rust/Cargo.toml
           command: check licenses
       - name: Run tests
         env:
-          CMUX_FLEET_FLEETMUX_REAL: ${{ github.workspace }}/fleetmux/target/debug/fleetmux
+          FLEETMUX_REAL_BIN: ${{ github.workspace }}/rust/target/debug/fleetmux
         run: |
           echo "FLEETMUX_GATE=$FLEETMUX_GATE"
           python -m pytest -q tests

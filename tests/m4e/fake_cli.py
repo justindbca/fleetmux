@@ -1,10 +1,10 @@
 """Minimal stand-in for the official Claude Code / Codex TUIs (M4 end-to-end test fixture, e2e-1 plan r3 §3.1).
 
-Started by the native shim (fleetmux/crates/probe/examples/fake_cli_shim.rs, copied to ``<root>/bin/claude`` and
+Started by the native shim (rust/crates/probe/examples/fake_cli_shim.rs, copied to ``<root>/bin/claude`` and
 ``<root>/bin/codex``) as ``python -I fake_cli.py --as claude|codex --log-dir DIR <the CLI's own argv>``, on the
-pane's real PTY. Standard library only; it never imports cmux_fleet and never calls a model.
+pane's real PTY. Standard library only; it never imports fleetmux and never calls a model.
 
-Claude mode (the contract of cmux_fleet/claude_input.py, claude_hook.py and fleet.claude_argv):
+Claude mode (the contract of fleetmux/claude_input.py, claude_hook.py and fleet.claude_argv):
 - draws the ruled editor ``visible_editor`` accepts: a top rule carrying the session name, ``❯ <draft>``, a bottom
   rule and a whitelisted footer (``? for shortcuts`` idle, ``esc to interrupt`` busy, with a busy status line
   above the top rule); a multi-line or wide paste shows as ``[Pasted text #N +M lines]``;

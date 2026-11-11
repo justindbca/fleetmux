@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from cmux_fleet import claude_hook, fleet, runtime_v2
+from fleetmux import claude_hook, fleet, runtime_v2
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
 from test_claude_supervisor import make_fleet, drive, event, pi_session
 from test_claude_hook_delivery import (HookMgr, stop, step, delivered, audit, typed_any,

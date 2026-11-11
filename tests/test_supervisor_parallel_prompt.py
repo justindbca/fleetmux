@@ -1,7 +1,7 @@
-"""用户 10/13：监工 prompt 必须要求尽可能并发派活、减少开发时间（task 模式 v1 / v2 两份）。"""
+"""Supervisor prompts must ask for as much parallel dispatch as possible to cut development time (task mode v1 / v2)."""
 from pathlib import Path
 
-AGENTS = Path(__file__).resolve().parents[1] / 'cmux_fleet' / 'agents'
+AGENTS = Path(__file__).resolve().parents[1] / 'fleetmux' / 'agents'
 
 
 def test_task_supervisors_require_parallel_dispatch():

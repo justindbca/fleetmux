@@ -1,7 +1,7 @@
 """The history page follows the terminal colours (``<run>/terminal_theme.json``).
 
 ``history.write_page`` reads the theme file the daemon captured from the control
-tab (``cmux_fleet.terminal_theme``) and, when it is valid, splices one extra
+tab (``fleetmux.terminal_theme``) and, when it is valid, splices one extra
 ``<style id="terminal-theme">`` block right after the page's own ``<style>`` so
 its ``:root`` wins over the built-in ``@media (prefers-color-scheme)`` rule.
 The original CSS is not touched; with no (or an invalid) theme file the page is
@@ -11,7 +11,7 @@ exactly what it was before.  Pure filesystem tests, no pty, no browser.
 import inspect
 import json
 
-from cmux_fleet import history
+from fleetmux import history
 
 
 def _page(run, slots=None):

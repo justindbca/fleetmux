@@ -11,7 +11,7 @@ from test_advisor import Runner, afx, item, report, send_decision, v2_advised, w
 from test_advisor_hotload import set_roster
 from test_fleet import turn
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 SHEET = {'model': 'opus', 'effort': 'high', 'domains': ['research_web']}
 
@@ -115,7 +115,7 @@ def test_v2_handoff_keeps_the_sheet_config_on_or_off(v2adv, online):
 def test_v2_resume_mid_rescue_respawn_starts_the_successor_with_the_sheet(v2adv):
     """start --resume while an advisor respawn was still handing off: rescue_launch is not lost, and the
     relay note / hint do not leak into a later rotation. The resumed daemon starts with the advisor off."""
-    from cmux_fleet import profile_launch
+    from fleetmux import profile_launch
     f = v2adv
     v2_sheet_launched(f)
     launch = json.loads(f.agent('worker-1')['runtime_launch'])
@@ -171,8 +171,8 @@ def assert_default(f, generation, name='worker-1'):
 def test_v1_never_advised_slot_hands_off_plain_while_online(cfx, roster_card):
     """roster_card: the slot runs a roster profile (a runtime_launch), so its successor has a snapshot --
     the snapshot used to copy the in-memory switch into the argv."""
-    from cmux_fleet import profile_launch
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux import profile_launch
+    from fleetmux.agent_registry import AgentRegistry
     f = cfx
     if roster_card:
         reg = AgentRegistry()

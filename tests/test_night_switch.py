@@ -14,7 +14,7 @@ import yaml
 from test_roster import REPORT, audits, hot, write_roster  # noqa: F401  (fixture)
 from test_v2_codex_claude import WORKERS, answer_turn, decision, mixed, no_provisioning, submit, typed  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import fleet, night, roster, runtime_v2
+from fleetmux import fleet, night, roster, runtime_v2
 
 DAY_CARD, NIGHT_CARD = None, 'claude-coder'  # same CLI (official Claude), other model: today's matrix admits it
 
@@ -100,7 +100,7 @@ def test_todays_matrix_refuses_a_flashnext_night_under_codex_claude(tmp_path, pa
           ('codex', 'pi', 'task', 'unverified', (), {'reason': 'transport v2 mixed Pi/Codex fleets are unvalidated'}))
     with pytest.raises(ValueError, match='mixed Pi/'):
         night.check_rosters(cfg, day, other)
-    from cmux_fleet import cli_pairs
+    from fleetmux import cli_pairs
     monkeypatch.setattr(cli_pairs, 'DEFAULT_PATH', None)
     night.check_rosters(cfg, day, other)  # A's packaged table (codex+pi/task verified) admits the night pair
 
@@ -285,17 +285,17 @@ def test_failed_preflight_blocks_and_keeps_the_old_runtime(nightly, monkeypatch)
 # ------------------------------------------------------------------ CLI pair check (feature A's table)
 @pytest.fixture
 def pairs(monkeypatch, tmp_path):
-    """A's cmux_fleet.cli_pairs if merged, else the v1.2 stub; returns write(rows) -> table path.
+    """A's fleetmux.cli_pairs if merged, else the v1.2 stub; returns write(rows) -> table path.
 
     Under the stub runtime_v2.v2_cli_problem is pointed at the stub too (A v1.2: its body is
     `return cli_pairs.pair_problem(cfg)`), so validate_config judges the same table."""
     import sys
-    import cmux_fleet
+    import fleetmux
     module = night.pair_module()
     if module is None:
         import cli_pairs_stub as module
-        monkeypatch.setitem(sys.modules, 'cmux_fleet.cli_pairs', module)
-        monkeypatch.setattr(cmux_fleet, 'cli_pairs', module, raising=False)
+        monkeypatch.setitem(sys.modules, 'fleetmux.cli_pairs', module)
+        monkeypatch.setattr(fleetmux, 'cli_pairs', module, raising=False)
         monkeypatch.setattr(runtime_v2, 'v2_cli_problem', lambda cfg: module.pair_problem(cfg))
     path = tmp_path / 'cli_pairs.yaml'
 
@@ -424,7 +424,7 @@ FLASH = 'flashnext-coder'
 
 
 def with_cards():
-    return pytest.importorskip('cmux_fleet.model_usage', reason="feature C (model cards) is not merged")
+    return pytest.importorskip('fleetmux.model_usage', reason="feature C (model cards) is not merged")
 
 
 def flash_ok(pairs):
@@ -467,7 +467,7 @@ def test_daemon_rejects_an_over_cap_night_roster_whole(hot, pairs):
 
 def hold_flash(f, name, roster_profile=FLASH, state=None):
     """``name``'s current generation runs FlashNext (as a live profile task or an earlier roster would leave it)."""
-    from cmux_fleet import profile_launch
+    from fleetmux import profile_launch
     launch = night.resolve_launches(f.cfg, {name: FLASH})[name]
     f.setf(name, runtime_launch=profile_launch.encode_launch(launch), roster_profile=roster_profile,
            **({'state': state} if state else {}))

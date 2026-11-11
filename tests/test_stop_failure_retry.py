@@ -22,7 +22,7 @@ from test_claude_hook_delivery import (REPORT, append, audit, delivered, handed,
                                        rewake_rows, settings, status_of, step, stop, thread_of, typed, typed_any)
 from test_claude_hook_delivery import hooked  # noqa: F401  (fixture)
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 HOOK_CHANNEL = True  # tests/conftest.py: the real hook commands run, no stand-in
 

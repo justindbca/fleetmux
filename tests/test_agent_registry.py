@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cmux_fleet.agent_registry import AgentRegistry, AgentRegistryError
+from fleetmux.agent_registry import AgentRegistry, AgentRegistryError
 
 
 def test_default_registry_loads_initial_cards():

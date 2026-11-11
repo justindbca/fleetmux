@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import backends  # noqa: E402
+from fleetmux import backends  # noqa: E402
 
 
 @pytest.fixture(scope='module')

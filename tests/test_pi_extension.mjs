@@ -109,9 +109,9 @@ assert.equal(notices.at(-1).level, 'warning');
 assert.equal(records().length, beforeDaemon);
 // Workers remain ordinary interactive Pi sessions; only the supervisor bridges operator commands.
 const workerEvents = new Map();
-const workerCallback = JSON.parse(process.env.CMUX_FLEET_PI_CALLBACK);
+const workerCallback = JSON.parse(process.env.FLEETMUX_PI_CALLBACK);
 workerCallback[workerCallback.length - 2] = 'worker-1';
-process.env.CMUX_FLEET_PI_CALLBACK = JSON.stringify(workerCallback);
+process.env.FLEETMUX_PI_CALLBACK = JSON.stringify(workerCallback);
 register({ on(name, handler) { workerEvents.set(name, handler); } });
 await workerEvents.get('before_agent_start')({prompt:'Worker startup'}, ctx);
 assert.equal((await workerEvents.get('input')({text:'Reply OK',source:'interactive'}, ctx)).action, 'continue');

@@ -4,7 +4,7 @@ Only fixture-owned private Redis and in-memory terminals; no fleet processes.
 """
 import pytest
 
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 from test_claude_editor_send import editor_backend  # noqa: F401
 from test_claude_supervisor import service_fleet, no_trust, event  # noqa: F401

@@ -18,8 +18,8 @@ from test_runtime_v2 import fx  # noqa: F401
 from test_channels_contract import Audit, FakeChannel, config_dir, fake_registered  # noqa: F401
 from test_channel_actor_inbound import drive, events, fresh, recorder, replies_sink
 from test_channel_actor_outbound import ENTRY, publish, queued
-from cmux_fleet import channels
-from cmux_fleet.channels import envelope
+from fleetmux import channels
+from fleetmux.channels import envelope
 
 ACCOUNT = 'contract-1'
 
@@ -46,7 +46,7 @@ def fleet_direct(actor, f, timeout=5):
 
 
 def test_parse_address():
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     assert actor.parse_address('@dev-1 看下日志') == ('dev-1', '看下日志')
     assert actor.parse_address('  @dev-1：看下日志') == ('dev-1', '看下日志')
     assert actor.parse_address('dev-2: 改一下 README') == ('dev-2', '改一下 README')
@@ -58,7 +58,7 @@ def test_parse_address():
 
 
 def test_at_worker_skips_supervisor_and_binds_thread(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     direct, reply = fleet_direct(actor, f), replies_sink()
     submit = recorder()
@@ -79,7 +79,7 @@ def test_at_worker_skips_supervisor_and_binds_thread(fx, fake_registered):
 
 
 def test_colon_form_and_busy_note(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     f.r.hset('fx:agent:worker-2', 'state', 'busy')
     direct, reply = fleet_direct(actor, f), replies_sink()
@@ -91,7 +91,7 @@ def test_colon_form_and_busy_note(fx, fake_registered):
 
 
 def test_unknown_worker_is_rejected_with_the_fleet_reason(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     direct, reply, submit = fleet_direct(actor, f), replies_sink(), recorder()
     env = env_of('@worker-9 在吗')
@@ -103,7 +103,7 @@ def test_unknown_worker_is_rejected_with_the_fleet_reason(fx, fake_registered):
 
 
 def test_thread_reply_goes_to_its_bound_worker(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     f.r.set(actor.THREAD + 'fake:' + ACCOUNT + ':222.2', 'worker-2')
     direct, submit = recorder({'status': 'accepted', 'id': 'ch-x'}), recorder()
@@ -127,7 +127,7 @@ def test_thread_reply_goes_to_its_bound_worker(fx, fake_registered):
 
 
 def test_no_direct_binding_answers_with_a_receipt(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     reply, submit = replies_sink(), recorder()
     assert actor.handle_inbound(f.r, env_of('@worker-1 hi'), submit=submit, reply=reply) == 'persisted'
@@ -136,7 +136,7 @@ def test_no_direct_binding_answers_with_a_receipt(fx, fake_registered):
 
 
 def test_result_binds_thread_and_ends_with_hint(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     env = env_of('q', thread='444.4', mid='m-444')
@@ -154,7 +154,7 @@ def test_result_binds_thread_and_ends_with_hint(private_redis_v2, fake_registere
 
 
 def test_result_without_worker_list_has_no_hint(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     publish(r, {'id': 'r1', 'worker': 'worker-1'})
@@ -163,7 +163,7 @@ def test_result_without_worker_list_has_no_hint(private_redis_v2, fake_registere
 
 
 def test_result_in_a_thread_is_sent_with_broadcast():
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
 
     class Rec(FakeChannel):
         def __init__(self):
@@ -193,7 +193,7 @@ def test_slack_broadcast_flag_reaches_the_api():
 
 
 def test_pushes_to_last_go_top_level_not_into_the_last_thread():
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
 
     class Rec(FakeChannel):
         def __init__(self):

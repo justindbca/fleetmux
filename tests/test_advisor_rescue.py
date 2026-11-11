@@ -9,7 +9,7 @@ import pytest
 from test_advisor import Runner, advisor_on, afx, item, report, send_decision, supervisor_texts, v2adv2, worker_text  # noqa: F401
 from test_fleet import decision, fx, turn  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import advisor, claude_hook, fleet, handoff
+from fleetmux import advisor, claude_hook, fleet, handoff
 
 FINDING = '两轮都把 Reddit 抓成 403；产出只有标题没有正文'
 

@@ -5,7 +5,7 @@ so the expectations hold on any host, macOS or Linux."""
 import re
 from pathlib import Path
 
-from cmux_fleet import platform as plat
+from fleetmux import platform as plat
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,19 +94,19 @@ def test_default_platform_is_the_running_one():
     if sys.platform == 'darwin':
         assert prefix == ['/usr/bin/caffeinate', '-i'] or prefix == []
     else:
-        assert prefix == [] or prefix[1:] == ['--what=idle:sleep', '--why=cmux-fleet']
+        assert prefix == [] or prefix[1:] == ['--what=idle:sleep', '--why=fleetmux']
 
 
 def test_the_three_caffeinate_sites_call_the_seam():
     """No hardcoded `caffeinate -i` construction is left in the daemon start paths (design §6)."""
     for name in ('fleet.py', 'subfleet.py'):
-        text = (ROOT / 'cmux_fleet' / name).read_text()
+        text = (ROOT / 'fleetmux' / name).read_text()
         assert "shutil.which('caffeinate')" not in text, name
         assert "'-i'] + command" not in text, name
         assert 'keep_awake_prefix() + command' in text, name
     # two daemon spawns in fleet.py (start + --resume), one in subfleet.default_launch
-    assert (ROOT / 'cmux_fleet' / 'fleet.py').read_text().count('keep_awake_prefix() + command') == 2
-    assert (ROOT / 'cmux_fleet' / 'subfleet.py').read_text().count('keep_awake_prefix() + command') == 1
+    assert (ROOT / 'fleetmux' / 'fleet.py').read_text().count('keep_awake_prefix() + command') == 2
+    assert (ROOT / 'fleetmux' / 'subfleet.py').read_text().count('keep_awake_prefix() + command') == 1
 
 
 def test_start_prepends_the_prefix_to_the_daemon_command(tmp_path, monkeypatch):
@@ -115,7 +115,7 @@ def test_start_prepends_the_prefix_to_the_daemon_command(tmp_path, monkeypatch):
     test_pi.mock_start builds a whole `start` invocation with a fake manager; only spawn_window is
     replaced here so the command string the daemon is launched with can be read."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager, fleet
+    from fleetmux import cmux_manager, fleet
     import test_pi
 
     seen = []

@@ -3,7 +3,7 @@ from pathlib import Path
 import shlex
 import subprocess
 
-from cmux_fleet import transport_inventory as inventory
+from fleetmux import transport_inventory as inventory
 
 
 def prepare(monkeypatch, tmp_path, version=1):
@@ -20,7 +20,7 @@ def prepare(monkeypatch, tmp_path, version=1):
     glob = Path.glob
     monkeypatch.setattr(Path, 'glob', lambda self, pattern: iter(()) if self == Path('/tmp') else glob(self, pattern))
     monkeypatch.setattr(inventory.subprocess, 'run', lambda args, **kw:
-        subprocess.CompletedProcess(args, 0, '123 1 '+shlex.join(['python3','/project/cmux_fleet/fleet.py','daemon',str(cfg)])+'\n', ''))
+        subprocess.CompletedProcess(args, 0, '123 1 '+shlex.join(['python3','/project/fleetmux/fleet.py','daemon',str(cfg)])+'\n', ''))
     return home, run, cfg
 
 

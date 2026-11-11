@@ -29,7 +29,7 @@ import pytest
 
 from test_fleet import FakeMgr, codex_rows, received as reached, write_rollout
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import claude_hook, fleet, runtime_v2
+from fleetmux import claude_hook, fleet, runtime_v2
 
 HOOK_CHANNEL = True  # tests/conftest.py keeps the channel on for this module
 
@@ -268,7 +268,7 @@ def hooked(private_redis_v2, tmp_path):  # noqa: F811
     f.test_sessions, f.test_claude = sessions, tmp_path / 'claude-projects'
     f.test_threads = {s: str(uuid.uuid4()) for s in ['supervisor'] + WORKERS}
     f.test_hooks, f.test_panes, f.test_close = [], {}, [f]
-    import cmux_fleet.fleet as fleet_mod
+    import fleetmux.fleet as fleet_mod
     real_trust = fleet_mod.trust_claude_dir
     fleet_mod.trust_claude_dir = lambda cwd: None  # never touch the operator's ~/.claude.json
     try:

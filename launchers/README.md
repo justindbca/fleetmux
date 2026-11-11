@@ -10,7 +10,7 @@ Codex/Pi startup `.command` files related to fleetmux (formerly the cmux-fleet-p
 - `start-pi-opencode.command` — Pi terminal UI using OpenCode Console (`opencode`, not Go), with separate `sessions/opencode` history. Run it inside a cmux terminal; double-clicking uses macOS's default terminal, not a new cmux workspace.
 - `start-pi-autohandoff.command` — continuation-window launcher for the auto-handoff extension (see below). Takes a handoff file path, opens a new cmux workspace named `autohandoff <hop>:<task>` and hands the file to the new session through `PI_HANDOFF_FILE`. Works with both launcher shapes: the local canonical (`start-codex-flashnext.command` with `--terminal`) and the Studio-style canonical (no `--terminal`, no `PI_WORKDIR`), where it calls `pi` directly with `--model $PI_AUTO_HANDOFF_MODEL`.
 - `install-auto-handoff.sh` — installs the extension and continuation launcher into a pi agent dir. `install-auto-handoff.sh [--agent-dir DIR] [--host HOST]`; copies `extensions/auto-handoff.ts` and `launchers/start-pi-autohandoff.command` into `<agent-dir>/extensions/` (default `~/.pi/agent`), `--studio` goes through ssh to the Studio host. Both files must stay in the same directory: the extension resolves the launcher through a sibling path first.
-- `install-session-board.sh` — installs the cross-session board extension (`extensions/session-board.ts`, [contracts §7](../docs/contracts.md)) into `<agent-dir>/extensions/` (default `~/.pi/agent`, `--agent-dir DIR` to override) and symlinks `cmux_fleet/session_board.py` beside it, so pi runs the same Python as the Claude Code hooks of this checkout.
+- `install-session-board.sh` — installs the cross-session board extension (`extensions/session-board.ts`, [contracts §7](../docs/contracts.md)) into `<agent-dir>/extensions/` (default `~/.pi/agent`, `--agent-dir DIR` to override) and symlinks `fleetmux/session_board.py` beside it, so pi runs the same Python as the Claude Code hooks of this checkout.
 
 ### Auto-handoff (pi context relay)
 
@@ -19,7 +19,7 @@ Codex/Pi startup `.command` files related to fleetmux (formerly the cmux-fleet-p
 - Trigger: `turn_end` when `ctx.getContextUsage().percent >= PI_AUTO_HANDOFF_PCT` (default `80`). Disable with `PI_AUTO_HANDOFF=0`; manual trigger is `/auto-handoff [instructions]`.
 - Contract: generated with `ctx.modelRegistry.complete()` over the branch (compaction-aware, same as pi's own `examples/extensions/handoff.ts`), written to `~/.handoff/<session-id>.md` (or `PI_HANDOFF_DIR`) in eight fixed sections; the contract explicitly forbids "should pass" style claims.
 - Continuation: the launcher starts a new cmux workspace; the new session reads `PI_HANDOFF_FILE` from `session_start` and injects it as its first prompt, so the long contract never has to fit in the cmux `--command` line.
-- `CMUX_FLEET_PI_DIR`, `PI_AUTO_HANDOFF_LAUNCHER`, `PI_HANDOFF_DIR`, `PI_HANDOFF_TASK`, `PI_HANDOFF_HOP` override the defaults; `# parent-session: <file>` in the contract footer records the lineage.
+- `FLEETMUX_PI_DIR`, `PI_AUTO_HANDOFF_LAUNCHER`, `PI_HANDOFF_DIR`, `PI_HANDOFF_TASK`, `PI_HANDOFF_HOP` override the defaults; `# parent-session: <file>` in the contract footer records the lineage.
 
 ### DeepSeek V4.1 Flash Free — Pi shell with real streaming
 

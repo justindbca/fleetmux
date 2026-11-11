@@ -3,7 +3,7 @@ import json
 import os
 
 from test_fleet import FakeMgr, FakeRedis, THREADS, cfx, fx, seasoned, write_rollout  # noqa: F401
-from cmux_fleet import control_view, fleet
+from fleetmux import control_view, fleet
 
 CFG = {'claude_window': 200000, 'handoff_ratio': .6}
 

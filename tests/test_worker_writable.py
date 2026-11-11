@@ -5,7 +5,7 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture)
-from cmux_fleet import roster
+from fleetmux import roster
 
 
 def write(tmp_path, body):

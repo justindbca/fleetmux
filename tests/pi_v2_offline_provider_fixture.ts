@@ -1,5 +1,5 @@
 /** Offline provider for acceptance_pi_v2_delivery.py, NOT a real model.
- * Loaded next to the real cmux_fleet/pi_extension_v2.ts: startup replies READY,
+ * Loaded next to the real fleetmux/pi_extension_v2.ts: startup replies READY,
  * the fleet delivery run calls fleet_result once. */
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';

@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fleetmux_backend import (SESSION, _read_json, alive, ctl, impl, new_mgr, pane,  # noqa: E402,F401
                                    panes, ps_args, runtime_of, server_up, spawn, wait_for)
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 
 def _servers_of(rt: Path) -> list:

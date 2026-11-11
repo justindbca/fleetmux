@@ -13,8 +13,8 @@ from test_clear_after_result import IDLE, SLOT, idle_twice
 from test_message_bus_v2 import bus, private_redis_v2, received, register  # noqa: F401
 from test_v2_codex_claude import answer_turn, typed
 from test_v2_codex_service import request, route, serve, service  # noqa: F401
-from cmux_fleet import clear_after_result as clear, fleet, lifecycle_hold, runtime_v2
-from cmux_fleet.message_bus import BusError
+from fleetmux import clear_after_result as clear, fleet, lifecycle_hold, runtime_v2
+from fleetmux.message_bus import BusError
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).

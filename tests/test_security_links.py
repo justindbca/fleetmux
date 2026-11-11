@@ -13,8 +13,8 @@ import yaml
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: a v2 service fleet on that Redis)
 from test_channels_contract import Audit, FakeChannel, _fake_transport, config_dir, fake_registered  # noqa: F401
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope, links, security
+from fleetmux import channels
+from fleetmux.channels import base, envelope, links, security
 
 TOK = 'fake-token-ABC123xyz'
 
@@ -39,7 +39,7 @@ def test_defang_non_allowlisted_urls_bare_domains_and_www():
         assert hits == ['example.com', 'example.com', 'example.com']
         out, hits = links.rewrite('go www.a.b', policy)
         assert out == 'go www[.]a[.]b' and hits == ['www.a.b']
-        for keep in ('cmux_fleet/channels/actor.py', 'docs/design.md', 'see ./notes.md', 'version 2.4.10',
+        for keep in ('fleetmux/channels/actor.py', 'docs/design.md', 'see ./notes.md', 'version 2.4.10',
                      'brief v2.2', 'up 0.8%'):
             assert links.rewrite(keep, policy) == (keep, []), keep
         text = 'a https://evil.example/x b example.com c'
@@ -116,7 +116,7 @@ def test_card_text_rewritten_buttons_untouched(tmp_path):
 # ====================================================================== 7
 def test_telegram_send_and_edit_disable_link_preview_when_policy_off(tmp_path, monkeypatch):
     from test_channel_telegram import USER, FakeBotAPI, as_list, make  # noqa: F401
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     assert base.Channel.link_preview is None
     card = envelope.card('t', 'see https://github.com/x')
     for preview, expect in ((False, True), (None, False), (True, False)):
@@ -148,7 +148,7 @@ def test_telegram_send_and_edit_disable_link_preview_when_policy_off(tmp_path, m
 
 # ====================================================================== 8
 def test_guard_chain_order_secrets_then_links(fx, fake_registered, config_dir):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f, r = fx, fx.r
     d = config_dir / 'channels'
     d.mkdir(parents=True, exist_ok=True)

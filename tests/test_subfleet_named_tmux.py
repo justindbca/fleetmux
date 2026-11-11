@@ -16,7 +16,7 @@ from test_subfleet import (World, adopt_by_hook, WorldMgr, ask, child_daemon, di
                            start_tree, step, stop_child_like_daemon, supervisor_answers, supervisor_texts,
                            typed_return)
 from test_subfleet_tmux import attach_view, detach_view, meta, tmux_view_info
-from cmux_fleet import fleet, named_subfleet, roster, subfleet
+from fleetmux import fleet, named_subfleet, roster, subfleet
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import fleet, fleetmux_history  # noqa: E402
+from fleetmux import fleet, fleetmux_history  # noqa: E402
 
 HOME = 'home'
 STATE = 'state'
@@ -112,10 +112,10 @@ def test_resumed_run_drops_out(tmp_path, monkeypatch):
 
 def test_restorable_kv_has_the_resume_command(tmp_path, monkeypatch):
     """§18.3: kv ``restorable`` carries exactly the ``start --resume`` argv / cwd / env of the run."""
-    monkeypatch.setenv('CMUX_FLEET_FLEETMUX', '/opt/fleetmux')
-    monkeypatch.setenv('CMUX_FLEET_FLEETMUX_THEME', str(tmp_path / 'theme.toml'))
+    monkeypatch.setenv('FLEETMUX_BIN', '/opt/fleetmux')
+    monkeypatch.setenv('FLEETMUX_THEME', str(tmp_path / 'theme.toml'))
     monkeypatch.setenv('PATH', '/usr/bin:/bin')
-    monkeypatch.delenv('CMUX_FLEET_CONFIG', raising=False)
+    monkeypatch.delenv('FLEETMUX_CONFIG', raising=False)
     run = make_run(tmp_path, 'fleet-a', closed_at=1790000000.5)
     monkeypatch.setattr(fleet, 'daemon_running', lambda r: False)
 
@@ -125,9 +125,9 @@ def test_restorable_kv_has_the_resume_command(tmp_path, monkeypatch):
         'id': 'fleet-a', 'title': 'fmx-demo', 'closed_at': 1790000000,
         'argv': ['/py/bin/python', str(Path(fleet.__file__).resolve()), 'start', '--resume', str(run)],
         'cwd': str(run),
-        'env': {'CMUX_FLEET_HOME': str(tmp_path / HOME), 'CMUX_FLEET_STATE': str(tmp_path / STATE),
-                'CMUX_FLEET_FLEETMUX': '/opt/fleetmux',
-                'CMUX_FLEET_FLEETMUX_THEME': str(tmp_path / 'theme.toml'), 'PATH': '/usr/bin:/bin'},
+        'env': {'FLEETMUX_HOME': str(tmp_path / HOME), 'FLEETMUX_STATE': str(tmp_path / STATE),
+                'FLEETMUX_BIN': '/opt/fleetmux',
+                'FLEETMUX_THEME': str(tmp_path / 'theme.toml'), 'PATH': '/usr/bin:/bin'},
     }]}, 'kv restorable must be the exact resume command: %r' % (kv,)
 
 
@@ -181,7 +181,7 @@ class GuiMgr(FakeMgr):
 
 def gui_world(tmp_path, monkeypatch):
     """The `gui` subcommand's outside world: a desktop, a usable backend, a fake manager, a recorded execvp."""
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     monkeypatch.setattr(fleet, 'HOME', tmp_path / HOME)
     monkeypatch.setattr(fleet, 'LATEST', tmp_path / 'latest.json')
     monkeypatch.setattr(fleet, 'has_desktop', lambda: True)

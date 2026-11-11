@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cmux_fleet import fleet_config, pi_adapter
+from fleetmux import fleet_config, pi_adapter
 
 SOURCE = {'providers': {
     'workbuddy-ds': {'baseUrl': 'http://127.0.0.1:3425/v1', 'models': [

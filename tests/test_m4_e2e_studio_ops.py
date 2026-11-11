@@ -3,7 +3,7 @@ design-1/m4-design.md v0.7 §8.4; e2e-1 plan r3 §5 steps 0-10). The acceptance 
 
 Real processes only: ``tests/m4e/launch.py start`` (``fleet.main`` with the orphan-Redis sweep scoped to this
 world, plan F1), the root and every child ``fleet.py daemon`` as their own processes, real ``redis-server``
-instances, this worktree's ``fleetmux`` binary (``CMUX_FLEET_FLEETMUX_REAL``) with real PTYs, the native fake
+instances, this worktree's ``fleetmux`` binary (``FLEETMUX_REAL_BIN``) with real PTYs, the native fake
 ``claude`` / ``codex`` (tests/m4e/fake_cli.py) in them. Typed delivery goes through the real
 ``claude_input.send`` screen checks, hook delivery through the real Stop-hook commands, Codex through the real
 ``codex queue`` path. The three daemon deaths are SIGKILLs of the real mayfly child daemon, verified against the
@@ -27,7 +27,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import fleet, named_subfleet, runtime_v2  # noqa: E402
+from fleetmux import fleet, named_subfleet, runtime_v2  # noqa: E402
 from m4e import world as m4world  # noqa: E402
 from m4e.evidence import Evidence  # noqa: E402
 from m4e.inventory import Ledger, ctl, daemon_of, ps, read_json  # noqa: E402
@@ -311,7 +311,7 @@ def step2_main_fleet(ctx):
 
 def roster_entries(tree, w):
     """{name: entry} of the roster's subfleets as an independent process parses them (roster.load_subfleets)."""
-    probe = subprocess.run([m4world.PYTHON, '-c', 'import json, sys; from cmux_fleet import roster; '
+    probe = subprocess.run([m4world.PYTHON, '-c', 'import json, sys; from fleetmux import roster; '
                                                   'print(json.dumps(roster.load_subfleets(sys.argv[1])))',
                             str(tree.cfg.get('roster') or w.fleet_dir / 'roster.yaml')],
                            cwd=str(m4world.REPO), env=w.env(marked=False), capture_output=True, text=True, timeout=60)

@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import brake, channels, dsh_adapter, fleet_config, fleetmux_history, paths, transport_inventory
+from fleetmux import brake, channels, dsh_adapter, env_names, fleet_config, fleetmux_history, paths, transport_inventory
 
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = ROOT / 'launchers' / 'start-dsh.command'
-ENV_NAMES = ('FLEETMUX_HOME', 'CMUX_FLEET_HOME', 'FLEETMUX_STATE', 'CMUX_FLEET_STATE', 'FLEETMUX_CONFIG',
-             'CMUX_FLEET_CONFIG', 'FLEETMUX_CONFIG_DIR', 'FLEETMUX_LAUNCHER_ENV')
+ENV_NAMES = ('FLEETMUX_HOME', 'FLEETMUX_STATE', 'FLEETMUX_CONFIG', 'FLEETMUX_CONFIG_DIR', 'FLEETMUX_LAUNCHER_ENV',
+             env_names.LEGACY['FLEETMUX_HOME'], env_names.LEGACY['FLEETMUX_STATE'], env_names.LEGACY['FLEETMUX_CONFIG'])
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def warnings():
 def test_env_wins(home, monkeypatch, tmp_path):
     legacy_layout(home)
     (home / '.fleetmux/state').mkdir(parents=True)
-    monkeypatch.setenv('CMUX_FLEET_HOME', str(tmp_path / 'fh'))
+    monkeypatch.setenv('FLEETMUX_HOME', str(tmp_path / 'fh'))
     monkeypatch.setenv('FLEETMUX_STATE', str(tmp_path / 'st'))
     monkeypatch.setenv('FLEETMUX_CONFIG_DIR', str(tmp_path / 'cf'))
     assert paths.home() == tmp_path / 'fh'
@@ -101,7 +101,7 @@ def test_board_alone_does_not_make_the_new_home(home):
 def test_shared_files_follow_the_default_home_not_fleetmux_home(home, monkeypatch, tmp_path):
     """A per-fleet home (FLEETMUX_HOME) keeps reading the one private fleet.yaml / quota.json / dsh-home."""
     legacy_layout(home)
-    monkeypatch.setenv('CMUX_FLEET_HOME', str(tmp_path / 'per-fleet'))
+    monkeypatch.setenv('FLEETMUX_HOME', str(tmp_path / 'per-fleet'))
     assert fleet_config.user_path() == home / '.cmux-fleet/fleet.yaml'
     assert dsh_adapter.dsh_home({}) == home / '.cmux-fleet/dsh-home'
     (home / '.cmux-fleet/quota.json').write_text(json.dumps({'pools': {'p': {'at': 1}}}))
@@ -152,7 +152,7 @@ def test_migrate_moves_links_and_old_runs_keep_working(home):
 
 def test_migrate_refuses_while_a_fleet_runs(home, capsys):
     legacy_layout(home)
-    rc = paths.migrate(out=io.StringIO(), running=lambda: ['pid 42: python cmux_fleet/fleet.py daemon c.json'])
+    rc = paths.migrate(out=io.StringIO(), running=lambda: ['pid 42: python fleetmux/fleet.py daemon c.json'])
     assert rc == 2
     assert 'pid 42' in capsys.readouterr().err
     assert (home / '.cmux-fleet').is_dir() and not (home / '.cmux-fleet').is_symlink()
@@ -210,7 +210,10 @@ def test_migrate_is_idempotent(home):
 
 def test_detector_matches_fleet_processes_only():
     state = {'/h/.fleetmux/state'}
-    assert paths._fleet_process(['/usr/bin/python3', '/r/cmux_fleet/fleet.py', 'daemon', '/c.json'], state)
+    assert paths._fleet_process(['/usr/bin/python3', '/r/fleetmux/fleet.py', 'daemon', '/c.json'], state)
+    assert paths._fleet_process(['/usr/bin/python3', '/r/cmux_fleet/fleet.py', 'daemon', '/c.json'], state)  # legacy
+    assert paths._fleet_process(['/usr/bin/python3', '-m', 'cmux_fleet.fleet', 'daemon', '/c.json'], state)  # legacy
+    assert paths._fleet_process(['/usr/bin/python3', '-m', 'fleetmux.fleet', 'daemon', '/c.json'], state)
     assert paths._fleet_process(['/r/.venv/bin/cmux-fleet', 'status'], state)
     assert paths._fleet_process(['/r/bin/fleetmux', 'server', '--runtime', '/x'], state)
     assert paths._fleet_process(['tmux', '-S', '/h/.fleetmux/state/tmux/s.sock', 'new'], state)
@@ -222,12 +225,12 @@ def test_cli_dry_run_and_legacy_warning_in_a_new_process(home):
     legacy_layout(home)
     env = {k: v for k, v in os.environ.items() if k not in ENV_NAMES}
     env.update(HOME=str(home), PYTHONPATH=str(ROOT))
-    r = subprocess.run([sys.executable, '-m', 'cmux_fleet.fleet', 'home', 'migrate', '--dry-run'],
+    r = subprocess.run([sys.executable, '-m', 'fleetmux.fleet', 'home', 'migrate', '--dry-run'],
                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert 'would mv' in r.stdout and 'using legacy' not in r.stderr
     assert (home / '.cmux-fleet').is_dir() and not (home / '.cmux-fleet').is_symlink()
-    r = subprocess.run([sys.executable, '-m', 'cmux_fleet.fleet', 'status'],
+    r = subprocess.run([sys.executable, '-m', 'fleetmux.fleet', 'status'],
                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
     legacy = [line for line in r.stderr.splitlines() if 'using legacy' in line]
     assert len(legacy) == 3, r.stderr
@@ -263,3 +266,19 @@ def test_launcher_reads_new_default_then_legacy(home):
     (home / '.fleetmux/launchers.env').write_text('DSH_UI=web\n')
     r = _launch(home)
     assert 'DSH_UI 只认 web / tui' not in r.stderr, r.stderr                     # new wins over legacy
+
+
+def test_new_fleet_home_under_the_legacy_name_warns_once(home, monkeypatch):
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.cmux-fleet-smoke'))
+    assert warnings() == ['fleetmux: new fleet home %s uses the legacy name; use %s instead'
+                          % (home / '.cmux-fleet-smoke', home / '.fleetmux/fleets/smoke')]
+    assert warnings() == []  # once per process
+
+
+def test_existing_legacy_fleet_home_and_new_layout_stay_quiet(home, monkeypatch):
+    (home / '.cmux-fleet-live').mkdir()  # a running fleet keeps its home: no nag
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.cmux-fleet-live'))
+    assert warnings() == []
+    monkeypatch.setattr(paths, '_warned', set())
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux/fleets/smoke'))
+    assert warnings() == []

@@ -20,7 +20,7 @@ import pytest
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: v2 service fleet, pi supervisor)
 from test_channels_contract import config_dir, fake_registered  # noqa: F401
-from cmux_fleet.channels import envelope, reader, security
+from fleetmux.channels import envelope, reader, security
 
 ACCOUNT = 'contract-1'
 KEYS = {'summary', 'requests', 'suspicious', 'languages'}
@@ -71,7 +71,7 @@ def arg_after(argv, flag):
 
 # ---------------------------------------------------------------------------------------------- e2e helpers
 def deliver(f, text='帮我看', provenance=None, *, pol, run=None, mid=None, files=None):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     from test_channel_actor_inbound import events, fleet_submit, replies_sink
     env = envelope.make('fake', ACCOUNT, conversation='c-1', message_id=mid or uuid.uuid4().hex[:12], sender='u-1',
                         text=text, reply_ref={'chat': 'c-1'}, provenance=provenance, files=files)
@@ -88,7 +88,7 @@ def audit_rows(f, name):
 
 # ---------------------------------------------------------------------------------------------- 1
 def test_reader_argv_has_no_tools_no_mcp_json_schema_and_model(tmp_path):
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     outside = '外来的一段文字 ZZ-UNIQUE-42'
     cases = [(policy_of('reader:\n  model: m-explicit\n'), {}, 'm-explicit'),
              (policy_of(), {'worker_model': 'm-cfg'}, 'm-cfg'),
@@ -149,7 +149,7 @@ def test_reader_failure_falls_back_to_plain_wrap_never_drops(fx, fake_registered
 
 # ---------------------------------------------------------------------------------------------- 4
 def test_summary_is_wrapped_as_untrusted_not_bare(fx, fake_registered, monkeypatch):
-    from cmux_fleet.channels import approve
+    from fleetmux.channels import approve
     f, p = fx, policy_of()
     handled = []
     monkeypatch.setattr(approve, 'handle_command', lambda *a, **k: handled.append(a) or None)
@@ -207,7 +207,7 @@ def test_raw_saved_0600_under_inbox_untrusted_path_not_given_unless_configured(f
 # ---------------------------------------------------------------------------------------------- 7
 def test_reader_off_or_no_segments_skips_run(fx, fake_registered):
     from test_channel_actor_inbound import events  # noqa: F401
-    from cmux_fleet.channels import provenance
+    from fleetmux.channels import provenance
     f = fx
     run = fake_run()
     _, evs, _, _ = deliver(f, '看', segs('关掉 reader'), pol=policy_of('reader:\n  mode: off\n'), run=run)

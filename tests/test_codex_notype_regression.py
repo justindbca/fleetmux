@@ -2,7 +2,7 @@
 
 Owner: worker-2. The single final test file for the `codex queue` channel; it replaces the earlier
 `tests/test_codex_no_typing.py` (kept as evidence under worker-2/regression/).
-Interfaces: worker-1/implementation-plan.md §0 I1-I7, §2, §3, §6 (module `cmux_fleet.codex_queue`).
+Interfaces: worker-1/implementation-plan.md §0 I1-I7, §2, §3, §6 (module `fleetmux.codex_queue`).
 Nothing here is skipped: every acceptance test runs against the product.
 
 How a delivery reaches Codex is known only to the `Queue` stub (plan §6.1 seam: codex_queue.enqueue).
@@ -42,7 +42,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_resume import managed, task_run, crash_and_resume  # noqa: F401  (fixtures)
 import hook_sim
 import test_subfleet as ts
-from cmux_fleet import codex_queue, fleet, runtime_v2, subfleet
+from fleetmux import codex_queue, fleet, runtime_v2, subfleet
 
 WORKERS = ['worker-1', 'worker-2']
 ORIGINAL_ENQUEUE = codex_queue.enqueue  # the real CLI wrapper, captured before any stub is installed

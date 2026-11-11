@@ -3,7 +3,7 @@ name: release-fleetmux
 # Prebuilt fleetmux binaries (fleetmux design §8 item 5, plan §5 ci-release): four targets, each as
 #   fleetmux-<ver>-<triple>.tar.gz          top-level `fleetmux` executable + `LICENSE` + `THIRD-PARTY-LICENSES`
 #                                           (MIT / Apache crates require their notices to travel with binaries;
-#                                           `cargo about` renders them from fleetmux/about.toml, design §8 item 12)
+#                                           `cargo about` renders them from rust/about.toml, design §8 item 12)
 #   fleetmux-<ver>-<triple>.tar.gz.sha256   one sha256sum line: `<hex>  fleetmux-<ver>-<triple>.tar.gz`
 # attached to the GitHub release `v<ver>`, which is exactly the layout scripts/install_fleetmux.sh downloads
 # ($FLEETMUX_RELEASE_BASE/v<ver>/<asset>; tests/test_install_fleetmux.py pins it). <ver> is the fleetmux
@@ -54,33 +54,33 @@ jobs:
       - name: Version (workspace version; equals the tag on a tag push)
         id: ver
         run: |
-          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' fleetmux/Cargo.toml)
-          [ -n "$ver" ] || { echo "no [workspace.package] version in fleetmux/Cargo.toml" >&2; exit 1; }
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' rust/Cargo.toml)
+          [ -n "$ver" ] || { echo "no [workspace.package] version in rust/Cargo.toml" >&2; exit 1; }
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$ver" ]; then
             echo "tag $GITHUB_REF_NAME does not match fleetmux version $ver" >&2; exit 1
           fi
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
       - name: Build (release, locked)
-        run: cd fleetmux && cargo build --release --locked -p fleetmux --target ${{ matrix.triple }}
+        run: cd rust && cargo build --release --locked -p fleetmux --target ${{ matrix.triple }}
       - name: Check the binary reports the version
         if: matrix.run
         run: |
-          got=$(fleetmux/target/${{ matrix.triple }}/release/fleetmux --version)
+          got=$(rust/target/${{ matrix.triple }}/release/fleetmux --version)
           echo "$got"
           case $got in "fleetmux ${{ steps.ver.outputs.ver }} "*) ;; *) echo "unexpected --version: $got" >&2; exit 1 ;; esac
       - name: Check the Linux binary is static
         if: runner.os == 'Linux'
         run: |
-          file fleetmux/target/${{ matrix.triple }}/release/fleetmux
-          file fleetmux/target/${{ matrix.triple }}/release/fleetmux | grep -Eq 'statically linked|static-pie linked'
+          file rust/target/${{ matrix.triple }}/release/fleetmux
+          file rust/target/${{ matrix.triple }}/release/fleetmux | grep -Eq 'statically linked|static-pie linked'
       - name: Package tarball + sha256
         run: |
           name=fleetmux-${{ steps.ver.outputs.ver }}-${{ matrix.triple }}.tar.gz
           mkdir -p stage dist
-          cp fleetmux/target/${{ matrix.triple }}/release/fleetmux stage/fleetmux
+          cp rust/target/${{ matrix.triple }}/release/fleetmux stage/fleetmux
           chmod 755 stage/fleetmux
           cp LICENSE stage/LICENSE
-          (cd fleetmux && cargo about generate --locked --fail -c about.toml -m crates/app/Cargo.toml \
+          (cd rust && cargo about generate --locked --fail -c about.toml -m crates/app/Cargo.toml \
             -o ../stage/THIRD-PARTY-LICENSES about.hbs)  # the fleetmux package only
           grep -q 'alacritty_terminal' stage/THIRD-PARTY-LICENSES  # the notices really list our crates
           tar -C stage -czf "dist/$name" fleetmux LICENSE THIRD-PARTY-LICENSES
@@ -120,35 +120,35 @@ jobs:
       - name: Version (workspace version; equals the tag on a tag push)
         id: ver
         run: |
-          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' fleetmux/Cargo.toml)
-          [ -n "$ver" ] || { echo "no [workspace.package] version in fleetmux/Cargo.toml" >&2; exit 1; }
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' rust/Cargo.toml)
+          [ -n "$ver" ] || { echo "no [workspace.package] version in rust/Cargo.toml" >&2; exit 1; }
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$ver" ]; then
             echo "tag $GITHUB_REF_NAME does not match fleetmux version $ver" >&2; exit 1
           fi
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
       - name: Build (release, locked)
-        run: cd fleetmux && cargo build --release --locked -p fleetmux-web --target ${{ matrix.triple }}
+        run: cd rust && cargo build --release --locked -p fleetmux-web --target ${{ matrix.triple }}
       - name: Check the binary reports the version
         if: matrix.run
         run: |
-          got=$(fleetmux/target/${{ matrix.triple }}/release/fleetmux-web --version)
+          got=$(rust/target/${{ matrix.triple }}/release/fleetmux-web --version)
           echo "$got"
           case $got in "fleetmux-web ${{ steps.ver.outputs.ver }} "*) ;; *) echo "unexpected --version: $got" >&2; exit 1 ;; esac
       - name: Show the Linux binary's linkage (gnu, dynamic; no static check)
         if: runner.os == 'Linux'
-        run: file fleetmux/target/${{ matrix.triple }}/release/fleetmux-web
+        run: file rust/target/${{ matrix.triple }}/release/fleetmux-web
       - name: Package tarball + sha256
         run: |
           name=fleetmux-web-${{ steps.ver.outputs.ver }}-${{ matrix.triple }}.tar.gz
           mkdir -p stage dist
-          cp fleetmux/target/${{ matrix.triple }}/release/fleetmux-web stage/fleetmux-web
+          cp rust/target/${{ matrix.triple }}/release/fleetmux-web stage/fleetmux-web
           chmod 755 stage/fleetmux-web
           cp LICENSE stage/LICENSE
-          (cd fleetmux && cargo about generate --locked --fail -c about.toml -m crates/web/Cargo.toml \
+          (cd rust && cargo about generate --locked --fail -c about.toml -m crates/web/Cargo.toml \
             -o ../stage/THIRD-PARTY-LICENSES about.hbs)  # the fleetmux-web package only
           grep -q 'wry' stage/THIRD-PARTY-LICENSES  # the notices really list the webview crate
           # the vendored xterm.js (not a crate: cargo about cannot see it; design §3.6.9) travels with its notices
-          cat fleetmux/crates/web/assets/xterm/THIRD-PARTY-JS.txt >> stage/THIRD-PARTY-LICENSES
+          cat rust/crates/web/assets/xterm/THIRD-PARTY-JS.txt >> stage/THIRD-PARTY-LICENSES
           grep -q '@xterm/xterm 6.0.0' stage/THIRD-PARTY-LICENSES
           tar -C stage -czf "dist/$name" fleetmux-web LICENSE THIRD-PARTY-LICENSES
           cd dist

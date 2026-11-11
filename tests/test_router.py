@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from cmux_fleet.agent_registry import AgentRegistry
-from cmux_fleet.router import classify_task, route_task
+from fleetmux.agent_registry import AgentRegistry
+from fleetmux.router import classify_task, route_task
 
 
 def test_code_task_routes_to_flashnext_coder():

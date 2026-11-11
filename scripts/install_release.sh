@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install one fleetmux release on the target machine (formerly cmux-fleet; docs/design.md §50).
+# Install one fleetmux release on the target machine (docs/design.md §50).
 #   scripts/install_release.sh <sha> <tarball from `git archive <sha>`>
 #       [--bin-dir DIR] [--tool-sha SHA] [--test] [--activate]
 #
@@ -28,18 +28,18 @@
 #                 the manifest's source_sha must equal <sha> or start with it (short <sha>); the two files then land in <release>/bin next to
 #                 SHA256SUMS, manifest.json and installed.json. A missing file or any mismatch stops the install
 #                 before the release dir is created.
-# Releases root: $FLEETMUX_RELEASES, else $CMUX_FLEET_RELEASES (old name), else ~/fleetmux-releases. With the
+# Releases root: $FLEETMUX_RELEASES, else ~/fleetmux-releases. With the
 # default root the old path stays usable: a missing ~/cmux-fleet-releases becomes a link to ~/fleetmux-releases; an
 # existing one (a real dir of older releases, pinned by running fleets' config.json) is never moved or removed.
 # --activate points ~/fleetmux-current at the release and, when it is a link or missing, ~/cmux-fleet-current too
 # (a real directory there is left alone, with a note).
 #
-# --tool-sha SHA  the installer-tool commit doing this install (env CMUX_FLEET_TOOL_SHA); defaults to the git
+# --tool-sha SHA  the installer-tool commit doing this install (env FLEETMUX_TOOL_SHA); defaults to the git
 #                 HEAD of the checkout this script lives in. This is a DIFFERENT identity from <sha>: <sha> is
 #                 the application release (source archive + binaries), the tool commit only changes how it is
 #                 installed. installed.json records both, plus the installer script's own sha256.
 #
-# Python: CMUX_FLEET_PYTHON wins (it must satisfy deps.yaml python.min). Otherwise macOS tries
+# Python: FLEETMUX_PYTHON wins (it must satisfy deps.yaml python.min). Otherwise macOS tries
 # /opt/homebrew/bin/python3.14 and /usr/local/bin/python3.14, then every host tries `python3.14` on PATH and
 # $HOME/.local/bin/python3.14 (UTM: 3.14.10). There is no fallback to an older python3: a host with only 3.12
 # stops with a message, because the release venv must satisfy deps.yaml python.min.
@@ -48,9 +48,15 @@
 #   scripts/install_release.sh 35670632e0b923e56dc4fa357189711dbd39328a src-35670632.tgz \
 #     --bin-dir ~/a42/builds/final-35670632/utm-linux --tool-sha <tool commit>
 # Example (macOS): the same, with --bin-dir .../builds/final-35670632/macos.
+#
+# Legacy names, kept for compatibility: CMUX_FLEET_PYTHON / CMUX_FLEET_RELEASES / CMUX_FLEET_TOOL_SHA are read when
+# the FLEETMUX_* name is unset.
 set -euo pipefail
+FLEETMUX_PYTHON="${FLEETMUX_PYTHON:-${CMUX_FLEET_PYTHON:-}}"
+FLEETMUX_RELEASES="${FLEETMUX_RELEASES:-${CMUX_FLEET_RELEASES:-}}"
+FLEETMUX_TOOL_SHA="${FLEETMUX_TOOL_SHA:-${CMUX_FLEET_TOOL_SHA:-}}"
 SHA="${1:?sha}"; TARBALL="${2:?tarball}"; shift 2
-TEST=0; ACTIVATE=0; BIN_DIR=""; TOOL_SHA="${CMUX_FLEET_TOOL_SHA:-}"
+TEST=0; ACTIVATE=0; BIN_DIR=""; TOOL_SHA="$FLEETMUX_TOOL_SHA"
 while [ $# -gt 0 ]; do
   case "$1" in
     --test) TEST=1; shift ;;
@@ -60,7 +66,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-RELEASES="${FLEETMUX_RELEASES:-${CMUX_FLEET_RELEASES:-}}"
+RELEASES="$FLEETMUX_RELEASES"
 DEFAULT_ROOT=0
 if [ -z "$RELEASES" ]; then RELEASES="$HOME/fleetmux-releases"; DEFAULT_ROOT=1; fi
 case "$RELEASES" in /*) ;; *) RELEASES="$(pwd)/$RELEASES" ;; esac
@@ -107,13 +113,13 @@ raise SystemExit(0 if sys.version_info[:2] >= need else 1)' "$MIN_PY" >/dev/null
 
 pick_python() {
   local c
-  if [ -n "${CMUX_FLEET_PYTHON:-}" ]; then
-    [ -x "$CMUX_FLEET_PYTHON" ] || { echo "CMUX_FLEET_PYTHON is not executable: $CMUX_FLEET_PYTHON" >&2; return 1; }
-    if ! python_ok "$CMUX_FLEET_PYTHON"; then
-      echo "CMUX_FLEET_PYTHON is not Python >= $MIN_PY (deps.yaml python.min): $CMUX_FLEET_PYTHON ($("$CMUX_FLEET_PYTHON" -V 2>&1))" >&2
+  if [ -n "$FLEETMUX_PYTHON" ]; then
+    [ -x "$FLEETMUX_PYTHON" ] || { echo "FLEETMUX_PYTHON is not executable: $FLEETMUX_PYTHON" >&2; return 1; }
+    if ! python_ok "$FLEETMUX_PYTHON"; then
+      echo "FLEETMUX_PYTHON is not Python >= $MIN_PY (deps.yaml python.min): $FLEETMUX_PYTHON ($("$FLEETMUX_PYTHON" -V 2>&1))" >&2
       return 1
     fi
-    printf '%s\n' "$CMUX_FLEET_PYTHON"; return 0
+    printf '%s\n' "$FLEETMUX_PYTHON"; return 0
   fi
   if [ "$(uname -s)" = Darwin ]; then
     for c in /opt/homebrew/bin/python3.14 /usr/local/bin/python3.14; do
@@ -123,7 +129,7 @@ pick_python() {
   for c in "$(command -v python3.14 2>/dev/null || true)" "$HOME/.local/bin/python3.14"; do
     if [ -n "$c" ] && [ -x "$c" ] && python_ok "$c"; then printf '%s\n' "$c"; return 0; fi
   done
-  echo "no Python >= $MIN_PY on this host (deps.yaml python.min); set CMUX_FLEET_PYTHON=/path/to/python3.14" >&2
+  echo "no Python >= $MIN_PY on this host (deps.yaml python.min); set FLEETMUX_PYTHON=/path/to/python3.14" >&2
   echo "  (an older python3 such as 3.12 is not used: the release venv must satisfy deps.yaml)" >&2
   return 1
 }
@@ -173,7 +179,7 @@ rel, mode = sys.argv[1], sys.argv[2]
 if mode == 'script':
     entry = shlex.quote(rel + '/.venv/bin/cmux-fleet')
 else:
-    entry = shlex.quote(rel + '/.venv/bin/python') + ' -m cmux_fleet.fleet'
+    entry = shlex.quote(rel + '/.venv/bin/python') + ' -m fleetmux.fleet'
 print('PATH=' + shlex.quote(rel + '/bin') + ':$PATH ' + entry + ' --help')
 PY
 }
@@ -257,7 +263,7 @@ trap cleanup EXIT
 # A bare mkdir, not `mkdir -p`: EEXIST means another run owns that release and this run must not touch it (the old
 # `[ -e ]` + `mkdir -p` pair let a second install join and then rm -rf the first run's dir). CREATED is only set by
 # the run whose mkdir succeeded, so cleanup can only ever remove its own directory.
-# The container root may be nested (CMUX_FLEET_RELEASES=~/a42/releases/x), so `-p` is allowed here: only the
+# The container root may be nested (FLEETMUX_RELEASES=~/a42/releases/x), so `-p` is allowed here: only the
 # release leaf below must be created atomically. `-p` on the root cannot remove or join anything.
 mkdir -p "$RELEASES"
 # The old root name keeps working: link it to the new one only when nothing is there (never move / replace a dir).

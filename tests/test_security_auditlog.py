@@ -26,8 +26,8 @@ import yaml
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: a v2 service fleet on that Redis)
 from test_channels_contract import Audit, config_dir  # noqa: F401
-from cmux_fleet import channels, fleet
-from cmux_fleet.channels import auditlog, secrets, security
+from fleetmux import channels, fleet
+from fleetmux.channels import auditlog, secrets, security
 
 TOK = 'fake-token-ABC123xyz'
 DAY1 = time.mktime((2026, 11, 9, 12, 0, 0, 0, 0, -1))
@@ -272,7 +272,7 @@ def test_records_pass_secret_scanner_before_write(fx, config_dir, tmp_path):
 
 # ====================================================================== 7
 def test_cli_channel_audit_verify_exit_codes(tmp_path):
-    from cmux_fleet.channels import cli
+    from fleetmux.channels import cli
     run = tmp_path / 'run'
     chain = auditlog.Chain(run / 'audit', chflags=FakeChflags())
     write_n(chain, 3)

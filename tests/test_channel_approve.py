@@ -28,8 +28,8 @@ from test_v2_codex_claude import answer_turn, dispatch_one, mixed  # noqa: F401 
 from test_watchdog import (DIALOG_RM, DIALOG_RM_LITERAL, READ_FAR, WORKING, audits, escalations, keys, mark_rm,  # noqa: F401
                            move_transcript, rule, waiting, waits_for_the_user, wd)
 from test_channels_contract import FakeChannel
-from cmux_fleet import channels, fleet, fleet_config, runtime_v2, subfleet, watchdog
-from cmux_fleet.channels import approve, envelope
+from fleetmux import channels, fleet, fleet_config, runtime_v2, subfleet, watchdog
+from fleetmux.channels import approve, envelope
 
 PID_RE = r'p-[0-9a-f]{8}'
 NONCE_IN = re.compile(r'/approve (p-[0-9a-f]{8}) ([0-9a-f]{16})')

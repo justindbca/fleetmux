@@ -35,7 +35,7 @@ from test_lifecycle_close import (as_task, complete, deliver_spec, notes, repo, 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fx fixture dependency)
 from test_runtime_v2 import fx  # noqa: F401
 
-from cmux_fleet import lifecycle_close, lifecycle_deliver
+from fleetmux import lifecycle_close, lifecycle_deliver
 
 MiB = 1024 * 1024
 LOG_CAP = 20 * MiB         # the log never grows past 20 MiB ...
@@ -172,7 +172,7 @@ def test_gate_timeout_accepts_bytes_and_str_partial_output(tmp_path, repo, out, 
 
 
 def test_gate_start_failure_is_a_problem_and_writes_a_start_log(tmp_path, repo):
-    binary = '/nonexistent/cmux-fleet-gate-test-binary'
+    binary = '/nonexistent/fleetmux-gate-test-binary'
     spec = deliver_spec(repo, tmp_path, [binary])
     ws = tmp_path / 'ws'
     _verdict(ws)

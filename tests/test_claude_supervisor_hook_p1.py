@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import claude_hook, fleet
+from fleetmux import claude_hook, fleet
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
 from test_claude_supervisor import make_fleet
 

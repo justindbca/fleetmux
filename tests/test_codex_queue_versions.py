@@ -26,7 +26,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 import test_codex_notype_regression as reg
 from test_codex_notype_regression import (claude_turn, drive, lease, startup_ready, submit, typed,  # noqa: F401
                                           paste_spy)
-from cmux_fleet import codex_queue, fleet
+from fleetmux import codex_queue, fleet
 
 FIX = Path(__file__).parent / 'fixtures' / 'codex_queue_versions'
 
@@ -169,7 +169,7 @@ class Reached(Exception):
 
 
 def test_start_pins_the_probe_in_config(tmp_path, monkeypatch, capsys):
-    from cmux_fleet import cmux_manager, redis_runtime
+    from fleetmux import cmux_manager, redis_runtime
     probed, saved = [], {}
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
     monkeypatch.setattr(codex_queue, 'capability',

@@ -7,7 +7,7 @@ import pytest
 from test_advisor import Runner, fake_start, item, send_decision
 from test_fleet import FakeMgr, FakeRedis, turn
 from test_kit import make_kit
-from cmux_fleet import fleet, roster
+from fleetmux import fleet, roster
 
 
 def floor_fleet(tmp_path, monkeypatch, advisor_on=True):
@@ -123,7 +123,7 @@ def test_start_writes_worker_domains_and_refuses_unknown_first(monkeypatch, tmp_
     assert cfg['worker_domains'] == ['us_options', 'research_web']
     fleet.main(argv + ['--worker-kit', str(kit)])
     assert 'worker_domains' not in fleet.load(fleet.load(tmp_path / 'latest.json')['config'])
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: pytest.fail('refused before provisioning'))
     with pytest.raises(SystemExit, match='not in the domain table'):
         fleet.main(argv + ['--worker-kit', str(kit), '--worker-domains', 'futures'])

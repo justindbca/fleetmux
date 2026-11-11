@@ -11,8 +11,8 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture used by fx)
 from test_runtime_v2 import Output, fx, session, wait_until  # noqa: F401  (fx: real-Redis v2 fleet)
-from cmux_fleet import agent_bridge, fleet, runtime_v2
-from cmux_fleet.agent_bridge import AgentBridge
+from fleetmux import agent_bridge, fleet, runtime_v2
+from fleetmux.agent_bridge import AgentBridge
 
 
 class Daemon:

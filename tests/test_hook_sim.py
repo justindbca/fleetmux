@@ -11,7 +11,7 @@ import json
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, drive, mixed, submit, typed  # noqa: F401  (mixed fixture)
 import hook_sim
-from cmux_fleet import claude_hook, fleet
+from fleetmux import claude_hook, fleet
 
 REPORT = 'Done:\n- wrote {0}\nEvidence:\n- worker-1/{0}\nNot done: none\nBlocked: none'
 

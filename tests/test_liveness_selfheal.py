@@ -16,7 +16,7 @@ import pytest
 from test_subfleet import (WorldMgr, drive, given, hook, spawn_m0, step, stop_child_like_daemon, supervisor_texts,
                            tree)  # noqa: F401
 from test_subfleet_named_tmux import adopt_view_child, service_tree
-from cmux_fleet import fleet, named_subfleet, subfleet
+from fleetmux import fleet, named_subfleet, subfleet
 
 
 def tmux_session_alive(self, sid):

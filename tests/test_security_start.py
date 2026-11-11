@@ -19,8 +19,8 @@ import pytest
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: a v2 service fleet)
 from test_pi import mock_start
-from cmux_fleet import channels, cmux_manager, fleet
-from cmux_fleet.channels import security
+from fleetmux import channels, cmux_manager, fleet
+from fleetmux.channels import security
 
 SECRET = 'zq9x7-never-echo'  # written into bad files; must never show up in an error
 
@@ -291,7 +291,7 @@ def test_resume_keeps_or_rereads_pinned_security_never_silently_off(fx, tmp_path
 def test_resume_no_security_refused_when_run_carries_security_taint(tmp_path, monkeypatch, config_dir):
     """M164: outside content reached the run (security_taint set): `--resume --no-security` is refused with a text
     naming the mark, config.json unchanged; without the flag the run resumes and keeps both its policy and the mark."""
-    from cmux_fleet.channels import strangers
+    from fleetmux.channels import strangers
     base = defaults()
     src = write(tmp_path / 'tainted.yaml', '')
     for n, taint in enumerate(({'kinds': ['forwarded']}, 'not-a-mapping')):  # well-formed or malformed: both set

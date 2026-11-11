@@ -6,7 +6,7 @@
 #   scripts/smoke_claude_supervisor.sh --live claude   real cmux: Claude supervisor + 2 Claude workers (task)
 #
 # --live must run inside a cmux terminal and uses real models (Claude subscription; Pi needs
-# PI_MODEL=provider/model). It uses an isolated CMUX_FLEET_HOME / CMUX_FLEET_STATE under
+# PI_MODEL=provider/model). It uses an isolated FLEETMUX_HOME / FLEETMUX_STATE under
 # $SMOKE_DIR, requires the --lifecycle start flag (feature D) for these unverified pairs, and
 # always runs `stop` at exit. Passing it is the evidence for flipping fleet.yaml#cli_pairs to verified
 # (a human edits status/verified_by). Env: SUPERVISOR_MODEL (default opus), WORKER_MODEL
@@ -19,7 +19,7 @@ cd "$ROOT"
 
 offline() {
   "$PY" - <<'EOF'
-from cmux_fleet import cli_pairs
+from fleetmux import cli_pairs
 for worker, mode in (('pi', 'task'), ('pi', 'service'), ('claude', 'task')):
     cfg = dict(supervisor_cli='claude', worker_cli=worker, mode=mode)
     row = cli_pairs.load_pairs().lookup('claude', worker, mode)
@@ -37,13 +37,13 @@ EOF
 live() {
   local worker="$1"
   [[ "$worker" == pi || "$worker" == claude ]] || { echo "usage: $0 --live pi|claude" >&2; exit 2; }
-  "$PY" -m cmux_fleet.fleet start --help | grep -q -- '--lifecycle' || {
+  "$PY" -m fleetmux.fleet start --help | grep -q -- '--lifecycle' || {
     echo "BLOCKED: this branch has no 'start --lifecycle' (feature D); unverified pairs start only with --lifecycle smoke" >&2
     exit 3; }
   SMOKE_DIR="${SMOKE_DIR:-$(mktemp -d /tmp/cf-claude-sup.XXXXXX)}"
   unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-  export CMUX_FLEET_HOME="$SMOKE_DIR/home" CMUX_FLEET_STATE="$SMOKE_DIR/state"
-  mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE"
+  export FLEETMUX_HOME="$SMOKE_DIR/home" FLEETMUX_STATE="$SMOKE_DIR/state"
+  mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE"
   local args=(start --transport-version 2 --allow-development-v2 --lifecycle smoke --mode task --workers 2
               --supervisor-cli claude --supervisor-model "${SUPERVISOR_MODEL:-opus}" --worker-cli "$worker"
               --runs-dir "$SMOKE_DIR/runs" --redis-runtime-dir "$SMOKE_DIR/redis" --name claude-sup-smoke)
@@ -55,20 +55,20 @@ live() {
   else
     args+=(--worker-model "${WORKER_MODEL:-sonnet}")
   fi
-  trap '"$PY" -m cmux_fleet.fleet stop --config "$CMUX_FLEET_HOME/latest.json" >/dev/null 2>&1 || true' EXIT
-  "$PY" -m cmux_fleet.fleet "${args[@]}"
+  trap '"$PY" -m fleetmux.fleet stop --config "$FLEETMUX_HOME/latest.json" >/dev/null 2>&1 || true' EXIT
+  "$PY" -m fleetmux.fleet "${args[@]}"
   local run
-  run="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$CMUX_FLEET_HOME/latest.json")"
+  run="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$FLEETMUX_HOME/latest.json")"
   echo "run: $run"
   # READY gate: supervisor + 2 workers idle (after READY) before the task goes in.
   local deadline=$((SECONDS + 300))
-  until "$PY" -m cmux_fleet.fleet status --config "$CMUX_FLEET_HOME/latest.json" 2>/dev/null \
+  until "$PY" -m fleetmux.fleet status --config "$FLEETMUX_HOME/latest.json" 2>/dev/null \
       | "$PY" -c 'import json,sys; s=json.load(sys.stdin).get("slots") or {}; sys.exit(0 if len(s) == 3 and all(v.get("state")=="idle" for v in s.values()) else 1)'; do
     (( SECONDS < deadline )) || { echo "FAIL: not all slots READY within 300s" >&2; exit 1; }
     sleep 5
   done
   echo "all slots READY"
-  "$PY" -m cmux_fleet.fleet task - <<'EOF'   # reads CMUX_FLEET_HOME/latest.json
+  "$PY" -m fleetmux.fleet task - <<'EOF'   # reads FLEETMUX_HOME/latest.json
 {"goal": "Have worker-1 write worker-1/ok.txt containing exactly OK, then finish.", "hours": 0.25,
  "artifacts": [{"path": "worker-1/ok.txt", "contains": ["OK"]}]}
 EOF

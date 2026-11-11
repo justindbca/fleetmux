@@ -10,7 +10,7 @@ import pytest
 
 from test_advisor import fake_start
 from test_kit import make_kit
-from cmux_fleet import cmux_manager, fleet, kit as kitmod, roster
+from fleetmux import cmux_manager, fleet, kit as kitmod, roster
 
 ROSTER = """workers:
   - name: worker-1

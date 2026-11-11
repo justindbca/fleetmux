@@ -6,8 +6,8 @@ from datetime import date
 import pytest
 import yaml
 
-from cmux_fleet import cmux_manager, fleet, lifecycle, runtime_v2
-from cmux_fleet import fleet_config
+from fleetmux import cmux_manager, fleet, lifecycle, runtime_v2
+from fleetmux import fleet_config
 from test_pi import mock_start
 
 
@@ -164,7 +164,7 @@ def test_current_pair_rules_still_read_mode_from_lifecycle_base(monkeypatch, tmp
     # v2_cli_problem keys on cfg['mode']: --lifecycle service must reach the pair table as mode
     # service. A x D integration: codex+claude/service is verified now, so a stub table forbids it.
     import yaml
-    from cmux_fleet import cli_pairs
+    from fleetmux import cli_pairs
     table = fleet_config.block('cli_pairs')
     for item in table['pairs']:
         if (item['supervisor_cli'], item['worker_cli'], item['mode']) == ('codex', 'claude', 'service'):

@@ -24,7 +24,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, result, session  # noqa: F401  (fx fixture)
 from test_fleet import codex_rows, write_rollout
 from test_v2_codex_claude import drive, typed
-from cmux_fleet import cmux_manager, fleet, redis_runtime, runtime_v2
+from fleetmux import cmux_manager, fleet, redis_runtime, runtime_v2
 
 
 class ResumeMgr(FakeMgr):

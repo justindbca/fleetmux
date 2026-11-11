@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from test_runtime_v2_planning import plan  # noqa: F401
-from cmux_fleet import clear_after_result as clear, cmux_manager, fleet, runtime_v2, watchdog
+from fleetmux import clear_after_result as clear, cmux_manager, fleet, runtime_v2, watchdog
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).
@@ -150,7 +150,7 @@ def test_config_refuses_clear_with_claude_hook_delivery(hook):
 
 
 def test_hook_channel_is_off_whenever_clear_is_on():
-    from cmux_fleet import claude_hook
+    from fleetmux import claude_hook
     cfg = dict(worker_cli='claude', transport_version=2, mode='service')
     assert claude_hook.enabled(cfg, SLOT, claude=True)
     assert claude_hook.enabled(dict(cfg, clear_after_result=False), SLOT, claude=True)
@@ -501,7 +501,7 @@ def test_confirmed_manual_clear_can_repair_empty_held_slot_without_unpausing(pla
     (True, False, SLOT, 'typed'), (False, False, SLOT, 'typed'), (False, True, SLOT, 'hook'), (True, False, 'supervisor', 'supervisor')])
 def test_every_claude_worker_is_told_where_its_deliveries_come_from(tmp_path, clear, hook, slot, want):
     """10-14 evermem: a typed-delivery worker refused a pasted task ("can't confirm it came from the supervisor")."""
-    from cmux_fleet import claude_hook
+    from fleetmux import claude_hook
     cfg = dict(run=str(tmp_path), workers=[SLOT], python=sys.executable, transport_version=2,
                worker_cli='claude', mode='service', clear_after_result=clear, claude_supervisor_hook_delivery=True,
                **({} if hook else {'claude_hook_delivery': False}))

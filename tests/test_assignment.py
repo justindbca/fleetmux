@@ -1,7 +1,7 @@
 import pytest
 
-from cmux_fleet.assignment import assign_profiles
-from cmux_fleet.planner import build_dispatch_plan
+from fleetmux.assignment import assign_profiles
+from fleetmux.planner import build_dispatch_plan
 
 
 def test_one_worker_reuses_stable_slot_for_dependent_profiles():

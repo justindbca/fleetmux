@@ -27,7 +27,7 @@
 #   SMOKE_TIMEOUT=900        seconds for READY + work
 #   SMOKE_KEEP=1             keep the temp dir for inspection (processes are still stopped)
 #
-# Isolation: CMUX_FLEET_HOME / CMUX_FLEET_STATE / the private Redis runtime all live in one
+# Isolation: FLEETMUX_HOME / FLEETMUX_STATE / the private Redis runtime all live in one
 # mktemp dir; never the production Redis or ~/.cmux-fleet, never another fleet. Cleanup stops
 # only this run (fleet stop, its own cmux tabs, processes whose command line names the temp dir).
 #
@@ -48,12 +48,12 @@ SUP=${1:?supervisor cli}; WRK=${2:?worker cli}; MODE=${3:?task|service}
 case "$MODE" in task|service) ;; *) echo "mode must be task or service" >&2; exit 2;; esac
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PY=${PYTHON:-python3}
-FLEET="$ROOT/cmux_fleet/fleet.py"
+FLEET="$ROOT/fleetmux/fleet.py"
 TMP=$(mktemp -d /tmp/cfsmoke.XXXXXX)          # short path: Unix socket limit is 103 bytes
 unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-export CMUX_FLEET_HOME="$TMP/home" CMUX_FLEET_STATE="$TMP/state"
-mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE"
-CFG="$CMUX_FLEET_HOME/latest.json"
+export FLEETMUX_HOME="$TMP/home" FLEETMUX_STATE="$TMP/state"
+mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE"
+CFG="$FLEETMUX_HOME/latest.json"
 RESULT=1
 
 cleanup() {
@@ -63,7 +63,7 @@ cleanup() {
     "$PY" - "$CFG" "$ROOT" <<'EOF' >/dev/null 2>&1
 import sys
 sys.path.insert(0, sys.argv[2])
-from cmux_fleet import fleet
+from fleetmux import fleet
 fleet.manager_for(fleet.load(sys.argv[1])).close_all()   # this run's own tabs (isolated state dir)
 EOF
   fi
@@ -126,7 +126,7 @@ cfg_path, mode, timeout, root, tmp = sys.argv[1], sys.argv[2], float(sys.argv[3]
 sys.path.insert(0, root)
 from pathlib import Path
 import redis
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 cfg = fleet.load(cfg_path)
 r = fleet.connect(cfg)

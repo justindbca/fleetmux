@@ -9,7 +9,7 @@ from test_runtime_v2_planning import plan, settle  # noqa: F401  (fixture)
 from test_fresh_dispatch import worked
 from test_fleet import fx  # noqa: F401  (fixture)
 from test_subfleet import ask, result, supervisor_answers, svc, write_roster  # noqa: F401  (fixture)
-from cmux_fleet import fleet, named_subfleet, roster, runtime_v2, subfleet
+from fleetmux import fleet, named_subfleet, roster, runtime_v2, subfleet
 
 PI = '    worker_cli: pi\n    pi_model: workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg\n'
 

@@ -16,15 +16,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cmux_fleet import backends, fleet, subfleet  # noqa: E402
-from cmux_fleet.backends import base  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux import backends, fleet, subfleet  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('check_deps', ROOT / 'scripts/check_deps.py')
 check_deps = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_deps)
 
-REASON = 'fleetmux backend not available: fleetmux not found on PATH (set CMUX_FLEET_FLEETMUX)'
+REASON = 'fleetmux backend not available: fleetmux not found on PATH (set FLEETMUX_BIN)'
 
 
 def test_fleetmux_is_a_backend_name():
@@ -50,18 +50,18 @@ def test_backend_class_returns_fleetmux_manager(tmp_path, monkeypatch):
     assert isinstance(fleet.manager_for(cfg), cls)
     assert seen[-1] == ('wiring-test', {'agents_title': 'A', 'state_dir': str(tmp_path)})
     # module declarations of plan §3.5
-    assert fm.PROTOCOL == 1 and fm.BIN_ENV == 'CMUX_FLEET_FLEETMUX' and callable(fm.availability_problem)
+    assert fm.PROTOCOL == 1 and fm.BIN_ENV == 'FLEETMUX_BIN' and callable(fm.availability_problem)
     assert len(fm.COMMANDS) == len(set(fm.COMMANDS)) == 22 and len(fm.ERROR_CODES) == 14  # PROTOCOL.md §4, §5 (A-R2, M2.5)
     assert fm.VERSION_RE.fullmatch('fleetmux 0.1.0 (protocol 1)')  # the one --version line (R9)
-    shared = yaml.safe_load((ROOT / 'fleetmux/protocol/keys.json').read_text())['keys']
+    shared = yaml.safe_load((ROOT / 'rust/protocol/keys.json').read_text())['keys']
     assert fm.KEYS == shared and fm.KEYS['Enter'] == '\r' and fm.KEYS['C-c'] == '\x03'
     # lazy-import rule (backends/__init__.py): no backend module drags in another one
     probe = ('import sys; sys.path.insert(0, %r)\n'
-             'from cmux_fleet import backends\n'
+             'from fleetmux import backends\n'
              'backends.backend_class("cmux")\n'
-             'assert "cmux_fleet.backends.fleetmux" not in sys.modules, "cmux imported fleetmux"\n'
+             'assert "fleetmux.backends.fleetmux" not in sys.modules, "cmux imported fleetmux"\n'
              'backends.backend_class("fleetmux")\n'
-             'assert "cmux_fleet.backends.wezterm" not in sys.modules, "fleetmux imported wezterm"\n') % str(ROOT)
+             'assert "fleetmux.backends.wezterm" not in sys.modules, "fleetmux imported wezterm"\n') % str(ROOT)
     done = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
 

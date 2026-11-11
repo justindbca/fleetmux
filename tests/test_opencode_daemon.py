@@ -19,7 +19,7 @@ import pytest
 
 from test_fleet import FakeMgr
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
-from cmux_fleet import fleet, opencode_adapter, pi_adapter, runtime_v2
+from fleetmux import fleet, opencode_adapter, pi_adapter, runtime_v2
 
 MODEL = 'opencode/deepseek-v4.1-flash-free'
 
@@ -119,7 +119,7 @@ def test_spawn_writes_the_role_only_into_the_fresh_instance_dir_and_injects_its_
     env = spawned[-1]['env_vars']
     assert env['XDG_DATA_HOME'] == str(inst / 'xdgdata') and env['OPENCODE_CONFIG_DIR'] == str(inst / 'cfg')
     prompt = open(spawned[-1]['prompt_file']).read()
-    assert 'Read AGENTS.md' not in prompt and env['CMUX_FLEET_OC_STARTUP'] == prompt
+    assert 'Read AGENTS.md' not in prompt and env['FLEETMUX_OC_STARTUP'] == prompt
     assert json.loads(env['OPENCODE_CONFIG_CONTENT'])['model'] == MODEL
     with pytest.raises(FileExistsError):  # a generation's instance dir is never reused
         opencode_adapter.prepare_instance(f.cfg, 'worker-1', 0, 'role', task_dir=cwd)

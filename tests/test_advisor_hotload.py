@@ -14,7 +14,7 @@ from test_kit import make_kit
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_advisor import afx  # noqa: F401  (fixture)
 from test_advisor import Runner, item, report, send_decision, supervisor_texts, v2_advised, worker_text
-from cmux_fleet import control_view, fleet, roster
+from fleetmux import control_view, fleet, roster
 
 
 def logs(f, kind):
@@ -259,7 +259,7 @@ def test_cli_only_edits_the_roster_of_the_latest_or_given_run(cfx, monkeypatch, 
 
 
 def test_sub_fleet_config_never_inherits_the_switch(cfx, tmp_path):
-    from cmux_fleet import subfleet
+    from fleetmux import subfleet
     f = cfx
     set_roster(f, True)
     f.tick()

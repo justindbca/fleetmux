@@ -38,9 +38,9 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
-from cmux_fleet.channels import email as mailchan
+from fleetmux import channels
+from fleetmux.channels import base, envelope
+from fleetmux.channels import email as mailchan
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOW = 'me@example.com'
@@ -502,7 +502,7 @@ def test_default_transport_uses_ssl_default_context_cert_required(tmp_path, monk
     assert host_port(*[(a, k) for kind, a, k in made if kind == 'smtp'][0]) == ('smtp.example.com', 2465)
     assert host_port(*[(a, k) for kind, a, k in made if kind == 'imap'][0]) == ('imap.example.com', 1993)
 
-    src = (ROOT / 'cmux_fleet' / 'channels' / 'email.py').read_text(encoding='utf-8')
+    src = (ROOT / 'fleetmux' / 'channels' / 'email.py').read_text(encoding='utf-8')
     assert not re.search(r'CERT_NONE|check_hostname\s*=\s*False|_create_unverified_context|verify\s*=\s*False', src)
 
 
@@ -1040,7 +1040,7 @@ def test_no_real_socket_connect_guard(tmp_path, _no_network):
     ch.close()
     assert _no_network == []
     assert t.calls and set(t.calls) <= {'smtp', 'imap'}
-    src_path = ROOT / 'cmux_fleet' / 'channels' / 'email.py'
+    src_path = ROOT / 'fleetmux' / 'channels' / 'email.py'
     src = src_path.read_text(encoding='utf-8')
     for banned in ('.bind(', '.listen(', 'socket.socket(', 'serve_forever'):
         assert banned not in src
@@ -1050,7 +1050,7 @@ def test_no_real_socket_connect_guard(tmp_path, _no_network):
             top |= {a.name.split('.')[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
             top.add(node.module.split('.')[0])
-    assert top <= set(sys.stdlib_module_names) | {'cmux_fleet', '__future__'}
+    assert top <= set(sys.stdlib_module_names) | {'fleetmux', '__future__'}
     assert 'smtplib' in top and 'imaplib' in top  # the real defaults, referenced as module attributes
 
 

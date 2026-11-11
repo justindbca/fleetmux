@@ -1,4 +1,4 @@
-"""Cross-session board + collision notices (cmux_fleet/session_board.py, docs/contracts.md §7).
+"""Cross-session board + collision notices (fleetmux/session_board.py, docs/contracts.md §7).
 
 Every test uses its own board directory (FLEETMUX_BOARD_DIR) and throwaway `git init` repos;
 the real ~/.fleetmux/board is never touched."""
@@ -11,10 +11,10 @@ import time
 
 import pytest
 
-from cmux_fleet import session_board as sb
+from fleetmux import session_board as sb
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'cmux_fleet/session_board.py'
+SCRIPT = ROOT / 'fleetmux/session_board.py'
 GIT = ['git', '-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'init.defaultBranch=main']
 
 

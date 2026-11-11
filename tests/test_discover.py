@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import cli_pairs, discover, fleet, runtime_v2
+from fleetmux import cli_pairs, discover, fleet, runtime_v2
 
 CFG = {'supervisor': ['astra', 'fable', 'opus', 'sol'], 'worker': ['opus', 'sol', 'deepseek', 'glm', 'kimi', 'qwen3.8'],
        'mode': 'task', 'supervisor_pi_thinking': 'high', 'cli_order': ['claude', 'pi', 'opencode'],
@@ -173,7 +173,7 @@ def test_spaced_pattern_matches_words_in_order():
 def test_repo_order_is_the_user_chain_of_2026_11_11():
     """fleet.yaml#discovery = the user's 11-11 order: supervisors astra > fable > opus > sol > deepseek flash,
     workers opus > sol > sonnet > terra > deepseek flash, everything else after them."""
-    from cmux_fleet import fleet_config
+    from fleetmux import fleet_config
     cfg = fleet_config.block('discovery', fleet_config.SHIPPED)  # the repo file, not the operator's private one
     pool = [('claude', 'fable'), ('claude', 'haiku'), ('claude', 'opus'), ('claude', 'sonnet'),
             ('pi', 'openai-codex/gpt-6-astra'), ('pi', 'openai-codex/gpt-6.1-sol'), ('pi', 'openai-codex/gpt-6.1-terra'),
@@ -263,9 +263,9 @@ def test_import_and_probe_need_no_repo_root_files(tmp_path, gateway):
     import shutil
     import subprocess
     import sys
-    pkg = tmp_path / 'site' / 'cmux_fleet'
-    shutil.copytree(discover.ROOT / 'cmux_fleet', pkg, ignore=shutil.ignore_patterns('__pycache__'))
-    done = subprocess.run([sys.executable, '-c', 'import cmux_fleet.discover as d; print(d.ROOT)'],
+    pkg = tmp_path / 'site' / 'fleetmux'
+    shutil.copytree(discover.ROOT / 'fleetmux', pkg, ignore=shutil.ignore_patterns('__pycache__'))
+    done = subprocess.run([sys.executable, '-c', 'import fleetmux.discover as d; print(d.ROOT)'],
                           cwd=tmp_path / 'site', capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     bindir = fake_machine(tmp_path)

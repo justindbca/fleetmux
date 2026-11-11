@@ -12,7 +12,7 @@ import pytest
 
 from test_v2_codex_claude import WORKERS, answer_turn, decision, mixed, no_provisioning, submit, typed  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import control_view, fleet, roster
+from fleetmux import control_view, fleet, roster
 
 REPORT = 'Done:\n- wrote part.md\nEvidence:\n- {w}/part.md\nNot done: none\nBlocked: none'
 
@@ -256,7 +256,7 @@ def test_handoff_table_hot_reloads_into_status(hot):
 
 def test_added_rows_on_a_capped_default_model_are_rejected_whole(hot):
     # Added rows run the fleet default: its model card (Fable: max_concurrent 1) caps them.
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux.agent_registry import AgentRegistry
     f = hot
     f.cfg['worker_model'] = AgentRegistry().model('fable').model
     write_roster(f, WORKERS + ['fresh-1'])
@@ -269,7 +269,7 @@ def test_added_rows_on_a_capped_default_model_are_rejected_whole(hot):
 def test_rotation_whose_old_tab_survives_records_the_launch_it_ran(hot, monkeypatch):
     # model_usage: the surviving old tab holds the model of the launch it ran, even after an earlier
     # switch left retired_launch='' in the hash (that would read as the fleet default).
-    from cmux_fleet import profile_launch
+    from fleetmux import profile_launch
     f = hot
     ran = profile_launch.encode_launch({'profile_id': 'claude-coder', 'overrides': {}, 'role_text': ''})
     draft = f.run_dir / 'draft-h1.md'

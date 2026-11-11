@@ -24,8 +24,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import fx  # noqa: F401  (fixture: a v2 service fleet on that Redis)
 from test_channels_contract import (Audit, FakeChannel, _fake_transport, config_dir,  # noqa: F401
                                     fake_registered)
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope, secrets, security
+from fleetmux import channels
+from fleetmux.channels import base, envelope, secrets, security
 
 TOK = 'fake-token-ABC123xyz'
 
@@ -143,7 +143,7 @@ def test_exact_values_from_accounts_env_file_glob_loaded_and_variants_hit(config
 
 # ====================================================================== 3
 def test_guard_blocks_whole_item_and_sends_fixed_notice(config_dir, private_redis_v2):
-    from cmux_fleet.channels import queue
+    from fleetmux.channels import queue
     r = private_redis_v2
     r.flushdb()
     policy = make_policy()
@@ -227,7 +227,7 @@ def test_scanner_values_never_in_repr_or_exception(config_dir):
 
 # ====================================================================== 6
 def test_outbound_loop_send_direct_and_process_one_all_pass_through_guard(fx, fake_registered, config_dir):
-    from cmux_fleet.channels import actor, queue
+    from fleetmux.channels import actor, queue
     f, r = fx, fx.r
     run = Path(f.cfg['run'])
     write_account(config_dir)

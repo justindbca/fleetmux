@@ -8,7 +8,7 @@ from test_advisor_resident import SHEET, advisor_answers, consultations, logs, r
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, typed
 from test_v2_codex_service import request, route
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 
 def service_fleet(r, tmp_path, monkeypatch, workers, **extra):

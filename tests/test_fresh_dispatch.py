@@ -8,7 +8,7 @@ import pytest
 
 from test_fleet import (THREADS, SVC_THREADS, answer, append_rollout, cfx, decision, fx, last_to,  # noqa: F401
                         received, req, sfx, submit, turn, write_rollout)
-from cmux_fleet import fleet, fleet_config
+from fleetmux import fleet, fleet_config
 
 NEW_THREAD = '55555555-5555-5555-5555-555555555555'
 OTHER = 'Write worker-1/other.md about the unrelated billing export, at least 50 chars'

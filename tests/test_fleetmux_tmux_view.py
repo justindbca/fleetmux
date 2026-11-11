@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _fake_claude  # noqa: E402
 import _fm4_world as W  # noqa: E402
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import subfleet  # noqa: E402
+from fleetmux import subfleet  # noqa: E402
 
 TMUX = 'tmux'
 

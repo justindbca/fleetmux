@@ -4,7 +4,7 @@ Dynamic routing extends the existing supervisor/worker/daemon architecture. The 
 
 ## Cards and planning
 
-Cards live in `cmux_fleet/agents/` alongside role prompts. JSON needs only the standard library; YAML works if PyYAML is already installed. Required fields are `id`, `display_name`, `cli`, and nonempty `capabilities`. Optional fields are `model`, `profile`, `role_file`, and nonnegative cost/latency/risk ranks (lower is preferred).
+Cards live in `fleetmux/agents/` alongside role prompts. JSON needs only the standard library; YAML works if PyYAML is already installed. Required fields are `id`, `display_name`, `cli`, and nonempty `capabilities`. Optional fields are `model`, `profile`, `role_file`, and nonnegative cost/latency/risk ranks (lower is preferred).
 
 | Profile | CLI | Model/default | Capabilities |
 |---|---|---|---|
@@ -20,9 +20,9 @@ The router matches English/Chinese capability keywords. Review/safety prefers lo
 Offline inspection never starts a fleet:
 
 ```bash
-python3 -m cmux_fleet.fleet agents list
-python3 -m cmux_fleet.fleet agents match "fix failing pytest"
-python3 -m cmux_fleet.fleet plan "implement dynamic router" --workers worker-1,worker-2
+python3 -m fleetmux.fleet agents list
+python3 -m fleetmux.fleet agents match "fix failing pytest"
+python3 -m fleetmux.fleet plan "implement dynamic router" --workers worker-1,worker-2
 ```
 
 All output is JSON; `--json` is optional. Without `--workers`, plan output omits assignments.
@@ -67,7 +67,7 @@ with open('/tmp/fleet-live-task.json', 'w') as stream:
 PY
 python3 -m json.tool /tmp/fleet-live-task.json >/dev/null
 # Only after successful validation, target your explicitly selected DEV config:
-python3 -m cmux_fleet.fleet task /tmp/fleet-live-task.json --config /path/to/dev/config.json
+python3 -m fleetmux.fleet task /tmp/fleet-live-task.json --config /path/to/dev/config.json
 ```
 
 ## Runtime mapping and isolation
@@ -123,8 +123,8 @@ Required checks:
 
 ```bash
 python3 -m pytest -q tests
-python3 -m cmux_fleet.fleet plan "implement dynamic router" --workers worker-1,worker-2
-python3 -m cmux_fleet.fleet agents match "fix failing pytest"
+python3 -m fleetmux.fleet plan "implement dynamic router" --workers worker-1,worker-2
+python3 -m fleetmux.fleet agents match "fix failing pytest"
 git diff --check
 ```
 
@@ -133,7 +133,7 @@ Results: **243 passed**; plan maps implementation to `worker-1` / `flashnext-cod
 The following isolated two-worker dev deployment command was attempted:
 
 ```bash
-CMUX_FLEET_HOME=/tmp/cmux-fleet-phase5-dev CMUX_FLEET_STATE=/tmp/cmux-fleet-phase5-dev/state python3 -m cmux_fleet.fleet start --workers 2 --supervisor-cli pi --worker-cli pi --pi-model flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP --allow-unsandboxed-pi --allow-profile-live-switch --runs-dir /tmp/cmux-fleet-phase5-dev/runs --codex-home /tmp/cmux-fleet-phase5-dev/codex-home
+FLEETMUX_HOME=/tmp/cmux-fleet-phase5-dev FLEETMUX_STATE=/tmp/cmux-fleet-phase5-dev/state python3 -m fleetmux.fleet start --workers 2 --supervisor-cli pi --worker-cli pi --pi-model flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP --allow-unsandboxed-pi --allow-profile-live-switch --runs-dir /tmp/cmux-fleet-phase5-dev/runs --codex-home /tmp/cmux-fleet-phase5-dev/codex-home
 ```
 
 It exited **1**, before provisioning: `run this inside a cmux terminal: cmux only accepts processes started in its windows`. Direct read-only `cmux ping` returned `Failed to connect to socket at ~/.local/state/cmux/cmux.sock (Operation not permitted, errno 1)`. Installed CLI discovery succeeded; Pi reported `1.1.0`.

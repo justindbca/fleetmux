@@ -12,8 +12,8 @@ RELAY = ROOT / 'launchers/start-pi-autohandoff.command'
 
 
 def _pi_root():
-    """The globally installed Pi package: $PI_TEST_PACKAGE_DIR / $CMUX_FLEET_PI_ROOT, else <node prefix>/lib/node_modules/..."""
-    for name in ('PI_TEST_PACKAGE_DIR', 'CMUX_FLEET_PI_ROOT'):
+    """The globally installed Pi package: $PI_TEST_PACKAGE_DIR / $FLEETMUX_PI_ROOT, else <node prefix>/lib/node_modules/..."""
+    for name in ('PI_TEST_PACKAGE_DIR', 'FLEETMUX_PI_ROOT'):
         if os.environ.get(name):
             return Path(os.environ[name])
     node = shutil.which('node')
@@ -37,7 +37,7 @@ def relay_command(tmp_path, extra_env):
     cmux.chmod(0o755)
     handoff = tmp_path / 'handoff.md'
     handoff.write_text('# handoff\n')
-    env = {**os.environ, 'CMUX_BIN': str(cmux), 'CMUX_FLEET_PI_DIR': str(tmp_path / 'none'), 'PI_WORKDIR': str(tmp_path),
+    env = {**os.environ, 'CMUX_BIN': str(cmux), 'FLEETMUX_PI_DIR': str(tmp_path / 'none'), 'PI_WORKDIR': str(tmp_path),
            **extra_env}
     env.pop('PI_CANONICAL_LAUNCHER', None)
     subprocess.run(['/bin/bash', str(launchers / RELAY.name), str(handoff)], env=env, check=True, timeout=30)

@@ -6,7 +6,7 @@ Programs may carry `when: cmux|wezterm|fleetmux` (design §6): the fleet runs on
 a gated program is only required for the backend the run will use. Which backend that is follows the
 run's own rule (design §5), not the manifest's line order:
 
-  `--backend` / `CMUX_FLEET_BACKEND` -> that backend;
+  `--backend` / `FLEETMUX_BACKEND` -> that backend;
   otherwise macOS (darwin) with a working cmux -> cmux; anything else -> wezterm.
 
 Gated items of the other backend print as `skip` and never fail the check."""
@@ -21,7 +21,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKENDS = ('cmux', 'wezterm', 'fleetmux')
-BACKEND_ENV = 'CMUX_FLEET_BACKEND'
+BACKEND_ENV = 'FLEETMUX_BACKEND'
+BACKEND_ENV_LEGACY = 'CMUX_FLEET_BACKEND'  # legacy name, kept for compatibility
 DEFAULT_BACKEND = 'fleetmux'  # design §5 / M3 py-switch: the default off macOS (a Mac without cmux keeps wezterm)
 
 
@@ -50,12 +51,12 @@ def probe(cmd):
 def pick_backend(spec, backend=None, plat=None, probe_it=None):
     """The backend whose gated programs are required here, by design §5's rule.
 
-    Explicit `backend` or CMUX_FLEET_BACKEND wins. Otherwise the run's default applies: on macOS cmux
+    Explicit `backend` or FLEETMUX_BACKEND wins. Otherwise the run's default applies: on macOS cmux
     when it is usable and wezterm when it is missing or too old; off macOS (Linux, WSL2) DEFAULT_BACKEND,
     fleetmux since M3. The manifest's line order plays no part, and a cmux binary installed on Linux
     does not make Linux a cmux host. `plat` / `probe_it` are injectable so tests need neither a Mac nor
     an installed cmux."""
-    chosen = (backend or os.environ.get(BACKEND_ENV) or '').strip().lower()
+    chosen = (backend or os.environ.get(BACKEND_ENV) or os.environ.get(BACKEND_ENV_LEGACY) or '').strip().lower()
     if chosen:
         if chosen not in BACKENDS:
             raise ValueError('unknown backend ' + chosen + ' (expected one of: ' + ', '.join(BACKENDS) + ')')

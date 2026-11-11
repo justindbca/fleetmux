@@ -12,7 +12,7 @@ from test_contracts import cf, inbox, item, report, sup, to_parallel, write  # n
 from test_fleet import received  # noqa: E402
 from test_subfleet import (adopt_by_hook, child_daemon, given, hook, no_launch, parent_hook, step,  # noqa: F401
                            stop_child_like_daemon, tree)
-from cmux_fleet import fleet, subfleet
+from fleetmux import fleet, subfleet
 
 PROPOSAL = [{'id': 'M0.0', 'instruction': 'Fetch sources one to three into m0.0.md', 'output': 'm0.0.md'},
             {'id': 'M0.1', 'instruction': 'Fetch sources four and five into m0.1.md', 'output': 'm0.1.md'}]
@@ -201,7 +201,7 @@ def test_tick_parts_never_kill_the_daemon(cf, monkeypatch):
     cf.tick()
     errors = [json.loads(x) for x in inbox_log(cf) if json.loads(x)['kind'] == 'tick.error']
     assert {e['part'] for e in errors} == {'roster', 'subfleet'} and 'broken child record' in errors[1]['error']
-    from cmux_fleet.message_bus import BusError
+    from fleetmux.message_bus import BusError
     monkeypatch.setattr(cf, 'write_result', lambda: (_ for _ in ()).throw(BusError('ambiguous')))
     with pytest.raises(BusError):
         cf.tick()

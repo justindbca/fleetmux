@@ -19,7 +19,7 @@ from test_service_split import (PROPOSAL, answer_open_supervisor_note, bad, item
                                 sf_for, split_tree, tree_answer_open_supervisor_note)  # noqa: F401
 from test_subfleet import given, hook, step
 from test_v2_codex_claude import answer_turn, typed
-from cmux_fleet import fleet, runtime_v2, subfleet
+from fleetmux import fleet, runtime_v2, subfleet
 
 WORKERS = ['worker-1', 'worker-2']
 SPLIT = {'reason': 'five sources to fetch and merge: two parts run in parallel', 'workers': 2,

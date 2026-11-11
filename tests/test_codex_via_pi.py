@@ -24,8 +24,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, receive, session, settle
 from test_v2_codex_claude import answer_turn, no_message_files, typed
 from test_v2_codex_pi import pi_ready
-from cmux_fleet import claude_hook, cli_pairs, cmux_manager, codex_queue, fleet, pi_adapter, runtime_v2
-from cmux_fleet import fleet_config
+from fleetmux import claude_hook, cli_pairs, cmux_manager, codex_queue, fleet, pi_adapter, runtime_v2
+from fleetmux import fleet_config
 
 ASTRA = 'openai-codex/gpt-6-astra'
 FLASH = 'flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP'
@@ -651,8 +651,8 @@ def test_hot_added_roster_pi_model_counts_against_the_cap(night):
 
 # ------------------------------------------------------------------ 1. per-slot pi models count against model cards
 def test_roster_pi_models_count_against_the_model_card_cap():
-    from cmux_fleet import model_usage
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux import model_usage
+    from fleetmux.agent_registry import AgentRegistry
     registry = AgentRegistry()
     cap = registry.model('flashnext').max_concurrent
     slots = ['worker-' + str(i) for i in range(1, cap + 2)]
@@ -668,7 +668,7 @@ def test_roster_pi_models_count_against_the_model_card_cap():
 
 
 def test_start_refuses_roster_pi_models_over_the_cap(monkeypatch, tmp_path):
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux.agent_registry import AgentRegistry
     cap = AgentRegistry().model('flashnext').max_concurrent
     path = tmp_path / 'roster.yaml'
     path.write_text('workers:\n' + ''.join('  - {name: worker-%d, pi_model: %s}\n' % (i, FLASH)
@@ -741,7 +741,7 @@ S1A_TRUST = (
 
 
 def test_trust_dialog_reads_only_its_own_box_not_the_shell_exec_line_above():
-    from cmux_fleet import watchdog
+    from fleetmux import watchdog
     table = watchdog.parse_table(fleet_config.block('watchdog_prompts'))
     own = S1A_RUN + '/workspace/worker-1'
     screen = S1A_TRUST.format(path=own)

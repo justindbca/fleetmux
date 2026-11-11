@@ -7,7 +7,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cmux_fleet import kit as kitmod  # noqa: E402
+from fleetmux import kit as kitmod  # noqa: E402
 
 # A reduced copy of a host project's config/context_domains.yaml (same fields, two domains + one without summary).
 TABLE = """

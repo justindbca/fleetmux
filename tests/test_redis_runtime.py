@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import redis
 
-from cmux_fleet import control_view, fleet, redis_runtime
+from fleetmux import control_view, fleet, redis_runtime
 from test_pi import mock_start
 
 

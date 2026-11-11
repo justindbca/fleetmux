@@ -16,7 +16,7 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_channels_contract import Audit
-from cmux_fleet import channels
+from fleetmux import channels
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,7 +29,7 @@ def config_dir(monkeypatch, tmp_path):
 
 
 def lease_mod():
-    from cmux_fleet.channels import lease
+    from fleetmux.channels import lease
     return lease
 
 
@@ -137,7 +137,7 @@ def test_lease_path_under_config_dir_never_run(tmp_path):
 
 
 CHILD = ('import sys, time\n'
-         'from cmux_fleet.channels import lease\n'
+         'from fleetmux.channels import lease\n'
          'held = lease.acquire("telegram", "fleet-bot-1", run_id="r-child", run=sys.argv[1])\n'
          'print("held" if held is not None else "none", flush=True)\n'
          'time.sleep(60)\n')

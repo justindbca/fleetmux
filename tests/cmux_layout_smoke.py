@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import cmux_manager as cm
+from fleetmux import cmux_manager as cm
 
 
 def tree():

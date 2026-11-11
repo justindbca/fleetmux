@@ -11,7 +11,7 @@ from test_escalate import escalate, ok_check, parallel_m0  # noqa: F401
 from test_fleet import received  # noqa: E402
 from test_subfleet import (adopt_by_hook, child_daemon, given, hook, no_launch, parent_hook, step,  # noqa: F401
                            stop_child_like_daemon, tree)
-from cmux_fleet import runtime_v2, subfleet
+from fleetmux import runtime_v2, subfleet
 
 
 # ------------------------------------------------------------------ P1-3: startup READY

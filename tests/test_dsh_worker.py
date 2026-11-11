@@ -13,9 +13,9 @@ import yaml
 
 from test_fleet import cfx  # noqa: F401
 from test_pi import mock_start
-from cmux_fleet import (advisor, agent_bridge, brake, cli_pairs, dsh_adapter, fleet, model_usage, roster,
+from fleetmux import (advisor, agent_bridge, brake, cli_pairs, dsh_adapter, fleet, model_usage, roster,
                         runtime_v2)
-from cmux_fleet.agent_registry import AgentRegistry
+from fleetmux.agent_registry import AgentRegistry
 
 MODEL = 'flashnext/Qwen3.8-Flash-Next-Uncensored-MLX-Serve-4bit'
 KEY = 'sk-test-not-a-real-key'
@@ -170,12 +170,12 @@ def test_environment_and_argv(tmp_path):
         'HOME': home, 'DSH_HOME': str(tmp_path / 'dsh-home'), 'DSH_AGENTS_HOME': home + '/agents',
         'DSH_TELEMETRY_MODE': 'DISABLED', 'DSH_TELEMETRY_DISABLED': '1', 'DSH_TUI_NO_LAUNCHPAD': '1',
         'DSH_PERMISSION_MODE': 'workspace-write'}
-    bridge = json.loads(env['CMUX_FLEET_DSH_BRIDGE'])
+    bridge = json.loads(env['FLEETMUX_DSH_BRIDGE'])
     assert bridge[0] == '/py' and bridge[1].endswith('agent_bridge.py') and bridge[2:] == [str(tmp_path / 'c.json'), 'worker-1', '2']
-    assert (env['CMUX_FLEET_DSH_SLOT'], env['CMUX_FLEET_DSH_GEN'], env['CMUX_FLEET_DSH_MODEL'], env['CMUX_FLEET_DSH_WINDOW'],
-            env['CMUX_FLEET_DSH_STARTUP'], env['CMUX_FLEET_DSH_LABEL']) == ('worker-1', '2', MODEL, '400000', 'go', 'worker-1.2')
-    assert env['CMUX_FLEET_DSH_SESSION_DIR'] == str(dsh_adapter.session_dir(cfg, 'worker-1', 2))
-    assert env['CMUX_FLEET_DSH_USER_HOME'] == str(Path.home())
+    assert (env['FLEETMUX_DSH_SLOT'], env['FLEETMUX_DSH_GEN'], env['FLEETMUX_DSH_MODEL'], env['FLEETMUX_DSH_WINDOW'],
+            env['FLEETMUX_DSH_STARTUP'], env['FLEETMUX_DSH_LABEL']) == ('worker-1', '2', MODEL, '400000', 'go', 'worker-1.2')
+    assert env['FLEETMUX_DSH_SESSION_DIR'] == str(dsh_adapter.session_dir(cfg, 'worker-1', 2))
+    assert env['FLEETMUX_DSH_USER_HOME'] == str(Path.home())
     model_path, fleet_path = dsh_adapter.patch_paths(cfg, 'worker-1', 2)
     # launcher flags only: `--backend dsh` on argv becomes app args and a startup prompt (measured); the row pins it
     assert dsh_adapter.argv(cfg, 'worker-1', 2) == ['/opt/node', '/opt/dsh/bin.js', '--profile', 'dsh-tui',
@@ -294,7 +294,7 @@ def test_actor_execs_dsh_tui_with_the_key_and_prompt_only_in_its_environment(tmp
     monkeypatch.setattr(fleet.os, 'environ', env)
     fleet.actor(tmp_path / 'config.json', 'worker-1', 'start now', generation=0)
     assert calls['argv'] == dsh_adapter.argv(cfg, 'worker-1', 0)
-    assert env[dsh_adapter.KEY_ENV] == KEY and env['CMUX_FLEET_DSH_STARTUP'] == 'start now'
+    assert env[dsh_adapter.KEY_ENV] == KEY and env['FLEETMUX_DSH_STARTUP'] == 'start now'
     assert env['HOME'] == str(dsh_adapter.pane_home(cfg, 'worker-1', 0))
     assert all(p.is_file() for p in dsh_adapter.patch_paths(cfg, 'worker-1', 0))
     record = (tmp_path / 'run' / 'prompts' / 'worker-1-g0.argv.json').read_text()
@@ -345,7 +345,7 @@ def test_start_dsh_workers_records_binaries_model_home_and_max_busy_2(tmp_path, 
 
 
 def test_without_dsh_model_start_takes_and_records_the_fleet_yaml_default(tmp_path, monkeypatch, capsys):
-    default = __import__('cmux_fleet.fleet_config', fromlist=['x']).dsh_default_model()
+    default = __import__('fleetmux.fleet_config', fromlist=['x']).dsh_default_model()
     assert default == 'workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg'
     args, _ = dsh_start(tmp_path, monkeypatch)
     root = models_dir(tmp_path)

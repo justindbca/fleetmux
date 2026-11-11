@@ -5,13 +5,13 @@
 #   install-session-board.sh                  # into $HOME/.pi/agent/extensions
 #   install-session-board.sh --agent-dir DIR  # into DIR/extensions
 #
-# Copies extensions/session-board.ts and symlinks cmux_fleet/session_board.py beside it, so pi runs
+# Copies extensions/session-board.ts and symlinks fleetmux/session_board.py beside it, so pi runs
 # the same Python as the Claude Code hooks of this checkout. Run it from the checkout the hooks point at.
 set -euo pipefail
 
 FLEET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXT_SRC="$FLEET_DIR/extensions/session-board.ts"
-PY_SRC="$FLEET_DIR/cmux_fleet/session_board.py"
+PY_SRC="$FLEET_DIR/fleetmux/session_board.py"
 [ -f "$EXT_SRC" ] || { echo "ERROR: missing $EXT_SRC" >&2; exit 2; }
 [ -f "$PY_SRC" ] || { echo "ERROR: missing $PY_SRC" >&2; exit 2; }
 

@@ -8,7 +8,7 @@ started in the rollout the way the real TUI does it (test_fleet.codex_rows). A t
 own `codex_queue.enqueue` stub keeps it: then only the real deliver runs.
 Guard (every test): a pane that received a queued Codex delivery must never also get a paste.
 
-Claude: Claude workers get their deliveries through the Stop-hook channel (cmux_fleet/claude_hook.py) in
+Claude: Claude workers get their deliveries through the Stop-hook channel (fleetmux/claude_hook.py) in
 every test. A real hook blocks waiting for the next delivery, which an in-process test cannot do,
 so tests/hook_sim.py stands in for that wait only (see its docstring). A module that runs the real
 hook command in subprocesses sets ``HOOK_CHANNEL = True`` and gets no stand-in.
@@ -19,13 +19,19 @@ import pytest
 
 import test_fleet  # first: puts the checkout on sys.path
 import hook_sim  # noqa: E402
-from cmux_fleet import cmux_manager, codex_queue, fleet  # noqa: E402
-from cmux_fleet import fleet_config  # noqa: E402
+from fleetmux import cmux_manager, codex_queue, fleet  # noqa: E402
+from fleetmux import env_names, fleet_config  # noqa: E402
 
 
 def pytest_configure(config):
     config.addinivalue_line('markers', 'real_uappend: the audit chain may call the real chflags (UF_APPEND) in this '
                                        'test; the test must clear the flag (chflags nouappend) before it ends')
+
+
+@pytest.fixture(autouse=True)
+def _network_up(monkeypatch):
+    """Fleet.network_up never touches the real network in tests: online, unless a test sets it on its fleet."""
+    monkeypatch.setattr(fleet.Fleet, 'network_up', lambda self, timeout=2.0: True)
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +44,7 @@ def _no_real_uappend(request, monkeypatch):
     if request.node.get_closest_marker('real_uappend'):
         yield None
         return
-    from cmux_fleet.channels import auditlog
+    from fleetmux.channels import auditlog
     calls = []
 
     def fake_chflags(path, flags):
@@ -51,7 +57,7 @@ def _no_real_uappend(request, monkeypatch):
 def isolated_fleet_namespace(monkeypatch, tmp_path):
     """No test may inherit the operator's live fleet namespace.
 
-    A pytest run started from a fleet worker inherits CMUX_FLEET_HOME / CMUX_FLEET_STATE, and `fleet` binds
+    A pytest run started from a fleet worker inherits FLEETMUX_HOME / FLEETMUX_STATE, and `fleet` binds
     HOME / LATEST (and cmux_manager binds STATE_DIR / CMUX) at import time.  A test that reaches a `save(LATEST, …)`
     — e.g. `start --resume`, which re-pins LATEST from the run's config — then writes the live
     `<live home>/latest.json` and points the operator's next `start --resume` at a temporary redis socket
@@ -62,10 +68,11 @@ def isolated_fleet_namespace(monkeypatch, tmp_path):
     """
     home = tmp_path / 'fleet-home'
     state = tmp_path / 'cmux-state'
-    for new_name in ('FLEETMUX_HOME', 'FLEETMUX_STATE', 'FLEETMUX_CONFIG'):  # §50: would win over the old names
-        monkeypatch.delenv(new_name, raising=False)                            # in every subprocess a test starts
-    monkeypatch.setenv('CMUX_FLEET_HOME', str(home))
-    monkeypatch.setenv('CMUX_FLEET_STATE', str(state))
+    monkeypatch.delenv('FLEETMUX_CONFIG', raising=False)
+    for _new, legacy in env_names.PAIRS:  # a legacy name (copied to its new name at import) must not differ from
+        monkeypatch.delenv(legacy, raising=False)  # the new one in any subprocess a test starts
+    monkeypatch.setenv('FLEETMUX_HOME', str(home))
+    monkeypatch.setenv('FLEETMUX_STATE', str(state))
     monkeypatch.setattr(fleet, 'HOME', home)
     monkeypatch.setattr(fleet, 'LATEST', home / 'latest.json')
     monkeypatch.setattr(cmux_manager, 'STATE_DIR', state)
@@ -143,7 +150,7 @@ def _waiting_hook_stand_in(request, monkeypatch):
 def _no_machine_wide_redis_sweep(monkeypatch):
     """start / --resume sweep every Redis of this user; tests must never touch a real fleet's
     (tests/test_orphan_redis.py calls reap_orphan_redis directly, scoped to its own root)."""
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     monkeypatch.setattr(fleet, 'sweep_orphan_redis', lambda keep=None: None)
 
 
@@ -154,7 +161,7 @@ def _start_resolves_its_default_backend_as_on_a_mac_with_cmux(monkeypatch):
     machine: CI's Mac has no cmux binary, and Linux defaults to WezTerm (design §5). The default rule
     itself is tested with explicit platforms and its own `cmux_installed` / `unavailable_reason` stubs
     (test_backend_selection, test_backend_interface, test_wezterm_fleet_wiring)."""
-    from cmux_fleet.backends import base
+    from fleetmux.backends import base
     real = fleet.resolve_backend
     monkeypatch.setattr(fleet, 'resolve_backend',
                         lambda requested=None, platform=None: real(requested, 'darwin' if platform is None else platform))

@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 import _fake_claude
-from cmux_fleet import cmux_manager as cm
+from fleetmux import cmux_manager as cm
 
 TMUX = shutil.which('tmux') or '/opt/homebrew/bin/tmux'
 pytestmark = pytest.mark.skipif(not Path(TMUX).exists(), reason='tmux unavailable')
@@ -475,7 +475,7 @@ def test_fleet_exit_ends_its_tmux_server_and_leaves_other_servers_alone(world):
     subprocess.run([TMUX, '-S', other, '-f', '/dev/null', 'new-session', '-d', '-s', 'user', 'sleep 600'], check=True)
     try:
         spawn(w)
-        from cmux_fleet import subfleet
+        from fleetmux import subfleet
         subfleet.stop_tmux({'run': str(w.run)})
         assert cm.tmux_sessions(w.sock) == []
         assert wait(lambda: not claude_pids(w))

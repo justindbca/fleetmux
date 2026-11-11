@@ -1,0 +1,11 @@
+# Development-flow roster: one contract worker + implementers, all with the devflow worker role.
+# Start: fleetmux start --roles <this dir> --roster <this file> ...   (supervisor.md here attaches to the supervisor)
+workers:
+  - name: contract
+    role: worker.md
+  - name: worker-1
+    role: worker.md
+  - name: worker-2
+    role: worker.md
+  - name: worker-3
+    role: worker.md

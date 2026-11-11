@@ -17,7 +17,7 @@ import pytest
 import hook_sim
 from test_fleet import FakeMgr, codex_rows, write_rollout
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import cmux_manager, codex_queue, fleet, runtime_v2, transport_inventory
+from fleetmux import cmux_manager, codex_queue, fleet, runtime_v2, transport_inventory
 
 REAL_ENQUEUE = codex_queue.enqueue  # captured at import, before conftest installs its fake
 
@@ -45,7 +45,7 @@ def test_v2_cli_matrix_allows_only_validated_pairs_with_reason(supervisor, worke
     cfg = dict(transport_version=2, supervisor_cli=supervisor, worker_cli=worker, mode=mode,
                allow_development_v2=True)
     if (supervisor, worker, mode) in PI_CLAUDE:
-        from cmux_fleet import cli_pairs
+        from fleetmux import cli_pairs
         row = cli_pairs.load_pairs().lookup(supervisor, worker, mode)
         assert row and row['status'] in ('verified', 'unverified') and not row['adapter_missing']
         if row['status'] == 'unverified':
@@ -139,7 +139,7 @@ def mixed(private_redis_v2, tmp_path):  # noqa: F811
     f.test_sessions, f.test_claude = sessions, claude_home
     f.test_threads = {'supervisor': str(uuid.uuid4())}
     f.test_threads.update({w: str(uuid.uuid4()) for w in WORKERS})
-    import cmux_fleet.fleet as fleet_mod
+    import fleetmux.fleet as fleet_mod
     real_trust = fleet_mod.trust_claude_dir
     fleet_mod.trust_claude_dir = lambda cwd: None  # never touch the operator's ~/.claude.json
     try:
@@ -363,7 +363,7 @@ def test_startup_must_be_ready(private_redis_v2, tmp_path):  # noqa: F811
                codex_home=str(tmp_path / 'ch'), transport_version=2, allow_development_v2=True, stall_timeout=0)
     fleet.save(run / 'config.json', cfg)
     f = fleet.Fleet(run / 'config.json', r, FakeMgr(), sessions=tmp_path / 'ch' / 'sessions')
-    import cmux_fleet.fleet as fleet_mod
+    import fleetmux.fleet as fleet_mod
     real, fleet_mod.trust_claude_dir = fleet_mod.trust_claude_dir, (lambda cwd: None)
     try:
         f.start_all()
@@ -468,7 +468,7 @@ def test_same_text_different_deliveries_each_complete_without_client_id_and_neve
     """F1, end to end on the public path, client_id lost every time: worker-1 sends the same report twice,
     so the supervisor gets two different deliveries with the identical body. Each is settled by its own
     token's turn, exactly once; the first delivery's turn (late duplicate) never settles the second."""
-    import cmux_fleet.codex_queue as cq
+    import fleetmux.codex_queue as cq
     f = mixed
     one = json.loads(decision(['worker-1']))
     same = json.dumps(dict(one, dispatch=[dict(one['dispatch'][0], id='M0')]))  # §44: one explicit id keeps both bodies identical

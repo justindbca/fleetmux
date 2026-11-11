@@ -24,14 +24,14 @@ out.decide = {
   input: d({ fleet: false, idle: true, phase: "input" }),
 };
 out.fleet = {
-  v2: mod.isFleetManaged({ CMUX_FLEET_PI_SLOT: "worker-1" }),
-  bridge: mod.isFleetManaged({ CMUX_FLEET_PI_BRIDGE: "[]" }),
-  v1: mod.isFleetManaged({ CMUX_FLEET_PI_CALLBACK: "[]" }),
+  v2: mod.isFleetManaged({ FLEETMUX_PI_SLOT: "worker-1" }),
+  bridge: mod.isFleetManaged({ FLEETMUX_PI_BRIDGE: "[]" }),
+  v1: mod.isFleetManaged({ FLEETMUX_PI_CALLBACK: "[]" }),
   plain: mod.isFleetManaged({ HOME: "/h" }),
 };
 
 async function session(env) {
-  for (const k of ["PI_SESSION_BOARD", "CMUX_FLEET_PI_SLOT", "CMUX_FLEET_PI_BRIDGE", "CMUX_FLEET_PI_CALLBACK"]) delete process.env[k];
+  for (const k of ["PI_SESSION_BOARD", "FLEETMUX_PI_SLOT", "FLEETMUX_PI_BRIDGE", "FLEETMUX_PI_CALLBACK"]) delete process.env[k];
   Object.assign(process.env, env, { PI_SESSION_BOARD_SCRIPT: "/x/session_board.py", PI_SESSION_BOARD_INTERVAL_MS: "40" });
   const handlers = {}, sent = [], execs = [];
   let reply = "", idle = false;
@@ -61,7 +61,7 @@ async function session(env) {
   return { registered: true, sent, cmd: execs[0].slice(0, 4), payloads };
 }
 out.plain = await session({});
-out.managed = await session({ CMUX_FLEET_PI_SLOT: "worker-1" });
+out.managed = await session({ FLEETMUX_PI_SLOT: "worker-1" });
 out.off = await session({ PI_SESSION_BOARD: "0" });
 console.log(JSON.stringify(out));
 '''

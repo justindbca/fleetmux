@@ -25,7 +25,8 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 
 // fleet 仓根目录（可选）：没设就只找扩展同目录 / 上一级 launchers/ 里的接力启动器。
-const FLEET_DIR = process.env.CMUX_FLEET_PI_DIR ?? "";
+// CMUX_FLEET_PI_DIR: legacy name, kept for compatibility.
+const FLEET_DIR = process.env.FLEETMUX_PI_DIR || process.env.CMUX_FLEET_PI_DIR || "";
 const HANDOFF_DIR = process.env.PI_HANDOFF_DIR ?? join(homedir(), ".handoff");
 const TRIGGER_PCT = Number(process.env.PI_AUTO_HANDOFF_PCT ?? "80");
 // 绝对 token 阈值（>0 时生效）：极短会话里 percent 可能 <1%，自测/小会话需要绝对阈值。
@@ -168,7 +169,7 @@ const DROP_WITH_VALUE = new Set(["--model", "--api-key", "--fork", "--session", 
 const DROP_FLAGS = new Set([
 	"--continue", "-c", "--resume", "-r", "--no-session", "--print", "-p", "--help", "-h", "--version", "-v", "--list-models",
 ]);
-const ENV_KEEP = /^(PI_|OPENCODE_|CMUX_FLEET_|FNM_|TZ$|PATH$|LANG$|LC_)/;
+const ENV_KEEP = /^(PI_|OPENCODE_|FLEETMUX_|FNM_|TZ$|PATH$|LANG$|LC_)/;
 const ENV_DROP = /^(PI_HANDOFF_|PI_AUTO_HANDOFF_MODEL$)|KEY|TOKEN|SECRET|PASS|AUTH|CREDENTIAL|COOKIE/i;
 
 export function relaunchArgs(argv: string[], model: string): string[] {

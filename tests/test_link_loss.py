@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import fleet, runtime_v2, watchdog
+from fleetmux import fleet, runtime_v2, watchdog
 from test_midturn_v2 import SLOT, order_plan
 from test_runtime_v2_planning import plan  # noqa: F401
 

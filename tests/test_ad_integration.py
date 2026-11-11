@@ -9,8 +9,8 @@ from contextlib import redirect_stdout
 import pytest
 import yaml
 
-from cmux_fleet import cli_pairs, cmux_manager, fleet, lifecycle, runtime_v2
-from cmux_fleet import fleet_config
+from fleetmux import cli_pairs, cmux_manager, fleet, lifecycle, runtime_v2
+from fleetmux import fleet_config
 
 
 class Reached(Exception):

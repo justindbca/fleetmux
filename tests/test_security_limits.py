@@ -10,8 +10,8 @@ import inspect
 import json
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import channels
-from cmux_fleet.channels import envelope, limits, security
+from fleetmux import channels
+from fleetmux.channels import envelope, limits, security
 
 
 def policy(**lim):
@@ -51,7 +51,7 @@ def test_inbound_per_sender_61st_in_10min_not_posted_rate_limited_receipt(privat
     tripped = [x for x in rows if x['event'] == 'security.limit_tripped']
     assert tripped and tripped[-1].get('kind') == 'inbound'
     # through the actor: no operator_input for the 4th, a rate_limited receipt, the message counts as persisted
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     submitted, replies = [], []
     out = actor.handle_inbound(r, env(), submit=lambda *a, **k: submitted.append(a),
                                reply=lambda e, text: replies.append(text), policy=policy(), audit=audit_sink(rows))
@@ -85,7 +85,7 @@ def test_requests_per_hour_31st_refused(private_redis_v2):
     lim = limits.Limits(r, policy(), clock=Clock())
     assert lim.request() is True and lim.request() is True
     assert lim.request() is False
-    from cmux_fleet.channels import actor                   # U15: counted before submit -> never submitted
+    from fleetmux.channels import actor                   # U15: counted before submit -> never submitted
     submitted, replies = [], []
     actor.handle_inbound(r, env(text='new request'), submit=lambda *a, **k: submitted.append(a),
                          reply=lambda e, text: replies.append(text), policy=policy(), audit=audit_sink([]))
@@ -107,7 +107,7 @@ def test_outbound_per_hour_301st_dead_lettered_with_reason_limit(private_redis_v
 def test_trip_pauses_fleet_and_alerts_once_per_hour_when_on_trip_pause(private_redis_v2, monkeypatch):
     r = private_redis_v2
     r.flushdb()
-    from cmux_fleet.channels import stop
+    from fleetmux.channels import stop
     calls = []
     real = stop.pause_service
     monkeypatch.setattr(stop, 'pause_service', lambda rr, reason, **kw: (calls.append(reason), real(rr, reason, **kw)))

@@ -21,9 +21,9 @@ from test_v2_codex_claude import dispatch_one, mixed  # noqa: F401  (fixture)
 from test_watchdog import READ_FAR, audits, escalated, escalations, keys, wd  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture)
 from test_bridge_late_settle import rig  # noqa: F401  (fixture)
-from cmux_fleet import fleet, fleet_config, sandbox, watchdog
-from cmux_fleet import channels
-from cmux_fleet.channels import security
+from fleetmux import fleet, fleet_config, sandbox, watchdog
+from fleetmux import channels
+from fleetmux.channels import security
 
 ROOT = Path(__file__).resolve().parents[1]
 DIALOG_INSTALL = ('Bash command\n  pip install requests\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No')
@@ -137,7 +137,7 @@ def test_codex_argv_adds_hooks_only_when_probe_says_supported(wd, monkeypatch):
     getattr(sandbox, 'startup_audits')(f)
     rows = [x for x in audits(f, 'security.sandbox_off') if x.get('slot') == 'supervisor']
     assert len(rows) == 1 and rows[0].get('reason') == 'codex_hooks_unverified'
-    from cmux_fleet import guard
+    from fleetmux import guard
     assert getattr(guard, 'has_pretool_gate')(dict(cfg, security=on['security']), 'worker-1') is False
 
 
@@ -210,7 +210,7 @@ def test_pi_tool_call_audit_event_shape(rig, tmp_path):
         (mods / name / 'package.json').write_text(json.dumps({'name': name, 'type': 'module', 'exports': './index.js'}))
         (mods / name / 'index.js').write_text(body)
     extension = tmp_path / 'extension.ts'
-    shutil.copy(ROOT / 'cmux_fleet' / 'pi_extension_v2.ts', extension)
+    shutil.copy(ROOT / 'fleetmux' / 'pi_extension_v2.ts', extension)
     records = tmp_path / 'records.jsonl'
     records.write_text('')
     child = tmp_path / 'bridge-fixture.py'
@@ -228,8 +228,8 @@ def test_pi_tool_call_audit_event_shape(rig, tmp_path):
                        "assert.equal(records().filter(r=>r.kind==='fault').length,0,'a failed audit must not fault');\n"
                        "console.log('tool_call contract passed');\n"
                        "process.exit(0);\n")
-    env = dict(os.environ, CMUX_FLEET_PI_BRIDGE=json.dumps([sys.executable, '-u', str(child), str(records), 'worker-1', '0']),
-               CMUX_FLEET_PI_SLOT='worker-1', CMUX_FLEET_PI_MODE='service')
+    env = dict(os.environ, FLEETMUX_PI_BRIDGE=json.dumps([sys.executable, '-u', str(child), str(records), 'worker-1', '0']),
+               FLEETMUX_PI_SLOT='worker-1', FLEETMUX_PI_MODE='service')
     result = subprocess.run([node, '--experimental-strip-types', str(harness), str(extension), str(records)],
                             env=env, capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
     assert result.returncode == 0 and 'tool_call contract passed' in result.stdout, result.stdout + result.stderr

@@ -1,12 +1,12 @@
 """One command name: `fleetmux` (docs/design.md §50).
 
 What these tests pin on the Python side (the Rust dispatcher has its own tests in
-fleetmux/crates/app/tests/forward_cli.rs):
+rust/crates/app/tests/forward_cli.rs):
 
-- FLEETMUX_HOME / FLEETMUX_STATE / FLEETMUX_CONFIG are the new names of CMUX_FLEET_HOME / CMUX_FLEET_STATE /
-  CMUX_FLEET_CONFIG. Both names work; the new one wins; both set and different → the new one, plus one stderr
-  warning. Every reader keeps reading the old name: `cmux_fleet/__init__.py` copies the new value over it before
-  any module reads the environment, so children see one value too.
+- FLEETMUX_* environment names, with their legacy CMUX_FLEET_* twins (env_names.LEGACY). Both names work; the new
+  one wins; both set and different → the new one, plus one stderr warning. Every reader reads the new name:
+  `fleetmux/__init__.py` gives each pair one value before any module reads the environment, so children see
+  one value too.
 - argparse shows the command as `fleetmux`.
 - `gui` (Python) always execs `fleetmux gui --runtime <dir>`: the Rust binary forwards only a `gui` without
   `--runtime` to Python, so this form can never come back (no loop).
@@ -24,7 +24,7 @@ import test_install_release as inst  # noqa: E402  (tests/ is on sys.path: conft
 from test_fleetmux_history import gui_world, make_run  # noqa: E402
 from test_install_release import APP_SHA, OTHER_SHA, make_bin_dir, make_python, world  # noqa: E402,F401
 
-from cmux_fleet import fleet  # noqa: E402
+from fleetmux import fleet  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 NEW_OLD = (('FLEETMUX_HOME', 'CMUX_FLEET_HOME'), ('FLEETMUX_STATE', 'CMUX_FLEET_STATE'),
@@ -34,7 +34,7 @@ NEW_OLD = (('FLEETMUX_HOME', 'CMUX_FLEET_HOME'), ('FLEETMUX_STATE', 'CMUX_FLEET_
 # ---- environment names -------------------------------------------------------------------------------------------
 
 def _env_names():
-    from cmux_fleet import env_names
+    from fleetmux import env_names
     return env_names
 
 
@@ -49,8 +49,20 @@ def test_env_new_name_is_copied_over_the_old_one():
 def test_env_old_name_alone_still_works():
     env, err = {'CMUX_FLEET_HOME': '/old/home', 'CMUX_FLEET_STATE': '/old/state'}, io.StringIO()
     _env_names().apply(env, err)
-    assert env == {'CMUX_FLEET_HOME': '/old/home', 'CMUX_FLEET_STATE': '/old/state'}  # nothing invented
+    assert env == {'CMUX_FLEET_HOME': '/old/home', 'CMUX_FLEET_STATE': '/old/state',
+                   'FLEETMUX_HOME': '/old/home', 'FLEETMUX_STATE': '/old/state'}  # nothing else invented
     assert err.getvalue() == ''
+
+
+def test_env_every_renamed_variable_has_a_legacy_twin():
+    legacy = _env_names().LEGACY
+    assert legacy['FLEETMUX_BIN'] == 'CMUX_FLEET_FLEETMUX' and legacy['FLEETMUX_THEME'] == 'CMUX_FLEET_FLEETMUX_THEME'
+    assert legacy['FLEETMUX_WEB_BIN'] == 'CMUX_FLEET_FLEETMUX_WEB' and legacy['FLEETMUX_PI_SLOT'] == 'CMUX_FLEET_PI_SLOT'
+    env = {'CMUX_FLEET_FLEETMUX': '/bin/fm', 'FLEETMUX_PI_SLOT': 'worker-1'}
+    _env_names().apply(env, io.StringIO())
+    assert env['FLEETMUX_BIN'] == '/bin/fm' and env['CMUX_FLEET_PI_SLOT'] == 'worker-1'
+    assert _env_names().with_legacy({'FLEETMUX_PI_SLOT': 's', 'PI_X': '1'}) == {
+        'FLEETMUX_PI_SLOT': 's', 'CMUX_FLEET_PI_SLOT': 's', 'PI_X': '1'}
 
 
 def test_env_both_equal_is_silent_and_both_different_uses_the_new_one_with_one_warning():
@@ -69,7 +81,7 @@ def test_env_both_equal_is_silent_and_both_different_uses_the_new_one_with_one_w
 def test_env_empty_new_name_counts_as_unset():
     env = {'FLEETMUX_HOME': '', 'CMUX_FLEET_HOME': '/old'}
     _env_names().apply(env, io.StringIO())
-    assert env['CMUX_FLEET_HOME'] == '/old'
+    assert env['CMUX_FLEET_HOME'] == '/old' and env['FLEETMUX_HOME'] == '/old'
 
 
 def _probe(tmp_path, extra):
@@ -77,8 +89,8 @@ def _probe(tmp_path, extra):
     env = {k: v for k, v in os.environ.items() if k not in {n for pair in NEW_OLD for n in pair}}
     env.update(extra)
     code = ('import sys; sys.path.insert(0, %r)\n'
-            'from cmux_fleet import fleet, cmux_manager, fleet_config\n'
-            'from cmux_fleet.backends.fleetmux import FleetmuxSessionManager\n'
+            'from fleetmux import fleet, cmux_manager, fleet_config\n'
+            'from fleetmux.backends.fleetmux import FleetmuxSessionManager\n'
             'print(fleet.HOME); print(cmux_manager.STATE_DIR); print(fleet_config.user_path())\n'
             'print(FleetmuxSessionManager().state_dir)\n' % str(ROOT))
     return subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, env=env, timeout=60)
@@ -110,7 +122,7 @@ def test_env_old_names_alone_reach_every_reader_in_a_fresh_process(tmp_path):
 # ---- command name ------------------------------------------------------------------------------------------------
 
 def test_help_shows_the_command_as_fleetmux():
-    done = subprocess.run([sys.executable, str(ROOT / 'cmux_fleet' / 'fleet.py'), '--help'], capture_output=True,
+    done = subprocess.run([sys.executable, str(ROOT / 'fleetmux' / 'fleet.py'), '--help'], capture_output=True,
                           text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert done.stdout.startswith('usage: fleetmux '), done.stdout[:200]
@@ -118,7 +130,7 @@ def test_help_shows_the_command_as_fleetmux():
 
 
 def test_subcommand_usage_errors_name_fleetmux():
-    done = subprocess.run([sys.executable, str(ROOT / 'cmux_fleet' / 'fleet.py'), 'no-such-command'],
+    done = subprocess.run([sys.executable, str(ROOT / 'fleetmux' / 'fleet.py'), 'no-such-command'],
                           capture_output=True, text=True, timeout=60)
     assert done.returncode == 2
     assert done.stderr.startswith('usage: fleetmux '), done.stderr[:200]
@@ -142,7 +154,8 @@ def test_python_gui_execs_the_rust_form_with_runtime_so_it_is_never_forwarded_ba
 def run_default(world, args, env_extra=None):
     """install_release.sh with its default releases root (no FLEETMUX_RELEASES / CMUX_FLEET_RELEASES)."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ('CMUX_FLEET_PYTHON', 'CMUX_FLEET_RELEASES', 'FLEETMUX_RELEASES', 'CMUX_FLEET_TOOL_SHA')}
+           if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES', 'FLEETMUX_TOOL_SHA',
+                        'CMUX_FLEET_PYTHON', 'CMUX_FLEET_RELEASES', 'CMUX_FLEET_TOOL_SHA')}
     env.update(HOME=str(world['home']), FAKE_PY_LOG=str(world['log']), FAKE_REAL_PY=sys.executable)
     env.update(env_extra or {})
     env['PATH'] = str(world['bin']) + os.pathsep + '/usr/bin:/bin'

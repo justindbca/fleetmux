@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet.backends import cmux, fleetmux, wezterm
+from fleetmux.backends import cmux, fleetmux, wezterm
 
 
 class Editor:
@@ -343,14 +343,14 @@ def test_empty_editor_after_enter_can_be_busy_without_interrupting_it(editor_bac
     lambda s: s.replace('❯ ', '> '),
 ])
 def test_unknown_or_partial_screen_is_not_an_empty_editor(change):
-    from cmux_fleet.claude_input import visible_editor
+    from fleetmux.claude_input import visible_editor
     editor = Editor()
     editor.text = ''
     assert visible_editor(change(editor.screen())) is None
 
 
 def test_nbsp_ansi_and_session_title_are_chrome_not_prompt_text():
-    from cmux_fleet.claude_input import visible_editor
+    from fleetmux.claude_input import visible_editor
     rule = '─' * 80
     screen = ('⏺ READY\n' + '─' * 50 + ' f123-worker-1 ' + '─' * 17 + '\n'
               '\x1b[32m❯\xa0exact input\x1b[0m\n' + rule + '\n  ? for shortcuts\n')
@@ -360,7 +360,7 @@ def test_nbsp_ansi_and_session_title_are_chrome_not_prompt_text():
 
 @pytest.mark.parametrize('suffix', [' · ← 1 agent', ' · ← 2 agents', ' · ← for agents'])
 def test_footer_agent_suffix_and_right_aligned_status(suffix):
-    from cmux_fleet.claude_input import visible_editor
+    from fleetmux.claude_input import visible_editor
     editor = Editor()
     editor.text = ''
     screen = editor.screen().replace('? for shortcuts',
@@ -370,7 +370,7 @@ def test_footer_agent_suffix_and_right_aligned_status(suffix):
 
 
 def test_slash_menu_continuations_require_a_slash_draft():
-    from cmux_fleet.claude_input import visible_editor
+    from fleetmux.claude_input import visible_editor
     editor = Editor()
     editor.text = '/clear'
     screen = editor.screen().replace('  ? for shortcuts',

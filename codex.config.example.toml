@@ -1,4 +1,4 @@
-# Example Codex profile for cmux-fleet.
+# Example Codex profile for fleetmux.
 #
 # Every fleet agent is started with `codex --profile fleet` (change with `start --profile`).
 # Codex >= 0.156 keeps each profile in its own file: ~/.codex/<profile>.config.toml.

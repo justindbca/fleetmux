@@ -11,7 +11,7 @@ import pytest
 
 from test_runtime_v2_planning import plan  # noqa: F401  (fixture)
 from test_clear_after_result import apply_stub
-from cmux_fleet import fleet, named_subfleet, roster
+from fleetmux import fleet, named_subfleet, roster
 
 RID = 'review-up-1'
 

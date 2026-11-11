@@ -20,13 +20,13 @@ classifiers = [
 dev = ["pytest>=7"]
 
 [project.scripts]
-cmux-fleet = "cmux_fleet.fleet:main"
+cmux-fleet = "fleetmux.fleet:main"
 
 [tool.setuptools]
-packages = ["cmux_fleet"]
+packages = ["fleetmux"]
 
 [tool.setuptools.package-data]
-cmux_fleet = ["agents/*.md", "agents/devflow/*.md", "agents/devflow/*.yaml", "pi_extension*.ts", "config/*.yaml"]
+fleetmux = ["agents/*.md", "agents/devflow/*.md", "agents/devflow/*.yaml", "pi_extension*.ts", "config/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

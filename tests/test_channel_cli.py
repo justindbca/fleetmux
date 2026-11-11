@@ -1,4 +1,4 @@
-"""`cmux-fleet channel login|test|send|status|actor` and the CMUX_FLEET_TG_CMD takeover (package P1g; brief §6.8,
+"""`fleetmux channel login|test|send|status|actor` and the FLEETMUX_TG_CMD takeover (package P1g; brief §6.8,
 docs/design.md §53, docs/contracts.md §8; v2 process model: ONE actor per fleet, `channel actor <config.json>`).
 
 Fakes only: an in-test adapter module ``fleetmux_test_adapter`` (``ADAPTER`` = a FakeChannel subclass whose
@@ -28,8 +28,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_lifecycle_close import as_task, fx, table  # noqa: F401  (fx / table: fixtures)
 from test_channels_contract import FakeChannel
 from test_pi import mock_start
-from cmux_fleet import channels, fleet, lifecycle, lifecycle_close
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels, fleet, lifecycle, lifecycle_close
+from fleetmux.channels import base, envelope
 
 TOKEN = 'fake-token-123'
 ACCOUNT_TEXT = 'ALLOW=u-1\nPUSH_TO=u-1\nTOKEN=' + TOKEN + '\n'
@@ -119,7 +119,7 @@ def write_cfg(tmp_path, redis_socket, **extra):
 
 def invoke(argv, stdin=''):
     """(exit code, stdout, stderr) of ``cli.run``; an argparse exit counts as its code."""
-    from cmux_fleet.channels import cli
+    from fleetmux.channels import cli
     out, err = io.StringIO(), io.StringIO()
     try:
         code = cli.run(argv, stdin=io.StringIO(stdin), stdout=out, stderr=err)
@@ -139,7 +139,7 @@ def file_state(path):
 
 # ====================================================================== channel send
 def test_send_queues_when_actor_beat_fresh_else_direct(private_redis_v2, rec, tmp_path, monkeypatch):  # noqa: F811
-    from cmux_fleet.channels import actor, cli
+    from fleetmux.channels import actor, cli
     r = private_redis_v2
     r.flushdb()
     write_account()
@@ -250,7 +250,7 @@ def status_row(data, type_='fake', account='contract-1'):
 
 
 def test_status_json_lists_state_holder_last_queue_dead(private_redis_v2, rec, tmp_path):  # noqa: F811
-    from cmux_fleet.channels import lease
+    from fleetmux.channels import lease
     r = private_redis_v2
     r.flushdb()
     write_account()
@@ -469,7 +469,7 @@ def notify_fleet(tmp_path, push):
 
 
 def test_lifecycle_notify_uses_send_direct_when_channels(monkeypatch, tmp_path):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     sent = []
     monkeypatch.setattr(actor, 'send_direct', lambda cfg, item: sent.append(item) or {'status': 'sent'})
     out = tmp_path / 'tg.txt'
@@ -575,7 +575,7 @@ def lease_busy_audits(r):
 
 def test_channel_actor_entry_acquires_leases_starts_threads_beats_and_exits_on_parent_death(
         private_redis_v2, rec, tmp_path, monkeypatch):  # noqa: F811
-    from cmux_fleet.channels import actor, cli, lease
+    from fleetmux.channels import actor, cli, lease
     r = private_redis_v2
     r.flushdb()
     for a in ('a1', 'a2'):

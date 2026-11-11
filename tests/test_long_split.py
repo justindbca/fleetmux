@@ -15,8 +15,8 @@ from test_fleet import received  # noqa: E402
 from test_subfleet import adopt_by_hook, child_daemon, given, hook, no_launch, parent_hook, step, stop_child_like_daemon, tree  # noqa: F401
 from test_v2_codex_claude import answer_turn, dispatch_one, mixed  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
-from cmux_fleet import control_view, fleet, midturn, profile_launch, roster, subfleet
-from cmux_fleet.agent_registry import AgentRegistry
+from fleetmux import control_view, fleet, midturn, profile_launch, roster, subfleet
+from fleetmux.agent_registry import AgentRegistry
 
 SPLIT_YAML = ('workers:\n  - {name: worker-1, split: {check_minutes: 90, min_calls: 5}}\n  - name: worker-2\n'
               'split:\n  check_minutes: 30\n  window_minutes: 5\n  restore_model: false\n')

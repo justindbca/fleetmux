@@ -1,6 +1,6 @@
 """P1d channel actor, inbound (brief v2 §6.5; core-1 test-plan §4, §4.1, §6 and the supervisor rulings 5 / 6 / 9 / 10).
 
-A2 red tests: every test imports ``cmux_fleet.channels.actor`` (and ``approve``) inside its body, so a missing actor
+A2 red tests: every test imports ``fleetmux.channels.actor`` (and ``approve``) inside its body, so a missing actor
 fails the test (FAILED), never the collection (ERROR). Real private unix-socket Redis, the in-process RuntimeV2 of
 the ``fx`` / ``service`` fixtures (pi / Codex supervisors), the P0 ``FakeChannel`` with fake transports. No real
 network, no credentials, no listener; the config dir is a temp dir (autouse ``config_dir``).
@@ -26,8 +26,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import fx  # noqa: F401  (fixture: v2 service fleet, pi supervisor)
 from test_v2_codex_service import service  # noqa: F401  (fixture: v2 service fleet, Codex supervisor)
 from test_channels_contract import Audit, FakeChannel, config_dir, fake_registered  # noqa: F401
-from cmux_fleet import channels
-from cmux_fleet.channels import envelope
+from fleetmux import channels
+from fleetmux.channels import envelope
 
 ACCOUNT = 'contract-1'
 # fleet.py Fleet.handle, verbatim (main §48 split the old single reason into these two)
@@ -116,7 +116,7 @@ def replies_sink():
 
 # ---------------------------------------------------------------------------------------------- the 17 tests
 def test_submit_posts_operator_input_with_current_generation_thread_and_source(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     sup = f.agent('supervisor')
     reply, env = replies_sink(), env_of('让 worker-1 回复 OK')
@@ -131,7 +131,7 @@ def test_submit_posts_operator_input_with_current_generation_thread_and_source(f
 
 
 def test_accepted_writes_origin_last_and_mirror(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     submit, env = fleet_submit(actor, f), env_of('查一下昨晚的结果')
     actor.handle_inbound(f.r, env, submit=submit, reply=replies_sink())
@@ -152,7 +152,7 @@ def test_accepted_writes_origin_last_and_mirror(fx, fake_registered):
 
 
 def test_rejected_reason_relayed_verbatim_and_forgets(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     gen = int(f.agent('supervisor')['generation'])
 
@@ -175,7 +175,7 @@ def test_unconfirmed_when_wait_reply_times_out(fx, fake_registered):
     cache, so a retry after it lapses still posts nothing new. Ruling 10: after a generation change the re-post
     conflicts; with no answer under that id it is still unconfirmed (no ack, no new id, nothing re-posted); a
     definite answer found under the same id later settles it under the original protocol."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     client = fresh(f)
     asked = []
@@ -229,7 +229,7 @@ def test_unconfirmed_when_wait_reply_times_out(fx, fake_registered):
 
 
 def test_files_paths_appended_one_per_line(private_redis_v2, tmp_path, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     paths = []
@@ -248,7 +248,7 @@ def test_files_paths_appended_one_per_line(private_redis_v2, tmp_path, fake_regi
 
 
 def test_rejected_files_each_get_file_refused_receipt_no_post(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     rejected = [{'name': 'big.zip', 'reason': 'over 20 MB'}, {'name': 'v.mp4', 'reason': '微信第一期只收文字'}]
@@ -259,7 +259,7 @@ def test_rejected_files_each_get_file_refused_receipt_no_post(private_redis_v2, 
 
 
 def test_text_plus_paths_over_32000_rejected_before_post(private_redis_v2, tmp_path, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     p = tmp_path / 'f.txt'
@@ -272,7 +272,7 @@ def test_text_plus_paths_over_32000_rejected_before_post(private_redis_v2, tmp_p
 
 
 def test_status_answers_from_snapshot_without_operator_input(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     submit, reply = recorder(), replies_sink()
     actor.handle_inbound(f.r, env_of('/status'), submit=submit, reply=reply)  # no status=: read fx:agent:* via r
@@ -283,7 +283,7 @@ def test_status_answers_from_snapshot_without_operator_input(fx, fake_registered
 
 
 def test_help_unknown_invalid_receipts(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     submit, reply = recorder(), replies_sink()
     actor.handle_inbound(f.r, env_of('/help'), submit=submit, reply=reply)
@@ -296,7 +296,7 @@ def test_help_unknown_invalid_receipts(fx, fake_registered):
 
 
 def test_approve_reject_go_to_approve_handle_command(fx, monkeypatch, fake_registered):
-    from cmux_fleet.channels import actor, approve
+    from fleetmux.channels import actor, approve
     f = fx
     calls = []
 
@@ -316,7 +316,7 @@ def test_approve_reject_go_to_approve_handle_command(fx, monkeypatch, fake_regis
 
 
 def test_codex_supervisor_fixed_refusal_without_posting(service, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = service
     client, reply = fresh(f), replies_sink()
 
@@ -328,7 +328,7 @@ def test_codex_supervisor_fixed_refusal_without_posting(service, fake_registered
 
 
 def test_supervisor_starting_rejection_relayed(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     state = f.agent('supervisor')['state']
     f.r.hset('fx:agent:supervisor', 'state', 'starting')
@@ -341,7 +341,7 @@ def test_supervisor_starting_rejection_relayed(fx, fake_registered):
 
 
 def test_inbound_audit_snippet_200_and_masked(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     env = envelope.make('fake', ACCOUNT, conversation='c-1', message_id=uuid.uuid4().hex[:12], sender='u-1',
                         text='长' * 500, reply_ref={'chat': 'c-1', 'context_token': 'ctx-SECRET-123456'})
@@ -354,7 +354,7 @@ def test_inbound_audit_snippet_200_and_masked(fx, fake_registered):
 
 
 def test_actor_adds_no_privilege(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     actor.handle_inbound(f.r, env_of('派个活'), submit=fleet_submit(actor, f), reply=replies_sink())
     posted = events(f)
@@ -363,7 +363,7 @@ def test_actor_adds_no_privilege(fx, fake_registered):
 
 
 def test_inbound_loop_adapter_error_audited_and_backs_off(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     polls, sleeps, audit = [], [], Audit()
@@ -388,7 +388,7 @@ def test_inbound_loop_adapter_error_audited_and_backs_off(private_redis_v2, fake
 
 def test_inbound_loop_auth_failure_marks_status_and_long_backoff(private_redis_v2, fake_registered):
     """Ruling 6: the loop decides from health()['state'] only, never by parsing last_error text."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
 
@@ -415,7 +415,7 @@ def test_inbound_loop_auth_failure_marks_status_and_long_backoff(private_redis_v
 def test_duplicate_envelope_never_reaches_submit(private_redis_v2, fake_registered):
     """One dedupe owner on the actor path: handle_inbound as the accept callback (the base default accept is not
     called first, so the first message is not swallowed); the cursor is acked only after the fleet answered."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     order = []

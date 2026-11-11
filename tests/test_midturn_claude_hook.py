@@ -1,4 +1,4 @@
-from cmux_fleet import fleet, midturn
+from fleetmux import fleet, midturn
 
 
 class FakeRedis:

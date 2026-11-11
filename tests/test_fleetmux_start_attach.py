@@ -17,13 +17,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from cmux_fleet import fleet  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux import fleet  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 
 def fleetmux_start(tmp_path, monkeypatch):
     """mock_start's argv + a fleetmux run: the stand-in manager, a ``fleetmux`` binary on PATH and in
-    $CMUX_FLEET_FLEETMUX, and a recorder in place of ``os.execvp`` (-> list of (file, argv))."""
+    $FLEETMUX_BIN, and a recorder in place of ``os.execvp`` (-> list of (file, argv))."""
     from test_pi import mock_start
     args, ran = mock_start(tmp_path, monkeypatch)
     state = tmp_path / 'state'
@@ -89,7 +89,7 @@ def test_start_attach_refused_on_other_backends(tmp_path, monkeypatch, capsys):
 
 # ---------------------------------------------------------------- M2.6 `fleetmux gui` (brief-m26 §3.5 W4, design §8 item 14)
 # Red in W0, green in W4. A desktop = macOS, or Linux with DISPLAY / WAYLAND_DISPLAY; the window half
-# (`fleetmux-web`) is found the way `fleetmux` finds it (next to the binary / PATH / $CMUX_FLEET_FLEETMUX_WEB).
+# (`fleetmux-web`) is found the way `fleetmux` finds it (next to the binary / PATH / $FLEETMUX_WEB_BIN).
 
 from _fleetmux_milestone import milestone  # noqa: E402
 
@@ -183,7 +183,7 @@ def test_start_gui_without_fleetmux_web_still_execs_fleetmux_gui(tmp_path, monke
     """A desktop but no ``fleetmux-web``: no window line, yet ``--gui`` still execs ``fleetmux gui`` -- a missing
     window half is that command's own exit 4 (PROTOCOL.md §9.5), not a start refusal."""
     args, ran, runtime, spawned, execs = fleetmux_start(tmp_path, monkeypatch)
-    monkeypatch.delenv('CMUX_FLEET_FLEETMUX_WEB', raising=False)
+    monkeypatch.delenv('FLEETMUX_WEB_BIN', raising=False)
     monkeypatch.setenv('PATH', str(tmp_path / 'bin') + os.pathsep + os.defpath)  # no fleetmux-web anywhere
     as_host(monkeypatch, 'linux', ':0')
     assert run_start(args + ['--backend', 'fleetmux', '--gui']) in (None, 0), capsys.readouterr().err

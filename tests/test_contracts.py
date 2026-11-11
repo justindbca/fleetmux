@@ -8,7 +8,7 @@ import pytest
 
 import test_fleet
 from test_fleet import FakeMgr, FakeRedis, write_rollout
-from cmux_fleet import contracts, fleet, runtime_v2
+from fleetmux import contracts, fleet, runtime_v2
 
 WORKERS = ['worker-1', 'worker-2', 'worker-3']
 

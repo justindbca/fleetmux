@@ -13,8 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import backends, cmux_manager, fleet  # noqa: E402
-from cmux_fleet.backends import base  # noqa: E402
+from fleetmux import backends, cmux_manager, fleet  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
 
 
 # ---- selection ------------------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def test_unavailable_text_names_what_is_missing(monkeypatch):
 
 def test_sub_fleet_manager_inherits_the_backend(tmp_path, monkeypatch):
     """subfleet builds child registries with manager_for(child_cfg); the child config carries the backend."""
-    from cmux_fleet import subfleet
+    from fleetmux import subfleet
     parent = {'backend': 'wezterm', 'run': '/parent', 'workers': ['worker-1'], 'title_path': ['fleet'],
               'session': 'cmux-fleet'}
     fake = SimpleNamespace(cfg=parent, path=Path('/parent/config.json'), runtime_cfg=lambda slot: parent,
@@ -151,7 +151,7 @@ def test_announce_history_page_does_nothing_with_a_browser(monkeypatch, capsys):
 
 def test_history_jump_poll_is_off_without_a_browser(monkeypatch):
     """subfleet.history_jump: no page on screen, so no cmux call per tick."""
-    from cmux_fleet import subfleet
+    from fleetmux import subfleet
     f = SimpleNamespace(cfg={'parent_config': 'p'}, run_dir='/run', jump_next=0,
                         mgr=SimpleNamespace(supports_browser=False, browser_url=lambda p: pytest.fail('no call')))
     monkeypatch.setattr(subfleet, '_fleet', lambda: SimpleNamespace(SERVICE='svc'))

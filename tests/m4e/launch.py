@@ -4,7 +4,7 @@
 (fleet.sweep_orphan_redis -> reap_orphan_redis, design §13). A test must never shut down another fleet's Redis,
 so here the sweep is limited to this world's Redis root (``reap_orphan_redis(root=…)``, the same scoping
 tests/test_orphan_redis.py uses). Child daemons, hooks and the lifecycle closer are started by the product as
-``cmux_fleet/fleet.py`` itself and never sweep. Every other byte of behaviour is the product's.
+``fleetmux/fleet.py`` itself and never sweep. Every other byte of behaviour is the product's.
 
 Runs only inside an m4e world: ``$M4E_LAUNCH_ROOT`` must name the world directory.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from cmux_fleet import fleet  # noqa: E402
+from fleetmux import fleet  # noqa: E402
 
 
 def main():
@@ -31,7 +31,7 @@ def main():
             print('orphan Redis sweep skipped:', str(exc)[:200])
 
     fleet.sweep_orphan_redis = sweep_this_world_only
-    sys.argv = [str(REPO / 'cmux_fleet' / 'fleet.py')] + sys.argv[1:]
+    sys.argv = [str(REPO / 'fleetmux' / 'fleet.py')] + sys.argv[1:]
     fleet.main()
 
 

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels
+from fleetmux.channels import base, envelope
 
 
 def _ok_transport():

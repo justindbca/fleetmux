@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_wezterm_backend import _fake_server, fake_cli, mgr, panes  # noqa: E402,F401
-from cmux_fleet.backends import wezterm as wz  # noqa: E402
+from fleetmux.backends import wezterm as wz  # noqa: E402
 
 
 def test_fresh_manager_reuses_the_running_server(mgr, fake_cli, monkeypatch):

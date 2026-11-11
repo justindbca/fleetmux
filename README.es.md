@@ -10,7 +10,7 @@ terminado el trabajo es un daemon, no los modelos. Una sesión que se acerca a s
 sesión nueva mediante una nota de traspaso escrita, de modo que una misma tarea puede durar horas a lo largo de muchas
 sesiones de modelo. **Claude Code** oficial, **Codex CLI** oficial, **Pi** (modelos de Codex y modelos locales) y
 **opencode** conviven en una misma flota, en cualquier combinación supervisor × worker que haya superado una prueba de humo
-real (`cmux_fleet/config/fleet.yaml#cli_pairs`).
+real (`fleetmux/config/fleet.yaml#cli_pairs`).
 
 **En uso diario.** Desde octubre de 2026 mantiene flotas de servicio residentes y flotas de tareas programadas en tres Mac
 para una operación de trading real: un equipo de operaciones que arranca y detiene a los demás equipos, una mesa de trading,
@@ -65,7 +65,7 @@ agentes, aprovechamiento de las capacidades de los LLM y orquestación multiagen
   pausa la ejecución de forma reanudable. Las cuentas viven en el bloque `accounts` de tu copia privada del archivo de
   configuración, nunca en el código.
 - **Un solo archivo de configuración.** Cada tabla (pares de CLI, modos de ciclo de vida, límites, diálogos de vigilancia,
-  fichas de modelos, perfiles, cuentas) es un bloque de `cmux_fleet/config/fleet.yaml`; un `~/.fleetmux/fleet.yaml` privado
+  fichas de modelos, perfiles, cuentas) es un bloque de `fleetmux/config/fleet.yaml`; un `~/.fleetmux/fleet.yaml` privado
   con el mismo formato sustituye los bloques que un operador puede cambiar.
 - **CLI oficiales, tu propio inicio de sesión.** Claude Code siempre se ejecuta como la TUI oficial `claude` con tu propio
   inicio de sesión, y Pi nunca recibe credenciales de Claude; los modelos de Codex se ejecutan en la Codex CLI oficial o a
@@ -94,7 +94,7 @@ la flota: socket Redis privado, enrutamiento, verificación y vigilancia).
 ## Casos de uso
 
 Cada `start` indica un `--lifecycle`, que decide qué significa «terminado» y cómo se cierra la ejecución
-(`cmux_fleet/config/fleet.yaml#lifecycle_modes`). Estos son los escenarios para los que está pensado; el informe
+(`fleetmux/config/fleet.yaml#lifecycle_modes`). Estos son los escenarios para los que está pensado; el informe
 programado, el servicio residente y el desarrollo de funcionalidades funcionan a diario.
 
 - **Operaciones que solo pueden usar modelos locales.** Algunos entornos solo permiten modelos que se ejecutan en tus propias
@@ -115,7 +115,7 @@ programado, el servicio residente y el desarrollo de funcionalidades funcionan a
   `--roles`, sus herramientas y skills mediante `--worker-kit`) hace una revisión completa: lee la posición y los datos de
   mercado, vuelve a comprobar los supuestos de la estrategia y responde en JSON. Una petición que indica `to` se salta el
   turno del supervisor; los disparadores que llegan a la vez se encolan bajo `--max-busy`; el daemon comprueba los campos de
-  la respuesta antes de que tu programa la lea (`cmux-fleet results --drain`). Las peticiones no tienen un plazo global: una
+  la respuesta antes de que tu programa la lea (`fleetmux results --drain`). Las peticiones no tienen un plazo global: una
   que caduca solo retiene su propia ranura, y un worker de Claude Code congelado reanuda su propia sesión y vuelve a recibir la
   misma petición. `--clear-after-result` hace que cada revisión empiece con un contexto limpio. La flota no lanza órdenes ni
   conoce ningún calendario: tu programa decide qué hacer con el veredicto, pasa cualquier orden por sus propios controles y
@@ -138,7 +138,7 @@ programado, el servicio residente y el desarrollo de funcionalidades funcionan a
   supervisor y dos workers de Claude Code con skills de investigación y un MCP de búsqueda web a través de `--worker-kit`. El
   objetivo declara el archivo del informe y las secciones que debe contener; el daemon lo acepta de forma literal, impone a la
   ejecución un presupuesto de tiempo estricto y cierra el espacio de trabajo al terminar.
-- **Servicio de evaluación residente** (`service`). Otro programa envía peticiones JSON con `cmux-fleet request`; una
+- **Servicio de evaluación residente** (`service`). Otro programa envía peticiones JSON con `fleetmux request`; una
   petición que indica `to` va directamente al worker de ese rol (`--worker-names exit-1,reentry-1,...`, un prompt por rol
   mediante `--roles`). El daemon comprueba cada respuesta frente a `reply.required` / `reply.allowed`, y quien llama detiene
   la flota fuera de su horario de trabajo con `pause` / `resume`. Para trabajos puntuales sin estado (por ejemplo, extraer
@@ -161,7 +161,7 @@ programado, el servicio residente y el desarrollo de funcionalidades funcionan a
 - **Una sola flota de operaciones residente para varias líneas de trabajo** (en desarrollo). Un supervisor principal en modo
   servicio tiene un worker por línea de negocio; cada uno de esos workers supervisa una flota hija con nombre declarada en el
   roster, que un programa externo puede arrancar y detener según su propio horario (`docs/design.md` §29).
-- **Modelos de día y de noche.** `start --roster day.yaml --night-roster night.yaml` y `cmux-fleet night on|off` cambian, en
+- **Modelos de día y de noche.** `start --roster day.yaml --night-roster night.yaml` y `fleetmux night on|off` cambian, en
   un momento de inactividad, cada worker cuyo perfil difiere a su perfil de noche (por ejemplo, un modelo gratuito o local),
   con los mismos nombres de ranura, e informan al supervisor de lo que está hecho y lo que falta (un ciclo completo
   día → noche → día aún no está aceptado de extremo a extremo). `start --resume` recupera del mismo modo una ejecución
@@ -177,9 +177,9 @@ supervisor, con los resultados y los avisos de «esperando a una persona» devue
 
 Un solo comando: `fleetmux <subcommand>` (por ejemplo `fleetmux start`, `fleetmux status`, `fleetmux channel`). El binario
 ejecuta por sí mismo sus subcomandos de terminal (`server`, `attach`, `reap`, `web`, `gui --runtime D`) y pasa todos los
-subcomandos de flota a la CLI de Python de la misma versión (docs/design.md §50). El nombre antiguo se mantiene como alias
-permanente: el comando `cmux-fleet`, las variables `CMUX_FLEET_*`, `~/cmux-fleet-releases` / `~/cmux-fleet-current`; el
-paquete de Python sigue llamándose `cmux_fleet` (la flota funcionó primero sobre [cmux](https://cmux.dev)).
+subcomandos de flota a la CLI de Python de la misma versión (docs/design.md §50). Las instalaciones hechas con el nombre
+anterior del proyecto siguen funcionando: su comando, sus variables de entorno y sus directorios de versiones se
+siguen aceptando como alias (docs/design.md §50).
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
@@ -205,11 +205,11 @@ Los requisitos (cmux, la Codex CLI, `redis-server`, versión de Python) y la ins
 
 Abre un terminal de cmux, configura tu proveedor y modelo de Pi, y sustituye `local/my-model` más abajo. Los arranques nuevos
 requieren Redis v2 y una autorización explícita del modo de desarrollo. Sin `--supervisor-cli` / `--worker-cli`, `start` toma
-el par por defecto de `cmux_fleet/config/fleet.yaml#cli_pairs`: **un supervisor Pi con `openai-codex/gpt-6-astra` (thinking
+el par por defecto de `fleetmux/config/fleet.yaml#cli_pairs`: **un supervisor Pi con `openai-codex/gpt-6-astra` (thinking
 high) y workers oficiales de Claude Code**. Esa tabla enumera todos los pares admitidos y su estado (consulta
 [Redis v2 development runtime](README.md#redis-v2-development-runtime) en el README en inglés); un par que no figure en ella
 se rechaza. `start` también exige `--lifecycle <mode>` (`service`, `dev_task`, `program`, `scheduled`, `review_loop`,
-`smoke`; consulta `cmux_fleet/config/fleet.yaml#lifecycle_modes`); un par `unverified` solo arranca con `--lifecycle smoke`.
+`smoke`; consulta `fleetmux/config/fleet.yaml#lifecycle_modes`); un par `unverified` solo arranca con `--lifecycle smoke`.
 Los ejemplos de configuración y arranque específicos de Codex del README en inglés se conservan únicamente como referencia
 heredada de v1.
 

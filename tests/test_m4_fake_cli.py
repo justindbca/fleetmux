@@ -20,8 +20,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import claude_input, codex_queue, fleet  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux import claude_input, codex_queue, fleet  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 from m4e import world as m4world  # noqa: E402
 from m4e.inventory import Ledger  # noqa: E402
 
@@ -200,7 +200,7 @@ def test_m4e_world_builds_with_the_pinned_kit_and_one_patch(monkeypatch):
     monkeypatch.setenv('HOME', str(w.h))  # the roster loader expands `~` with the HOME the fleet runs under
     facts = w.preconditions()
     (w.ev / '00-preconditions.json').write_text(json.dumps(facts, indent=1, default=str))
-    from cmux_fleet import kit as kitmod, roster
+    from fleetmux import kit as kitmod, roster
     kitmod.Kit(str(w.kit))  # the product's own kit validation (start runs it for `advisor: on`)
     original = m4world.git('show', m4world.KIT_REV + ':' + m4world.KIT_PATH + '/memx_roster.yaml').decode()
     copied = (w.fleet_dir / 'memx_roster.yaml').read_text()
@@ -250,7 +250,7 @@ def v2_delivered(text):
     """What a worker / supervisor receives under v2: ``RuntimeV2.queue`` moves a leading ``[Request <id>]`` into
     metadata and queues ``text[head.end():].lstrip()``. Pinned to the product source, so a change there fails here."""
     import inspect
-    from cmux_fleet import runtime_v2
+    from fleetmux import runtime_v2
     src = inspect.getsource(runtime_v2.RuntimeV2.queue)
     assert 'head = REQ_HEAD.match(text)' in src and 'text = text[head.end():].lstrip()' in src, \
         'RuntimeV2.queue header strip changed; update the M46 fake CLI tests'
@@ -266,7 +266,7 @@ def worker_request_text(rid, payload):
 
 def approval_text(rid, name):
     asked = []
-    from cmux_fleet import named_subfleet
+    from fleetmux import named_subfleet
     named_subfleet.ask(SimpleNamespace(queue=lambda slot, text, **_: asked.append((slot, text))), rid, 'up', name, 'e2e')
     assert len(asked) == 1 and asked[0][0] == 'supervisor', asked
     return asked[0][1]

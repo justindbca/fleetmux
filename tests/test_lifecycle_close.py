@@ -17,8 +17,8 @@ import yaml
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, req, session, settle  # noqa: F401  (fx fixture)
-from cmux_fleet import fleet, lifecycle, lifecycle_close, lifecycle_deliver, lifecycle_hold, subfleet
-from cmux_fleet import fleet_config
+from fleetmux import fleet, lifecycle, lifecycle_close, lifecycle_deliver, lifecycle_hold, subfleet
+from fleetmux import fleet_config
 
 
 # ------------------------------------------------------------------ fixtures
@@ -388,7 +388,7 @@ def test_start_flag_overrides_the_table_reclaim_for_this_run_only(fx, table, not
 
 
 def test_reclaim_flag_parses_minutes_or_off():
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     assert fleet.reclaim_minutes('off') == 'off' and fleet.reclaim_minutes('45') == 45.0
     for bad in ('0', '-5', 'never', ''):
         with pytest.raises(argparse.ArgumentTypeError):
@@ -526,7 +526,7 @@ def test_channel_command_gets_the_text(fx, table, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('value,env,expect', [
     ('claude:sess-1', {}, {'kind': 'claude', 'id': 'sess-1'}),
-    (None, {'CMUX_FLEET_INITIATOR': 'program:reviewer'}, {'kind': 'program', 'id': 'reviewer'}),
+    (None, {'FLEETMUX_INITIATOR': 'program:reviewer'}, {'kind': 'program', 'id': 'reviewer'}),
     (None, {'XPC_SERVICE_NAME': 'com.example.sector.0900'}, {'kind': 'launchd', 'id': 'com.example.sector.0900'}),
     (None, {'XPC_SERVICE_NAME': '0'}, None),
     (None, {'XPC_SERVICE_NAME': 'application.com.cmux.123'}, None),
@@ -580,7 +580,7 @@ class NoShutdown:
 
 def test_resume_of_budget_exhausted_resumable_run(fx, table, notes, monkeypatch, tmp_path):
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     # never reach the real cmux registry or the operator's latest.json
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
@@ -667,7 +667,7 @@ def test_reopen_fails_closed_on_a_damaged_record(fx, table):
 def test_resume_of_the_placeholder_starts_the_initialization_and_keeps_the_evidence(fx, table, notes, monkeypatch, tmp_path):
     """start --resume of the placeholder launches the daemon (the run's own initialization), not a fake task."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
         spawn_window=lambda *a, **k: launched.append(a) or SimpleNamespace(success=True)))
@@ -783,7 +783,7 @@ def test_public_resume_refuses_a_damaged_running_task_without_side_effects(fx, t
     """The public layer classifies before it deletes result.json or spawns: a running task with no id fails with
     a nonzero explicit error, no spawn_window, and the closed result stays where it is."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
         spawn_window=lambda *a, **k: launched.append(a) or SimpleNamespace(success=True)))
@@ -851,7 +851,7 @@ def test_public_resume_refuses_an_empty_task_contradicted_by_the_durable_result(
                                                                                 tmp_path):
     """The public layer refuses the contradiction before deleting result.json or spawning anything."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
         spawn_window=lambda *a, **k: launched.append(a) or SimpleNamespace(success=True)))
@@ -951,7 +951,7 @@ def test_public_resume_of_the_healthy_closed_idle_shape_starts_the_daemon(fx, ta
     """The public layer accepts the healthy close (nothing to reopen, no fake task) and keeps the evidence until
     the daemon clears it."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
         spawn_window=lambda *a, **k: launched.append(a) or SimpleNamespace(success=True)))
@@ -973,7 +973,7 @@ def test_public_resume_of_the_healthy_closed_idle_shape_starts_the_daemon(fx, ta
 def test_public_resume_refuses_an_unreadable_closed_result(fx, table, notes, monkeypatch, tmp_path):
     """A result.json that exists but cannot be parsed is not an empty one: refuse before deleting or spawning."""
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     launched = []
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: SimpleNamespace(
         spawn_window=lambda *a, **k: launched.append(a) or SimpleNamespace(success=True)))
@@ -1085,10 +1085,10 @@ def sidebar_closed_run(tmp_path, monkeypatch, **result):
     """A run the fleetmux sidebar closed (resumable), its config.json, and the fake manager on it."""
     run = tmp_path / 'runs' / SIDEBAR_CLOSED_RUN
     run.mkdir(parents=True)
-    monkeypatch.setenv('CMUX_FLEET_FLEETMUX', '/opt/fleetmux')
-    monkeypatch.setenv('CMUX_FLEET_FLEETMUX_THEME', str(tmp_path / 'theme.toml'))
+    monkeypatch.setenv('FLEETMUX_BIN', '/opt/fleetmux')
+    monkeypatch.setenv('FLEETMUX_THEME', str(tmp_path / 'theme.toml'))
     monkeypatch.setenv('PATH', '/usr/bin:/bin')
-    monkeypatch.delenv('CMUX_FLEET_CONFIG', raising=False)
+    monkeypatch.delenv('FLEETMUX_CONFIG', raising=False)
     fleet.save(run / 'config.json', {
         'run': str(run), 'python': '/py/bin/python', 'backend': 'fleetmux', 'name': 'fmx-demo',
         'fleet_home': str(tmp_path / 'home'), 'cmux_state_dir': str(tmp_path / 'state'),
@@ -1116,9 +1116,9 @@ def test_sidebar_close_keeps_the_fleetmux_server_and_registers_the_resume_comman
         'id': SIDEBAR_CLOSED_RUN, 'title': 'fmx-demo', 'closed_at': 1790000000,
         'argv': ['/py/bin/python', str(Path(fleet.__file__).resolve()), 'start', '--resume', str(run)],
         'cwd': str(run),
-        'env': {'CMUX_FLEET_HOME': str(tmp_path / 'home'), 'CMUX_FLEET_STATE': str(tmp_path / 'state'),
-                'CMUX_FLEET_FLEETMUX': '/opt/fleetmux',
-                'CMUX_FLEET_FLEETMUX_THEME': str(tmp_path / 'theme.toml'), 'PATH': '/usr/bin:/bin'},
+        'env': {'FLEETMUX_HOME': str(tmp_path / 'home'), 'FLEETMUX_STATE': str(tmp_path / 'state'),
+                'FLEETMUX_BIN': '/opt/fleetmux',
+                'FLEETMUX_THEME': str(tmp_path / 'theme.toml'), 'PATH': '/usr/bin:/bin'},
     }, 'kv restorable must carry the exact start --resume argv/cwd/env: %r' % (mgr.marked,)
     assert json.loads(mgr.kv['restorable']) == {'v': 1, 'runs': [mgr.marked]}, mgr.kv['restorable']
     assert mgr.kv['stop_request'] == '', 'the stale stop_request must be cleared: %r' % (mgr.kv['stop_request'],)
@@ -1318,7 +1318,7 @@ def test_resumed_daemon_push_brings_the_subfleet_cards_back_to_their_real_state(
     """§9 defect A: the grey sub-fleet cards are only the closer's picture; after ↺ the root daemon's first push
     rebuilds every tree card from the sub-fleet records (a running child reads 运行中 again)."""
     from types import SimpleNamespace
-    from cmux_fleet import fleetmux_sidebar
+    from fleetmux import fleetmux_sidebar
     run, mgr = tree_closed_run(tmp_path, monkeypatch)
     lifecycle_close.close_workspace(run / 'config.json', mgr=mgr)
     assert json.loads(mgr.kv['sidebar'])['fleets'][1]['state'] == 'reclaimed'

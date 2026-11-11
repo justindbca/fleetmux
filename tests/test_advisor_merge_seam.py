@@ -11,7 +11,7 @@ import pytest
 from test_advisor import Runner, afx, item, report, send_decision, supervisor_texts  # noqa: F401
 from test_advisor_rescue import consult, rescue_decision, respawn_sheet, worked
 from test_fleet import decision, fx, turn  # noqa: F401
-from cmux_fleet import fleet, night, roster
+from fleetmux import fleet, night, roster
 
 
 def fable_wait(f):
@@ -99,7 +99,7 @@ def test_rescue_reassign_to_a_full_model_keeps_the_preset_for_the_redispatch(afx
 def test_codex_slot_with_native_subagents_keeps_its_sheet_until_the_switch(fx, tmp_path, monkeypatch):
     """switch_profile defers (no spawn) while a codex slot's native subagents run: the next tick must not
     deliver to the old runtime as if advised; the sheet waits in advice_wait and applies later."""
-    from cmux_fleet import agent_registry
+    from fleetmux import agent_registry
     reg = tmp_path / 'agents'
     shutil.copytree(Path(agent_registry.__file__).parent / 'agents', reg)
     (reg / 'codex-terra.json').write_text(json.dumps({
@@ -158,7 +158,7 @@ def test_advisor_switch_writes_day_and_night_rosters_and_they_must_agree(tmp_pat
 def test_start_with_a_roster_already_on_checks_the_kit_before_provisioning(monkeypatch, tmp_path):
     from test_advisor import fake_start
     from test_kit import make_kit
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     argv = fake_start(monkeypatch, tmp_path)
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: pytest.fail('bad kit must be refused first'))
     kit = make_kit(tmp_path / 'kit')

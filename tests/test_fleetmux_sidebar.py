@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import fleet, fleetmux_sidebar, subfleet  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux import fleet, fleetmux_sidebar, subfleet  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 RUN = 'fleet-20261029-231820-ab12cd34'
 
@@ -414,7 +414,7 @@ def _lines_with(text, needle):
 
 
 def test_protocol_reserves_kv_restorable():
-    proto = _doc('fleetmux', 'PROTOCOL.md')
+    proto = _doc('rust', 'PROTOCOL.md')
     start = proto.index('**Reserved keys.**')
     reserved = proto[start:proto.index('### 4.3', start)]
     assert '- `restorable`' in reserved, \
@@ -427,7 +427,7 @@ def test_protocol_reserves_kv_restorable():
 
 
 def test_protocol_key_table_documents_the_restore_key():
-    proto = _doc('fleetmux', 'PROTOCOL.md')
+    proto = _doc('rust', 'PROTOCOL.md')
     start = proto.index('## 10. Keys')
     table = proto[start:proto.index('## 11. Mouse', start)]
     row = [line for line in table.splitlines() if line.startswith('| `r` |')]
@@ -438,7 +438,7 @@ def test_protocol_key_table_documents_the_restore_key():
 
 
 def test_the_docs_describe_the_real_restore_not_the_s2b_placeholder():
-    for path in (('fleetmux', 'PROTOCOL.md'), ('README.md',)):
+    for path in (('rust', 'PROTOCOL.md'), ('README.md',)):
         text = _doc(*path)
         assert '恢复已关闭的 fleet：S2b 开放' not in text, \
             '%s still carries the S2b placeholder notice:\n%s' % ('/'.join(path), _lines_with(text, 'S2b 开放'))
@@ -506,8 +506,8 @@ def test_payload_history_uses_the_cfg_home_and_state_dir(tmp_path, monkeypatch):
     history_run(tmp_path, 'fleet-ok')
     history_run(tmp_path, 'fleet-other-state', state_dir='other-state')
     history_run(tmp_path, 'fleet-elsewhere', home='elsewhere')
-    monkeypatch.setenv('CMUX_FLEET_HOME', str(tmp_path / 'elsewhere'))
-    monkeypatch.setenv('CMUX_FLEET_STATE', str(tmp_path / 'other-state'))
+    monkeypatch.setenv('FLEETMUX_HOME', str(tmp_path / 'elsewhere'))
+    monkeypatch.setenv('FLEETMUX_STATE', str(tmp_path / 'other-state'))
 
     p = fleetmux_sidebar.payload(f)
 
@@ -541,7 +541,7 @@ def test_the_docs_carry_the_history_entry_point_and_the_grey_card_rules():
     """§18.4-6 / §18.7-1 / §18.7-2: README names `./start.sh gui`, both docs name the two history lines,
     the restore-while-running notice and the no-fleet placeholder the server really draws."""
     readme = _doc('README.md')
-    proto = _doc('fleetmux', 'PROTOCOL.md')
+    proto = _doc('rust', 'PROTOCOL.md')
     start = proto.index('**Reserved keys.**')
     reserved = proto[start:proto.index('### 4.3', start)]
     i = reserved.index('- `restorable`')

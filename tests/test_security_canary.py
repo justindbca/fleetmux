@@ -5,7 +5,7 @@ baseline ``test_canary_disabled_plants_nothing`` (no policy / ``canary.enabled: 
 deleted, an old value never bypasses off).
 
 Cross-package dependencies stay red, never faked green: #2 needs P8m ``channels.stop.pause_service`` (S6), #4 needs
-P8i ``cmux_fleet.guard`` (S5). Both are imported inside the test body, so a missing module FAILS, never ERRORs.
+P8i ``fleetmux.guard`` (S5). Both are imported inside the test body, so a missing module FAILS, never ERRORs.
 Fakes only: tmp run dirs, the repo's private unix-socket Redis, the P0 ``Audit``.
 """
 import base64
@@ -20,8 +20,8 @@ import yaml
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_channels_contract import Audit, config_dir  # noqa: F401
-from cmux_fleet import channels
-from cmux_fleet.channels import canary, envelope, secrets, security
+from fleetmux import channels
+from fleetmux.channels import canary, envelope, secrets, security
 
 REL = 'workspace/.secrets/canary.env'
 LINE_RE = re.compile(r'CANARY_TOKEN=(fmx-canary-[0-9a-f]{24})\n')
@@ -121,7 +121,7 @@ def test_plant_writes_token_file_and_redis_value_each_run_new(private_redis_v2, 
     assert canary.on_resume(child, on(), on(), r=r) is None
     assert not (child / REL).exists() and r.exists(channels.CANARY) == 0
     # P8h wiring (core-2 P8-start-plan §1 C1): fleet.start / start --resume go through these two helpers
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     wired = tmp_path / 'run-wired'
     (wired / 'workspace').mkdir(parents=True)
     cfg = {'run': str(wired), 'security': on()}
@@ -143,7 +143,7 @@ def test_plant_writes_token_file_and_redis_value_each_run_new(private_redis_v2, 
 # ====================================================================== 2
 def test_canary_value_joins_scanner_and_outbound_hit_blocks_alerts_and_pauses(private_redis_v2, tmp_path,
                                                                              monkeypatch):
-    from cmux_fleet.channels import stop
+    from fleetmux.channels import stop
     r = fresh(private_redis_v2)
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
@@ -215,7 +215,7 @@ def test_canary_base64_variant_also_hits(private_redis_v2, tmp_path):
 
 # ====================================================================== 4
 def test_guard_read_of_canary_path_audits_but_allows(private_redis_v2, tmp_path):
-    from cmux_fleet import guard
+    from fleetmux import guard
     r = fresh(private_redis_v2)
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
@@ -261,7 +261,7 @@ def test_canary_disabled_plants_nothing(private_redis_v2, tmp_path):
         assert canary.check_read('Read', {'file_path': str(path)}, {'run': str(run), 'security': policy}) is False
     assert os.path.exists(path)
     # P8h wiring: start / start --resume with no policy or canary off load nothing (core-2 P8-start-plan §1 C1)
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     for policy in (None, off):
         cfg = {'run': str(run), **({'security': policy} if policy is not None else {})}
         assert fleet.canary_start(cfg) is None

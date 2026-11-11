@@ -14,8 +14,8 @@ import yaml
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, decision, dispatch_one, drive, mixed, submit, typed  # noqa: F401
 import hook_sim
-from cmux_fleet import runtime_v2, subfleet, watchdog
-from cmux_fleet import fleet_config
+from fleetmux import runtime_v2, subfleet, watchdog
+from fleetmux import fleet_config
 
 DIALOG_RM = ('Bash command\n  rm -rf "$OUT/"*\n\nDangerous rm on possibly-empty variable\n'
              'Do you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently (esc)')
@@ -54,7 +54,7 @@ def wd(mixed):  # noqa: F811
 
 
 def cwd(f, slot):
-    from cmux_fleet.fleet import agent_cwd
+    from fleetmux.fleet import agent_cwd
     return agent_cwd(f.cfg, slot)
 
 
@@ -457,7 +457,7 @@ def test_hold_exit_survives_later_notifications_and_typed_lines(wd):
 
 
 def test_hold_exit_also_counts_the_hook_keepalive_turn(wd):
-    from cmux_fleet import claude_hook, fleet
+    from fleetmux import claude_hook, fleet
     f = wd
     dispatch_one(f)
     msg_id = f.v2.bus.slot_state('worker-1')['message_id']
@@ -566,7 +566,7 @@ def test_dangerous_rm_waits_for_the_user_wherever_its_target_is(wd, target):
 
 def test_no_permission_hook_answers_delete_dialogs(tmp_path):
     """Nothing in the fleet auto-answers a delete confirmation: no PermissionRequest hook is installed."""
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     for hook in (True, False):
         cfg = dict(run=str(tmp_path / ('run-' + str(hook))), workers=['worker-1'], supervisor_cli='claude',
                    worker_cli='claude', python='python3', claude_hook_delivery=hook)
@@ -589,7 +589,7 @@ def test_read_outside_inside_the_run_workspace_is_answered(wd):
 
 @pytest.mark.parametrize('screen,reason', [
     (READ.format('/Users/someone/.ssh/id_ed25519'), 'outside the granted area'),
-    (READ.format('/Users/user/projects/fleetmux/cmux_fleet/fleet.py'), 'outside the granted area'),
+    (READ.format('/Users/user/projects/fleetmux/fleetmux/fleet.py'), 'outside the granted area'),
     ('Read outside the working directories?\n❯ 1. Yes', 'no path'),   # scope not on the screen
 ])
 def test_read_outside_the_run_or_without_a_path_goes_to_the_supervisor(wd, screen, reason):

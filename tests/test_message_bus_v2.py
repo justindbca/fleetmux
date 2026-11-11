@@ -11,7 +11,7 @@ import uuid
 import pytest
 import redis
 
-from cmux_fleet.message_bus import AuditError, BusError, MAX_BODY, MessageBus
+from fleetmux.message_bus import AuditError, BusError, MAX_BODY, MessageBus
 
 
 @pytest.fixture(scope="module")

@@ -169,7 +169,7 @@ await wait(()=>statuses.at(-1)==='已达续做上限，等监工拆小。');
 await emit('session_shutdown'); await emit('session_shutdown');
 assert.equal(bridge.exitCode,0);
 // A second actual extension instance proves the prefix check precedes the supervisor input bridge.
-process.env.CMUX_FLEET_PI_SLOT='supervisor';
+process.env.FLEETMUX_PI_SLOT='supervisor';
 const supervisorHandlers=new Map(), supervisorMessages=[];
 register({on:(name,fn)=>supervisorHandlers.set(name,fn),registerTool(){},
  registerEntryRenderer(){},registerMessageRenderer(){},appendEntry(){},

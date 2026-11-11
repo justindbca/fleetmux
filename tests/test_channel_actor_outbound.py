@@ -1,6 +1,6 @@
 """P1e channel actor, outbound (brief v2 §6.6; core-1 test-plan §1, §4.3, §4.4, §5 and supervisor rulings 2 / 11).
 
-A2 red tests: ``cmux_fleet.channels.actor`` is imported inside every test body, so a missing actor fails the test
+A2 red tests: ``fleetmux.channels.actor`` is imported inside every test body, so a missing actor fails the test
 (FAILED), never the collection (ERROR). Real private unix-socket Redis, the in-process RuntimeV2 of ``fx`` /
 ``mixed``, the P0 ``FakeChannel`` with fake transports. No network, no credentials, no listener; the config dir is
 a temp dir (autouse ``config_dir``). ``fcntl`` locks only a temp lease file.
@@ -24,8 +24,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: v2 service fleet)
 from test_v2_codex_claude import mixed  # noqa: F401  (fixture: v2 task fleet)
 from test_channels_contract import Audit, FakeChannel, config_dir, fake_registered  # noqa: F401
-from cmux_fleet import channels, lifecycle_close
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels, lifecycle_close
+from fleetmux.channels import base, envelope
 
 ACCOUNT = 'contract-1'
 ENTRY = {'type': 'fake', 'account': ACCOUNT, 'push': list(channels.DEFAULT_PUSH)}
@@ -100,7 +100,7 @@ class Recording:
 
 # ---------------------------------------------------------------------------------------------- the 16 tests
 def test_result_with_origin_enqueued_once_per_push_channel(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     entries = [dict(ENTRY, push=['result']), {'type': 'exec', 'account': 'relay', 'push': ['result']}]
@@ -115,7 +115,7 @@ def test_result_with_origin_enqueued_once_per_push_channel(private_redis_v2, fak
 
 
 def test_result_without_origin_waits_60s_then_marked_not_pushed(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     now = [5000.0]
@@ -128,7 +128,7 @@ def test_result_without_origin_waits_60s_then_marked_not_pushed(private_redis_v2
 
 
 def test_long_reply_over_3_chunks_becomes_file_item(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     long = '行' * (3 * base.Channel.TEXT_LIMIT + 1)
@@ -145,7 +145,7 @@ def test_long_reply_over_3_chunks_becomes_file_item(private_redis_v2, fake_regis
 
 
 def test_timeout_failed_invalid_results_carry_status_line(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     for status in ('timeout', 'failed', 'invalid'):
@@ -157,7 +157,7 @@ def test_timeout_failed_invalid_results_carry_status_line(private_redis_v2, fake
 
 
 def test_done_followup_routes_by_origin_id(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     r.set(channels.ORIGIN + 'r1', json.dumps(origin('c-77')), ex=channels.ORIGIN_TTL)  # only r1 has an origin
@@ -171,7 +171,7 @@ def test_done_followup_routes_by_origin_id(private_redis_v2, fake_registered):
 
 
 def test_task_done_enqueued_on_terminal_states(mixed, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = mixed
     for n, status in enumerate(('completed', 'blocked', 'budget_exhausted')):
         f.r.hset('fx:task', mapping={'id': 'T' + str(n), 'status': status, 'goal': 'goal ' + str(n)})
@@ -185,7 +185,7 @@ def test_task_done_enqueued_on_terminal_states(mixed, fake_registered):
 
 
 def test_escalation_off_by_default_on_when_listed(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     r.set('fx:escalations', json.dumps({'blocked:worker-1': {'kind': 'blocked', 'reason': 'needs a decision'},
@@ -202,7 +202,7 @@ def test_escalation_off_by_default_on_when_listed(private_redis_v2, fake_registe
 def test_run_closed_enqueued_at_daemon_stop_without_lifecycle(fx, monkeypatch, fake_registered):
     """Ruling 11 / core-3 §4.2: the explicit-stop tail enqueues run_closed, then channel_stop_all(drain_s=5), both
     before lifecycle_close.finalize and before Redis closes. Until P1f lands channel_stop_all is stubbed here."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     f.cfg['channels'] = [dict(ENTRY, push=['run_closed'])]
     assert not f.cfg.get('lifecycle') and not lifecycle_close.managed(f)
@@ -231,7 +231,7 @@ def test_run_closed_enqueued_at_daemon_stop_without_lifecycle(fx, monkeypatch, f
 
 
 def test_push_list_filters_per_channel(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     undo = channels.register('fakeb', FakeChannel, 'fakeb')
@@ -253,7 +253,7 @@ def test_push_list_filters_per_channel(private_redis_v2, fake_registered):
 
 
 def test_resolve_target_user_only_requires_private_last(fx, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     item = envelope.outbound('prompt_wait', text='待办', user_only=True)
     f.r.hset(channels.LAST, mapping={'channel': 'fake', 'account': ACCOUNT, 'conversation': 'u-1', 'reply_ref': '{}',
@@ -266,7 +266,7 @@ def test_resolve_target_user_only_requires_private_last(fx, fake_registered):
 
 
 def test_resolve_target_falls_back_to_last_json_when_redis_down(fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
 
     class Down:
         def __getattr__(self, name):
@@ -287,7 +287,7 @@ def test_resolve_target_falls_back_to_last_json_when_redis_down(fake_registered)
 def test_send_direct_bypasses_queue_and_lease(private_redis_v2, tmp_path, fake_registered):
     """Also mail plan A (I2): send_direct sets fleet_name = channels.fleet_label(cfg) and send_ref per item
     (request_id, else the item id) around the send, then resets send_ref to None; no fleet name -> ''."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     lock = channels.lease_path('fake', ACCOUNT)
@@ -320,7 +320,7 @@ def test_send_direct_bypasses_queue_and_lease(private_redis_v2, tmp_path, fake_r
 def test_outbound_loop_routes_then_processes_and_throttles(private_redis_v2, fake_registered):
     """route -> account queue -> process_one -> sent; the same text again within 5 s is suppressed. I2: every
     chunk and retry of one item carries the same send_ref; it is None again after each item."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     ch = spy(r, fail_first=1)
@@ -346,7 +346,7 @@ def test_outbound_loop_routes_then_processes_and_throttles(private_redis_v2, fak
 
 
 def test_exec_channel_gets_whole_item_on_stdin(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     got = []
@@ -378,7 +378,7 @@ def test_exec_channel_gets_whole_item_on_stdin(private_redis_v2, fake_registered
 
 
 def test_outbound_scan_reads_results_incrementally(private_redis_v2, fake_registered):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     for n in range(3):
@@ -395,7 +395,7 @@ def test_actor_exit_drains_queue_up_to_5s(private_redis_v2, fake_registered):
     """Ruling 11: drain routes what is still unrouted first, then sends without blocking (never BRPOP timeout=0);
     sending / sending_at are set around each real send and cleared in finally (also when it raises);
     drained=1 only when nothing is left."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     rec = Recording(r)
@@ -430,7 +430,7 @@ def test_actor_exit_drains_queue_up_to_5s(private_redis_v2, fake_registered):
 def test_channel_without_push_uses_default_push(private_redis_v2, fake_registered):
     """M119 ruling C2: a channel the actor was given without ``ch.push`` gets channels.DEFAULT_PUSH, never every
     event: escalation (off by default) is not routed to it and is audited channel.no_target; task_done is sent."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     ch = spy(r, clock=None)
@@ -453,7 +453,7 @@ def test_channel_with_empty_push_gets_no_push_events(private_redis_v2, fake_regi
     """M156 (core-2 P1g finding): a roster entry ``push: []`` means "push nothing". An empty ``ch.push`` must not
     fall back to DEFAULT_PUSH (only a missing ``push`` does): task_done is not routed to it and is audited
     channel.no_target; a reply (not a push event) still goes out."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     ch = spy(r, clock=None)

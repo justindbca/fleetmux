@@ -23,8 +23,8 @@ from test_v2_codex_claude import answer_turn, dispatch_one, mixed  # noqa: F401 
 from test_watchdog import (DIALOG_RM, audits, escalations, keys, waiting, wd)  # noqa: F401
 from test_channel_approve import (PID_RE, env, fake_account, mark_rm_with_channels, nonce_of, phone, r,  # noqa: F401
                                   record, redis_dump, said, user_table, wdc)
-from cmux_fleet import channels
-from cmux_fleet.channels import approve, envelope, oob, security
+from fleetmux import channels
+from fleetmux.channels import approve, envelope, oob, security
 
 H = 'a' * 32
 RUN_ID = 'run-p8k'
@@ -422,7 +422,7 @@ def test_high_tier_calls_oob_check_and_refuses_when_false(r, monkeypatch, mode):
 
 
 def test_supervisor_decision_cli_and_channel_send_cannot_create_a_ticket(r):
-    from cmux_fleet.channels import cli
+    from fleetmux.channels import cli
     audit = Audit()
     seed_agent(r)
     res = reg(r, tier='high', cls='real_money', oob_modes='desk')
@@ -528,9 +528,9 @@ def test_register_action_accepts_untrusted_class_normal_tier_only(r):
 
 # ---------------------------------------------------------------------------------------------- M181
 def test_route_root_default_verify_is_the_gate_module(monkeypatch):
-    """M181: without ``verify=`` route_root uses ``cmux_fleet.guard.verify_ancestry`` (the gate module; there is no
-    ``cmux_fleet.channels.guard``): the default path imports and calls it, and passes its refusal through."""
-    from cmux_fleet import guard
+    """M181: without ``verify=`` route_root uses ``fleetmux.guard.verify_ancestry`` (the gate module; there is no
+    ``fleetmux.channels.guard``): the default path imports and calls it, and passes its refusal through."""
+    from fleetmux import guard
     seen = []
 
     def fake_verify(cfg, *, cfg_path=None, connect=None, load=None):

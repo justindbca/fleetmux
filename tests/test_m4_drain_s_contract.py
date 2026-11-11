@@ -18,7 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import fleet, named_subfleet, roster, subfleet  # noqa: E402
+from fleetmux import fleet, named_subfleet, roster, subfleet  # noqa: E402
 from test_subfleet import (ask, bring_up, result, stop_child_like_daemon, supervisor_answers,  # noqa: E402,F401
                            svc, typed_return)
 

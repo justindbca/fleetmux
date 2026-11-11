@@ -2,7 +2,7 @@
 
 Red until phase B (``bind_page`` / ``archive_page`` / ``unarchive_page`` / ``pages_problem`` in
 ``backends/fleetmux.py``, pages in ``tests/fake_fleetmux.py`` and in the Rust server). Every test runs on ``fake``
-(the protocol fake) and ``real`` (this worktree's ``fleetmux/target/debug/fleetmux``); the two old-server tests run on
+(the protocol fake) and ``real`` (this worktree's ``rust/target/debug/fleetmux``); the two old-server tests run on
 the fake only, because only the fake can play an M3 server (``FAKE_FM_NO_PAGES=1``, design §6.2).
 
 What the server *really* holds is read straight from the root's control socket (``_fm4_world.ctl`` / ``on_page``),
@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _fm4_world as W  # noqa: E402
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import fleet  # noqa: E402
+from fleetmux import fleet  # noqa: E402
 
 RS = W.ROOT_SESSION
 
@@ -460,7 +460,7 @@ def test_archive_page_opens_a_reclaimed_page_with_a_readable_history(pg):
     rec = W.record(pg.sock, archived[0])
     assert rec['type'] == 'history', rec
     args = W.identity(int(rec['pid']))
-    assert args and 'cmux_fleet.history_view' in args[1] and str(child_run) in args[1], args
+    assert args and 'fleetmux.history_view' in args[1] and str(child_run) in args[1], args
     assert ids(page_list(pg, '')) == [rw]  # the root page did not get it
     assert W.pages(pg.sock)['M0']['state'] == 'reclaimed'  # a history pane never reopens the page
 
@@ -526,7 +526,7 @@ def pg_real(request, monkeypatch):
     s = W.Servers(root, request.param, state)
     s.tmux_sock = Path('/tmp/fmx-' + uuid.uuid4().hex[:8]) / 'tmux.sock'  # short: macOS unix socket limit
     yield s
-    from cmux_fleet.backends.cmux import _tmux
+    from fleetmux.backends.cmux import _tmux
     _tmux(str(s.tmux_sock), 'kill-server')
     shutil.rmtree(s.tmux_sock.parent, ignore_errors=True)
     s.close()
@@ -534,7 +534,7 @@ def pg_real(request, monkeypatch):
 
 def sized(s, pane_id):
     """(window w, window h, client w, client h) as tmux sees it from the client of ``pane_id``'s tab."""
-    from cmux_fleet.backends.cmux import _tmux
+    from fleetmux.backends.cmux import _tmux
     tty = W.record(s.sock, pane_id).get('tty')
     out = _tmux(str(s.tmux_sock), 'list-clients', '-F',
                 '#{client_tty} #{window_width} #{window_height} #{client_width} #{client_height}').stdout

@@ -4,13 +4,13 @@
 #   scripts/smoke_midturn.sh [--expect-versions <file>]
 #
 # Run it inside a cmux terminal with the CLIs logged in, AFTER M1 (the daemon probe/steer/split
-# code in cmux_fleet/{midturn,fleet,runtime_v2,watchdog,handoff,codex_queue,roster}.py and
-# cmux_fleet/pi_extension_v2.ts) has landed. This file only WRITES the harness; the orchestrator
-# runs it by hand once M1 is ready. It never touches cmux_fleet/*.py or tests/ (Codex owns those
+# code in fleetmux/{midturn,fleet,runtime_v2,watchdog,handoff,codex_queue,roster}.py and
+# fleetmux/pi_extension_v2.ts) has landed. This file only WRITES the harness; the orchestrator
+# runs it by hand once M1 is ready. It never touches fleetmux/*.py or tests/ (Codex owns those
 # concurrently on this same worktree).
 #
 # What it does: starts five small --lifecycle smoke fleets, one at a time, each in its own
-# isolated CMUX_FLEET_HOME/CMUX_FLEET_STATE/private-Redis temp dir, drives a worker (or the
+# isolated FLEETMUX_HOME/FLEETMUX_STATE/private-Redis temp dir, drives a worker (or the
 # supervisor) into a single turn long enough to cross a 0.10 mid-turn line, and asserts the
 # r3 mechanics actually fired. Five scenarios (docs/midturn-handoff-design.md §7's combo list):
 #   1. pi supervisor   + pi worker     (task)     -- worker crosses the line
@@ -28,7 +28,7 @@
 #   PI_MODEL=provider/model             pi workers' model; required whenever a scenario uses pi workers
 #   SUPERVISOR_PI_MODEL=provider/model  pi supervisor's own model (default: PI_MODEL)
 #   PI_THINKING / SUPERVISOR_PI_THINKING  optional thinking levels
-#   PI=/path/to/pi, CLAUDE=/path/to/claude, CODEX is taken from PATH (cmux-fleet's own --codex flag
+#   PI=/path/to/pi, CLAUDE=/path/to/claude, CODEX is taken from PATH (fleetmux's own --codex flag
 #                                           is not threaded here; add one if the target machine needs it)
 #   SMOKE_PROFILE=<codex profile>        supervisor/worker Codex profile override
 #   SMOKE_TIMEOUT=1800                   seconds to wait for READY + the whole mid-turn + continuation
@@ -41,22 +41,22 @@
 #
 # ---------------------------------------------------------------------------------------------
 # TODO(M1 naming, 2026-10-27 snapshot): this worktree's M1 implementation is mid-flight (Codex is
-# editing cmux_fleet/{fleet,runtime_v2,midturn,roster,watchdog,handoff,codex_queue}.py concurrently
+# editing fleetmux/{fleet,runtime_v2,midturn,roster,watchdog,handoff,codex_queue}.py concurrently
 # with this script). Every identifier below that crosses into M1's code is pinned to a bash
 # constant, taken from grepping the snapshot at the lines noted; if the merged M1 renames any of
 # these, fix the one constant, not the call sites.
-#   - Roster `handoff:` table accepts a per-cli/per-cli:model `midturn_ratio` key (cmux_fleet/roster.py:155-161,
+#   - Roster `handoff:` table accepts a per-cli/per-cli:model `midturn_ratio` key (fleetmux/roster.py:155-161,
 #     already landed, independent of M1's daemon half) -- MIDTURN_RATIO_KEY below.
-#   - Audit event names (cmux_fleet/fleet.py:3862,3905,3959,3888,3922,3925; cmux_fleet/runtime_v2.py:839,
+#   - Audit event names (fleetmux/fleet.py:3862,3905,3959,3888,3922,3925; fleetmux/runtime_v2.py:839,
 #     851,893,948) -- EVT_* below.
 #   - Message hash field `outcome` == 'handoff_split' on a split turn's ORIGINAL message
-#     (cmux_fleet/runtime_v2.py:923-926) -- OUTCOME_SPLIT below.
-#   - The "no BLOCKED" event is literally `execution.held` (cmux_fleet/runtime_v2.py:1603) -- EVT_HELD below.
+#     (fleetmux/runtime_v2.py:923-926) -- OUTCOME_SPLIT below.
+#   - The "no BLOCKED" event is literally `execution.held` (fleetmux/runtime_v2.py:1603) -- EVT_HELD below.
 #   - Rotation label format `<slot_base>.<generation+1>`, e.g. worker-1.1 / supervisor-1.1
-#     (cmux_fleet/fleet.py:101,158,199-201; cmux_fleet/runtime_v2.py:917-919) -- not overridable, just
+#     (fleetmux/fleet.py:101,158,199-201; fleetmux/runtime_v2.py:917-919) -- not overridable, just
 #     computed inline per scenario below.
 # TODO(task calibration): scenario 5 asks the SUPERVISOR role to read files itself before dispatching,
-#     which is not how cmux_fleet/agents/supervisor*.md normally behaves (dispatch-only). If the
+#     which is not how fleetmux/agents/supervisor*.md normally behaves (dispatch-only). If the
 #     supervisor just dispatches immediately without reading anything, its own turn will never cross
 #     the mid-turn line and this scenario fails with a clear "supervisor never ordered a mid-turn
 #     handoff" message rather than a false pass -- that failure is itself useful signal, not a bug in
@@ -140,7 +140,7 @@ print_and_check_versions
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PY=${PYTHON:-python3}
-FLEET="$ROOT/cmux_fleet/fleet.py"
+FLEET="$ROOT/fleetmux/fleet.py"
 
 if ! "$PY" "$FLEET" start --help 2>/dev/null | grep -q -- '--lifecycle'; then
   echo "FAIL setup: this checkout's start has no --lifecycle; M1/M2 prerequisite is missing" >&2
@@ -160,7 +160,7 @@ stop_current() {
     "$PY" - "$CURRENT_CFG" "$ROOT" <<'EOF' >/dev/null 2>&1
 import sys
 sys.path.insert(0, sys.argv[2])
-from cmux_fleet import fleet
+from fleetmux import fleet
 fleet.manager_for(fleet.load(sys.argv[1])).close_all()
 EOF
   fi
@@ -205,14 +205,14 @@ run_case() {
   TMP=$(mktemp -d /tmp/cfsmoke-mt.XXXXXX)   # short path: Unix socket limit is 103 bytes
   CURRENT_TMP=$TMP
   unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-  export CMUX_FLEET_HOME="$TMP/home" CMUX_FLEET_STATE="$TMP/state"
-  mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE"
-  CFG="$CMUX_FLEET_HOME/latest.json"
+  export FLEETMUX_HOME="$TMP/home" FLEETMUX_STATE="$TMP/state"
+  mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE"
+  CFG="$FLEETMUX_HOME/latest.json"
   CURRENT_CFG=$CFG
   INPUT_DIR="$TMP/input"
   make_input_files "$INPUT_DIR" "$N_FILES" "$LINES_PER_FILE"
 
-  # --- roster: the only way (confirmed in cmux_fleet/roster.py) to set midturn_ratio per CLI -----
+  # --- roster: the only way (confirmed in fleetmux/roster.py) to set midturn_ratio per CLI -----
   local ROSTER="$TMP/roster.yaml"
   {
     echo "workers:"
@@ -271,7 +271,7 @@ from pathlib import Path
 timeout, n_files = float(timeout), int(n_files)
 sys.path.insert(0, root)
 import redis
-from cmux_fleet import fleet, runtime_v2, control_view
+from fleetmux import fleet, runtime_v2, control_view
 
 cfg = fleet.load(cfg_path)
 r = fleet.connect(cfg)

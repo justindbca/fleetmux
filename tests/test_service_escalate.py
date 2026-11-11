@@ -13,7 +13,7 @@ import pytest
 from test_fleet import FakeMgr
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, typed
-from cmux_fleet import fleet, runtime_v2, watchdog
+from fleetmux import fleet, runtime_v2, watchdog
 
 WORKERS = ['worker-1', 'worker-2']
 READ_FAR = 'Read(/Users/someone/notes/today.md)\n\nRead outside the working directories?\n❯ 1. Yes\n  2. No'

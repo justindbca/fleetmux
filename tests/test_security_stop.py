@@ -25,8 +25,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import audits, event, fx  # noqa: F401  (fx: pi supervisor + worker-1/2, service, v2)
 from test_channels_contract import FakeChannel
 from test_lifecycle_close import stop_tail
-from cmux_fleet import channels, fleet, fleetmux_sidebar, lifecycle_close, runtime_v2, subfleet, tabs
-from cmux_fleet.channels import envelope, security, stop
+from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, runtime_v2, subfleet, tabs
+from fleetmux.channels import envelope, security, stop
 
 OLD_PARTS = ['roster', 'advisor', 'lifecycle', 'result', 'contracts', 'subfleet', 'tabs', 'fleetmux',
              'escalations', 'waiting', 'notices', 'vetoes']  # Fleet.tick at 26392b9, in order
@@ -167,7 +167,7 @@ def listed(value):
 
 
 def resume_soft(f):
-    return '恢复派工请运行 cmux-fleet resume --config ' + str(Path(f.cfg['run']) / 'config.json') + '。'
+    return '恢复派工请运行 fleetmux resume --config ' + str(Path(f.cfg['run']) / 'config.json') + '。'
 
 
 RESUME_KILL = '本 run 已显式结束，不能用 start --resume 恢复；要继续请重新 start。'
@@ -275,7 +275,7 @@ def test_stop_pauses_service_hash_directly_with_reason_and_sets_flag(fx, monkeyp
 
 
 def test_stop_receipt_contains_resume_command_and_never_reaches_supervisor(fx, monkeypatch):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     f = fx
     arm(f, 'interrupt')
     posted, submitted, replies = [], [], []
@@ -568,7 +568,7 @@ def test_stop_redis_down_replies_stop_failed_and_writes_flag_file(fx, monkeypatc
     before = fs.files[flag]
     text = stop.handle(after, f.cfg, env(mid='3'), cmd_of(env()), audit=audit_to(f))
     assert text == envelope.receipt('invalid_command', reason='无法确认停止是否生效，停止标记未写成，请在电脑处理'
-                                    '（cmux-fleet pause --config ' + str(Path(f.cfg['run']) / 'config.json') + '）')
+                                    '（fleetmux pause --config ' + str(Path(f.cfg['run']) / 'config.json') + '）')
     assert fs.files[flag] == before
 
     # the daemon claims by rename, publishes every request (ids dedupe), acknowledges by unlinking the claim
@@ -711,7 +711,7 @@ class _OneRoundChannel:
 
 
 def _one_inbound_round(f, e):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     replies, submitted, rounds = [], [], iter([False, True])
     actor.inbound_loop(_OneRoundChannel(e), r=f.r, cfg=f.cfg, submit=lambda *a, **k: submitted.append(a),
                        reply=lambda _e, t: replies.append(t), sleep=lambda s: None, stop=lambda: next(rounds, True))

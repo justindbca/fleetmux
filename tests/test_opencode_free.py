@@ -12,8 +12,8 @@ LAUNCHER = ROOT / 'launchers/start-pi-deepseek-free.command'
 
 
 def _pi_root():
-    """The globally installed Pi package: $PI_TEST_PACKAGE_DIR / $CMUX_FLEET_PI_ROOT, else <node prefix>/lib/node_modules/..."""
-    for name in ('PI_TEST_PACKAGE_DIR', 'CMUX_FLEET_PI_ROOT'):
+    """The globally installed Pi package: $PI_TEST_PACKAGE_DIR / $FLEETMUX_PI_ROOT, else <node prefix>/lib/node_modules/..."""
+    for name in ('PI_TEST_PACKAGE_DIR', 'FLEETMUX_PI_ROOT'):
         if os.environ.get(name):
             return Path(os.environ[name])
     node = shutil.which('node')

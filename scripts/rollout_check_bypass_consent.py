@@ -3,7 +3,7 @@
 
 macmini 板块轮动 2026-10-30..11-06：开 advisor 的 Claude worker 带 --setting-sources project 起，读不到
 ~/.claude/settings.json 里的 skipDangerousModePermissionPrompt，停在 Bypass Permissions 确认框直到启动超时。
-本脚本用现场 cmux_fleet 生成监工 / worker / advised worker 三种槽的启动参数（打桩到 execvp 为止，不连 Redis、
+本脚本用现场 fleetmux 生成监工 / worker / advised worker 三种槽的启动参数（打桩到 execvp 为止，不连 Redis、
 不起 Claude、只写本次临时目录），断言每个带 --dangerously-skip-permissions 的槽，其 --settings 文件里
 skipDangerousModePermissionPrompt 为 true。
 Claude Code 版本（>= 2.1.280）沙盒里读不到（真实 HOME 整棵禁读），不在这里查，入队前已另行核对。
@@ -21,9 +21,9 @@ def done(result, reason):
 
 
 try:
-    from cmux_fleet import fleet
+    from fleetmux import fleet
 except Exception as e:  # noqa: BLE001 — any import failure is a failed rollout
-    done("fail", "现场 cmux_fleet 导入失败：%r" % e)
+    done("fail", "现场 fleetmux 导入失败：%r" % e)
 
 
 def launch_argv(work, slot, extra):

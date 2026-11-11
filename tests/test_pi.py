@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_fleet import FakeMgr, FakeRedis, turn
-from cmux_fleet import fleet, pi_adapter
+from fleetmux import fleet, pi_adapter
 
 
 def make_fleet(tmp_path, monkeypatch, worker_cli='pi'):
@@ -92,7 +92,7 @@ def test_pi_argv_and_spawn_isolation(pfx):
     assert spawn['metadata']['cli_type'] == 'pi'
     assert 'CODEX_HOME' not in spawn['env_vars']
     assert spawn['env_vars']['PI_CODING_AGENT_DIR'] == pfx.cfg['pi_home']
-    command = json.loads(spawn['env_vars']['CMUX_FLEET_PI_CALLBACK'])
+    command = json.loads(spawn['env_vars']['FLEETMUX_PI_CALLBACK'])
     assert command[-4:] == ['pi-event', str(pfx.path), 'supervisor', '0']
     assert not Path(pfx.cfg['codex_home']).exists()
     scope = (fleet.agent_cwd(pfx.cfg, name) / 'AGENTS.md').read_text()
@@ -118,7 +118,7 @@ def test_pi_supervisor_dispatches_to_official_claude_cli(tmp_path, monkeypatch):
     f.handle(dict(turn('worker-1', '{"answer":2}'), msg_id=f.agent('worker-1')['msg_id']))
     assert json.loads(f.r.get(fleet.RESULT + 'r1'))['result'] == {'answer': 2}
     assert [s['metadata']['cli_type'] for s in f.mgr.spawned] == ['pi', 'claude']
-    assert 'CMUX_FLEET_PI_CALLBACK' not in f.mgr.spawned[1]['env_vars']
+    assert 'FLEETMUX_PI_CALLBACK' not in f.mgr.spawned[1]['env_vars']
     argv = fleet.claude_argv(f.path, f.cfg, 'worker-1', 0, 'hi')
     assert argv[0] == 'claude' and '--model' in argv and '--extension' not in argv
     settings = json.loads(Path(argv[argv.index('--settings') + 1]).read_text())
@@ -315,7 +315,7 @@ def temp_redis_root(monkeypatch):
 
 
 def mock_start(tmp_path, monkeypatch):
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
     mgr = SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json',
                           session_exists=lambda: False,
@@ -374,10 +374,10 @@ def test_actual_typescript_extension_lifecycle(tmp_path):
     script = ('import json,pathlib,sys; raw=sys.stdin.read(); p=pathlib.Path(sys.argv[1]); '
               'p.open("a").write(raw+"\\n"); '
               'print(json.dumps({"status":"accepted","id":"ui-test"}) if json.loads(raw)["kind"]=="operator_input" else "")')
-    env = dict(os.environ, CMUX_FLEET_PI_CALLBACK=json.dumps([sys.executable, '-c', script, str(output), 'supervisor', '0']))
+    env = dict(os.environ, FLEETMUX_PI_CALLBACK=json.dumps([sys.executable, '-c', script, str(output), 'supervisor', '0']))
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run([node, '--experimental-strip-types', str(root / 'tests/test_pi_extension.mjs'),
-                             str(root / 'cmux_fleet/pi_extension.ts'), str(output)],
+                             str(root / 'fleetmux/pi_extension.ts'), str(output)],
                             env=env, text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'lifecycle contract passed' in result.stdout

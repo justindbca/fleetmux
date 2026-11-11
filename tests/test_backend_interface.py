@@ -13,11 +13,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import fleet  # noqa: E402
-from cmux_fleet import backends  # noqa: E402
-from cmux_fleet import cmux_manager  # noqa: E402
-from cmux_fleet.backends import base  # noqa: E402
-from cmux_fleet.backends.base import METHODS, InterfaceError  # noqa: E402
+from fleetmux import fleet  # noqa: E402
+from fleetmux import backends  # noqa: E402
+from fleetmux import cmux_manager  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
+from fleetmux.backends.base import METHODS, InterfaceError  # noqa: E402
 
 
 def shape(func):
@@ -36,13 +36,13 @@ def classes():
     """Every shipped backend manager whose module is real (the WezTerm one arrives on its own branch)."""
     cls = [backends.backend_class('cmux')]
     try:
-        importlib.import_module('cmux_fleet.backends.wezterm')
+        importlib.import_module('fleetmux.backends.wezterm')
     except ImportError:
         return cls
     wz = backends.backend_class('wezterm')
     cls += [wz] if hasattr(wz, 'supports_browser') else []
     try:
-        importlib.import_module('cmux_fleet.backends.fleetmux')
+        importlib.import_module('fleetmux.backends.fleetmux')
     except ImportError:
         return cls
     fm = backends.backend_class('fleetmux')
@@ -161,8 +161,8 @@ def test_capabilities_per_backend():
 
 def test_forwarding_module_exports_the_moved_names():
     """cmux_manager stays a forwarding module: imports, class identity and monkeypatch targets hold."""
-    from cmux_fleet import cmux_manager as fwd
-    from cmux_fleet.backends import cmux as real
+    from fleetmux import cmux_manager as fwd
+    from fleetmux.backends import cmux as real
     assert fwd.CmuxSessionManager is real.CmuxSessionManager
     assert fwd.SpawnResult is real.SpawnResult and fwd.PaneStatus is real.PaneStatus
     for name in ('cmux_available', 'tmux_session_name', 'tmux_attach_command', 'tmux_sessions',
@@ -174,7 +174,7 @@ def test_forwarding_module_exports_the_moved_names():
 
 def test_forwarding_module_picks_up_monkeypatched_functions(monkeypatch, tmp_path):
     """Tests patch ``cmux_manager.cmux_available``; the manager fleet builds must see that patch."""
-    from cmux_fleet import cmux_manager as fwd
+    from fleetmux import cmux_manager as fwd
     monkeypatch.setattr(fwd, 'cmux_available', lambda: True)
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: fwd.CmuxSessionManager('fwd-test', state_dir=tmp_path))
     assert fwd.CmuxSessionManager('fwd-test', state_dir=tmp_path).get_or_create_session() is True

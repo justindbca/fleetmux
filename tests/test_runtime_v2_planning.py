@@ -6,8 +6,8 @@ import time
 
 import pytest
 from test_fleet import FakeRedis, FakeMgr
-from cmux_fleet import fleet, runtime_v2
-from cmux_fleet.message_bus import MessageBus
+from fleetmux import fleet, runtime_v2
+from fleetmux.message_bus import MessageBus
 
 
 class Source(FakeRedis):
@@ -131,7 +131,7 @@ def test_non_pi_profile_rejected_before_dependency_check_or_retirement(plan,monk
 
 
 def test_daemon_crash_preserves_redis_instead_of_finally_shutdown(tmp_path,monkeypatch):
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     path=tmp_path/'config.json'
     path.write_text(json.dumps({'run':str(tmp_path)}))
     shutdown=[]
@@ -161,7 +161,7 @@ def test_empty_idle_plans_do_not_create_durable_intents(plan,monkeypatch):
 
 
 def test_logs_cli_exposes_read_only_cursor_and_limit(monkeypatch,tmp_path,capsys):
-    from cmux_fleet import control_view
+    from fleetmux import control_view
     cfg={'run':str(tmp_path),'transport_version':2,'workers':['worker-1']}
     path=tmp_path/'config.json'; path.write_text(json.dumps(cfg))
     calls=[]

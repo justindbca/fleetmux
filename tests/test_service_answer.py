@@ -17,7 +17,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_pi_v2_contract import PI_ROOT
 from test_service_escalate import audits, result, svc  # noqa: F401  (svc: fixture)
 from test_v2_codex_claude import answer_turn
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 WORKERS = ['worker-1']
 REPLY = {'required': ['reply'], 'allowed': ['reply']}
@@ -179,7 +179,7 @@ def test_v2_operator_request_answered_by_the_supervisor_reports_its_result(svc):
 
 # ------------------------------------------------------------------ pi schema
 def test_service_schema_source_declares_answer():
-    src = (Path(__file__).resolve().parents[1] / 'cmux_fleet/pi_extension_v2.ts').read_text()
+    src = (Path(__file__).resolve().parents[1] / 'fleetmux/pi_extension_v2.ts').read_text()
     assert ('answer: Type.Optional(Type.Array(Type.Object({ request_id: Type.Optional(Type.String()),\n'
             '      result: Type.Record(Type.String(), Type.Any()) }))),') in src
 
@@ -208,12 +208,12 @@ def test_pi_service_supervisor_schema_accepts_answer(tmp_path):
         pytest.skip('installed Pi/Node dependencies needed for actual TS contract harness')
     root = Path(__file__).resolve().parents[1]
     extension = tmp_path / 'extension.ts'
-    shutil.copy(root / 'cmux_fleet/pi_extension_v2.ts', extension)
+    shutil.copy(root / 'fleetmux/pi_extension_v2.ts', extension)
     harness = tmp_path / 'harness.mjs'
     harness.write_text(HARNESS)
     (tmp_path / 'node_modules').symlink_to(PI_ROOT / 'node_modules', target_is_directory=True)
-    env = dict(os.environ, CMUX_FLEET_PI_SLOT='supervisor', CMUX_FLEET_PI_MODE='service',
-               CMUX_FLEET_PI_BRIDGE='["x","supervisor","0"]')
+    env = dict(os.environ, FLEETMUX_PI_SLOT='supervisor', FLEETMUX_PI_MODE='service',
+               FLEETMUX_PI_BRIDGE='["x","supervisor","0"]')
     out = subprocess.run([node, '--experimental-strip-types', str(harness), str(extension)],
                          env=env, capture_output=True, text=True, timeout=20)
     assert out.returncode == 0, out.stdout + out.stderr

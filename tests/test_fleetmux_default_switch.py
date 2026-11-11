@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import fleet  # noqa: E402
-from cmux_fleet.backends import base  # noqa: E402
+from fleetmux import fleet  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location('check_deps', ROOT / 'scripts/check_deps.py')
 check_deps = importlib.util.module_from_spec(_spec)

@@ -14,9 +14,9 @@ import pytest
 
 from test_fleet import FakeRedis, cfx  # noqa: F401
 from test_pi import mock_start
-from cmux_fleet import (advisor, brake, cli_pairs, fleet, model_usage, opencode_adapter, profile_launch, roster,
+from fleetmux import (advisor, brake, cli_pairs, fleet, model_usage, opencode_adapter, profile_launch, roster,
                         runtime_v2)
-from cmux_fleet.agent_registry import AgentRegistry
+from fleetmux.agent_registry import AgentRegistry
 
 MODEL = 'opencode/deepseek-v4.1-flash-free'
 OC = {'supervisor_cli': 'pi', 'worker_cli': 'opencode', 'transport_version': 2, 'allow_development_v2': True,
@@ -84,7 +84,7 @@ def test_actor_execs_the_opencode_adapter_argv_never_codex(tmp_path, monkeypatch
     monkeypatch.setattr(fleet, 'agent_cwd', lambda c, n: tmp_path)
     monkeypatch.chdir(tmp_path)  # actor chdirs into the agent cwd: keep the suite's cwd restored
     monkeypatch.setattr(fleet.opencode_adapter, 'environment',
-                        lambda *a, **k: calls.update(env_kw=k) or {'CMUX_FLEET_OC_SLOT': 'worker-1'})
+                        lambda *a, **k: calls.update(env_kw=k) or {'FLEETMUX_OC_SLOT': 'worker-1'})
     monkeypatch.setattr(fleet.opencode_adapter, 'argv', lambda *a, **k: ['opencode', '--standalone', str(tmp_path)])
     monkeypatch.setattr(fleet, 'actor_argv', lambda *a, **k: pytest.fail('opencode must never take the Codex argv'))
     monkeypatch.setattr(fleet.os, 'execvp', lambda exe, argv: calls.update(exe=exe, argv=argv))

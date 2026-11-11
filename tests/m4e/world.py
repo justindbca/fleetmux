@@ -5,8 +5,8 @@ M12), ``<id>`` = ``<6 hex>`` (new every run, an existing one fails; short so the
 <= 103 bytes under a 28-byte root such as ``~/.m4e/fm4-integ``; the creation time is in ``ev/world-id.json``
 and ``ev/MANIFEST.json``). Below it:
 
-    r/      Redis runtime root (--redis-runtime-dir)      s/    state dir (CMUX_FLEET_STATE, fleetmux runtime)
-    h/      fake HOME (codex profile, memx wrapper, tab cwd) home/ fleet home (CMUX_FLEET_HOME)
+    r/      Redis runtime root (--redis-runtime-dir)      s/    state dir (FLEETMUX_STATE, fleetmux runtime)
+    h/      fake HOME (codex profile, memx wrapper, tab cwd) home/ fleet home (FLEETMUX_HOME)
     runs/   run directories (--runs-dir)                  bin/  shim copies `claude` / `codex`, tab stub
     kit/    the pinned studio-ops kit + completed domain kit  ev/   evidence (kept)
 
@@ -31,8 +31,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 ROOT = Path(os.environ.get('M4E_ROOT') or REAL_HOME / '.m4e' / 'fm4-e2e')
-FLEETMUX_REAL = Path(os.environ.get('CMUX_FLEET_FLEETMUX_REAL') or REPO / 'fleetmux/target/debug/fleetmux')
-SHIM = REPO / 'fleetmux/target/debug/examples/fake_cli_shim'
+FLEETMUX_REAL = Path(os.environ.get('FLEETMUX_REAL_BIN') or REPO / 'rust/target/debug/fleetmux')
+SHIM = REPO / 'rust/target/debug/examples/fake_cli_shim'
 FAKE_CLI = Path(__file__).with_name('fake_cli.py')
 STUB = Path(__file__).with_name('evermem_shell_stub.py')
 LAUNCH = Path(__file__).with_name('launch.py')
@@ -64,9 +64,9 @@ DOMAINS = """domains:
     agents: []
     mcp: []
 """
-SCRUB = ('CMUX_FLEET_TG_CMD', 'CMUX_FLEET_PARENT_CMD', 'CMUX_FLEET_FLEETMUX_THEME', 'CMUX_BIN', 'CODEX_HOME',
-         'CMUX_FLEET_INITIATOR', 'XPC_SERVICE_NAME', 'TMUX', 'TMUX_PANE', 'CMUX_FLEET_HOME', 'CMUX_FLEET_STATE',
-         'CMUX_FLEET_CONFIG', 'PYTHONPATH', 'VIRTUAL_ENV')
+SCRUB = ('FLEETMUX_TG_CMD', 'FLEETMUX_PARENT_CMD', 'FLEETMUX_THEME', 'CMUX_BIN', 'CODEX_HOME',
+         'FLEETMUX_INITIATOR', 'XPC_SERVICE_NAME', 'TMUX', 'TMUX_PANE', 'FLEETMUX_HOME', 'FLEETMUX_STATE',
+         'FLEETMUX_CONFIG', 'PYTHONPATH', 'VIRTUAL_ENV')
 SCRUB_PREFIX = ('CLAUDE', 'ANTHROPIC_', 'OPENAI_', 'CMUX_SURFACE', 'CMUX_WORKSPACE', 'FLEETMUX_')
 
 
@@ -151,7 +151,7 @@ class World:
 
     def complete_kit(self):
         """The rest of a valid domain kit around the pinned fleet dir (mayfly worker_domains [futures], advisor on);
-        shape of tests/test_kit.make_kit, validated by cmux_fleet.kit.Kit. No mcp.json (plan F23)."""
+        shape of tests/test_kit.make_kit, validated by fleetmux.kit.Kit. No mcp.json (plan F23)."""
         (self.kit / 'core').mkdir()
         (self.kit / 'core' / 'CLAUDE.md').write_text('# Core (m4e test kit)\n')
         (self.kit / 'context_domains.yaml').write_text(DOMAINS)
@@ -194,7 +194,7 @@ class World:
     def binaries(self):
         if not (SHIM.is_file() and os.access(SHIM, os.X_OK)):
             raise WorldError('fake CLI shim not built: ' + str(SHIM)
-                             + ' (cd fleetmux && cargo build -p ft-probe --example fake_cli_shim)')
+                             + ' (cd rust && cargo build -p ft-probe --example fake_cli_shim)')
         for dst in (self.claude, self.codex):
             shutil.copy2(SHIM, dst)  # a copy, never a link: `ps -o comm=` must show claude / codex (plan F4)
         (self.bin / 'fake_cli.conf').write_text('\n'.join([PYTHON, str(FAKE_CLI), str(self.ev / 'fake-cli')]) + '\n')
@@ -205,9 +205,9 @@ class World:
         """Environment of every process the test launches (plan §4.2). ``marked``: carries M4E_RUN."""
         env = {k: v for k, v in os.environ.items()
                if k not in SCRUB and not k.startswith(SCRUB_PREFIX) and k != 'M4E_RUN'}
-        env.update(HOME=str(self.h), CMUX_FLEET_HOME=str(self.home), CMUX_FLEET_STATE=str(self.s),
-                   CMUX_FLEET_CONFIG=str(self.private_config), CMUX_FLEET_FLEETMUX=str(FLEETMUX_REAL),
-                   CMUX_FLEET_FLEETMUX_REAL=str(FLEETMUX_REAL), PATH=self.path, SHELL='/bin/bash',
+        env.update(HOME=str(self.h), FLEETMUX_HOME=str(self.home), FLEETMUX_STATE=str(self.s),
+                   FLEETMUX_CONFIG=str(self.private_config), FLEETMUX_BIN=str(FLEETMUX_REAL),
+                   FLEETMUX_REAL_BIN=str(FLEETMUX_REAL), PATH=self.path, SHELL='/bin/bash',
                    M4E_LAUNCH_ROOT=str(self.dir))
         if marked:
             env['M4E_RUN'] = self.marker
@@ -236,7 +236,7 @@ class World:
         if not shutil.which('redis-server', path=self.path):
             problems.append('redis-server not on the test PATH ' + self.path)
         probe = subprocess.run(
-            [PYTHON, '-c', 'import json; from cmux_fleet.backends import fleetmux as f; '
+            [PYTHON, '-c', 'import json; from fleetmux.backends import fleetmux as f; '
                            'print(json.dumps([f.availability_problem(), f.fleetmux_bin()]))'],
             cwd=str(REPO), env=self.env(marked=False), capture_output=True, text=True, timeout=60)
         try:
@@ -250,7 +250,7 @@ class World:
             problems.append('fleetmux resolves to %s, not the worktree binary %s' % (binary, FLEETMUX_REAL))
         facts['cli'] = self.cli_resolution(problems)
         facts['sockets'] = self.socket_budget(problems)
-        probe = subprocess.run([PYTHON, '-c', 'import json, sys; from cmux_fleet import tabs; '
+        probe = subprocess.run([PYTHON, '-c', 'import json, sys; from fleetmux import tabs; '
                                               'print(json.dumps(sorted(tabs.matching(json.loads(sys.argv[1])))))',
                                 json.dumps(self.tab_argv)],
                                cwd=str(REPO), env=self.env(marked=False), capture_output=True, text=True, timeout=60)

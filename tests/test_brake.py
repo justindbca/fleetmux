@@ -12,8 +12,8 @@ import pytest
 from test_fleet import THREADS, FakeMgr, FakeRedis, decision, turn, write_rollout
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx, receive, req, session, settle, event  # noqa: F401  (fx: real-Redis v2 fleet)
-from cmux_fleet import brake, discover, fleet, runtime_v2
-from cmux_fleet import fleet_config
+from fleetmux import brake, discover, fleet, runtime_v2
+from fleetmux import fleet_config
 
 REAL_FABLE_WALL = ("⎿  You've reached your Fable limit. Run /usage-credits to continue "
                    "or switch models with /model.")
@@ -195,7 +195,7 @@ def test_max_calls_pauses_notifies_and_resume_needs_a_raise(tmp_path):
         if marker.exists():
             break
         time.sleep(0.05)
-    assert marker.read_text().startswith('[cmux-fleet brake] budget line reached')
+    assert marker.read_text().startswith('[fleetmux brake] budget line reached')
     f.handle(turn('worker-1', 'Done: worker-1/report.md'))
     f.pump()
     assert f.agent('supervisor')['state'] == 'idle' and f.r.llen('fx:inbox:supervisor') == 1  # nothing delivered

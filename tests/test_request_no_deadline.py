@@ -16,7 +16,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, typed
 from test_v2_codex_service import route, service  # noqa: F401  (fixture)
 from test_fleet import req as v1_req, results as v1_results, sfx, submit as v1_submit  # noqa: F401  (fixture)
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 
 def post(f, rid, *, to=None, timeout_s=None, replay=None):

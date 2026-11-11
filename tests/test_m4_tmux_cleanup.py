@@ -28,8 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _fake_claude  # noqa: E402
 import _fm4_world as W  # noqa: E402
 from _fleetmux_milestone import milestone  # noqa: E402
-from cmux_fleet import cmux_manager as cm  # noqa: E402
-from cmux_fleet import subfleet  # noqa: E402
+from fleetmux import cmux_manager as cm  # noqa: E402
+from fleetmux import subfleet  # noqa: E402
 from test_tmux_view import FakeCmux  # noqa: E402
 
 pytestmark = [milestone(4), pytest.mark.skipif(not Path(cm.TMUX).exists(), reason='tmux unavailable')]

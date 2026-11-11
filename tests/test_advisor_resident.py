@@ -12,7 +12,7 @@ import pytest
 from test_advisor import advisor_on
 from test_kit import make_kit
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import advisor, claude_hook, fleet, runtime_v2
+from fleetmux import advisor, claude_hook, fleet, runtime_v2
 
 SHEET = {'model': 'opus', 'effort': 'high', 'domains': ['research_web'],
          'reason': '能力表 research_web/web-research：联网取材'}
@@ -453,7 +453,7 @@ def test_advisor_off_v2_run_is_unchanged(private_redis_v2, tmp_path, monkeypatch
 
 
 def test_roster_rejects_a_worker_named_advisor():
-    from cmux_fleet import roster
+    from fleetmux import roster
     with pytest.raises(ValueError, match='not be "supervisor" or "advisor"'):
         roster.parse(b'workers:\n  - name: advisor\n', None)
 

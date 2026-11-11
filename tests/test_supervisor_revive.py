@@ -6,7 +6,7 @@ import uuid
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, session, settle  # noqa: F401  (fixture)
-from cmux_fleet import runtime_v2
+from fleetmux import runtime_v2
 
 
 def audits(f, name):

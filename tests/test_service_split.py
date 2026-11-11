@@ -23,8 +23,8 @@ from test_service_escalate import BKEY, DKEY, audits, escalations, request, resu
 from test_subfleet import (adopt_by_hook, child_daemon, die, given, hook, no_launch, spawn_m0, start_tree, step,
                            stop_child_like_daemon, tree)  # noqa: F401
 from test_v2_codex_claude import answer_turn, typed
-from cmux_fleet import fleet, runtime_v2, subfleet
-from cmux_fleet.channels import envelope
+from fleetmux import fleet, runtime_v2, subfleet
+from fleetmux.channels import envelope
 
 ROOT = Path(__file__).resolve().parents[1]
 PROPOSAL = [{'instruction': 'Fetch sources one to three into part-a.md', 'output': 'part-a.md', 'kind': 'research'},
@@ -722,7 +722,7 @@ def test_split_child_lifecycle_is_none_not_dev_task(split_tree, monkeypatch):  #
     t, f = split_tree, split_tree.f
     f.cfg['channels'] = [{'type': 'exec', 'account': 'phone'}]  # a channels parent: never inherited by a split child
     # P8 plan §4.1 (8): the parent's pinned security policy is inherited as is, never re-read by the child
-    from cmux_fleet.channels import security
+    from fleetmux.channels import security
     source = f.run_dir.parent / 'security.yaml'
     source.write_text('confirm:\n  wait_s: 60\n')
     pinned, errors = security.parse_security(source.read_text())
@@ -749,7 +749,7 @@ def test_split_child_lifecycle_is_none_not_dev_task(split_tree, monkeypatch):  #
 
 
 def test_agents_md_rows_present_in_both_files():  # 23
-    agents = ROOT / 'cmux_fleet' / 'agents'
+    agents = ROOT / 'fleetmux' / 'agents'
     worker = (agents / 'service_worker_v2.md').read_text(encoding='utf-8')
     supervisor = (agents / 'service_supervisor_v2.md').read_text(encoding='utf-8')
     assert '"escalate"' in worker and '"proposal"' in worker

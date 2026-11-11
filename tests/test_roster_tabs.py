@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import cmux_manager, fleet, roster, tabs
+from fleetmux import cmux_manager, fleet, roster, tabs
 
 
 # ------------------------------------------------------------------ 1. the roster section

@@ -18,20 +18,20 @@ LINES_PER_FILE=${LINES_PER_FILE:-400}
 SMOKE_TIMEOUT=${SMOKE_TIMEOUT:-1500}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PY=${PYTHON:-python3}
-FLEET="$ROOT/cmux_fleet/fleet.py"
+FLEET="$ROOT/fleetmux/fleet.py"
 
 TMP=$(mktemp -d /tmp/cfsmoke-ll.XXXXXX)   # short path: Unix socket limit is 103 bytes
 unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-export CMUX_FLEET_HOME="$TMP/home" CMUX_FLEET_STATE="$TMP/state"
-mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE" "$TMP/input"
-CFG="$CMUX_FLEET_HOME/latest.json"
+export FLEETMUX_HOME="$TMP/home" FLEETMUX_STATE="$TMP/state"
+mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE" "$TMP/input"
+CFG="$FLEETMUX_HOME/latest.json"
 stop_all() {
   set +e
   [ -f "$CFG" ] && "$PY" "$FLEET" stop --config "$CFG" >/dev/null 2>&1
   [ -f "$CFG" ] && "$PY" - "$CFG" "$ROOT" <<'EOF' >/dev/null 2>&1
 import sys
 sys.path.insert(0, sys.argv[2])
-from cmux_fleet import fleet
+from fleetmux import fleet
 fleet.manager_for(fleet.load(sys.argv[1])).close_all()
 EOF
   sleep 2; pids=$(pgrep -f "$TMP" || true); [ -n "$pids" ] && kill $pids 2>/dev/null
@@ -61,7 +61,7 @@ import redis
 from pathlib import Path
 cfg_path, root, tmp, n, timeout = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), float(sys.argv[5])
 sys.path.insert(0, root)
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 cfg = fleet.load(cfg_path); r = fleet.connect(cfg); bus = runtime_v2.bus_for(cfg, r)
 run = Path(cfg['run']); deadline = time.time() + timeout; ok = {}
 agent = lambda: r.hgetall(fleet.key('agent', 'worker-1'))

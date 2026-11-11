@@ -13,7 +13,7 @@ import pytest
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, mixed, submit as submit_v2, typed  # noqa: F401  (fixture)
 from test_contracts import cf, inbox, sup, submit  # noqa: F401  (fixture + helpers)
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 ROOT = Path(__file__).resolve().parents[1]
 ITEM = {'what': 'write worker-1/toy/app.py in the parent worker folder', 'why': 'the toy app lives there',
@@ -179,7 +179,7 @@ def test_sub_fleet_supervisor_and_workers_get_the_boundary_rules(cf, tmp_path):
 
 @pytest.mark.parametrize('name,where', [('supervisor.md', 'next reply'), ('supervisor_v2.md', 'next fleet_decision')])
 def test_top_supervisor_rule_row(name, where):
-    text = (ROOT / 'cmux_fleet' / 'agents' / name).read_text()
+    text = (ROOT / 'fleetmux' / 'agents' / name).read_text()
     row = next(line for line in text.splitlines() if line.startswith('| Received `[sub-fleet report]'))
     assert '"task": "report:M0:<id>"' in row and where in row
     assert "approve` only what the user's task clearly allows" in row and 'BLOCKED' in row
@@ -212,7 +212,7 @@ def lay_out(f, name):
     """The scope files a spawn wrote for a running worker; CLAUDE.md through the real kit layout
     (kit.Kit.claude_md: scope + project core rules + domain rules), as the advised / default kit spawns write it."""
     from types import SimpleNamespace
-    from cmux_fleet import kit
+    from fleetmux import kit
     cwd = fleet.agent_cwd(f.cfg, name)
     cwd.mkdir(parents=True, exist_ok=True)
     scope = f.role_scope(name, f.runtime_cfg(name), {})

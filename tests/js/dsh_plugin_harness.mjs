@@ -1,4 +1,4 @@
-// Drives cmux_fleet/dsh_bridge.mjs with a fake dsh-TUI cordis ctx and a fake bridge (dsh_fake_bridge.mjs).
+// Drives fleetmux/dsh_bridge.mjs with a fake dsh-TUI cordis ctx and a fake bridge (dsh_fake_bridge.mjs).
 // argv: <plugin> <scenario>. Prints {frames, ...} as JSON on the last line.
 import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -16,10 +16,10 @@ writeFileSync(join(pkg, "index.js"), "export const defineTool = (t) => t\n")
 const SID = "2d746058-3749-4cbc-8426-01643fe1a614", SID2 = "9c1f1a8e-0000-4000-8000-000000000002"
 Object.assign(process.env, {
   DSH_FAKE_LOG: log, DSH_FAKE_REJECT_STARTUPS: scenario === "startup_retry" ? "1" : "0", DSH_FAKE_LATE_SETTLE: scenario === "late_settle" ? "1" : "0",
-  CMUX_FLEET_DSH_BRIDGE: JSON.stringify([process.execPath, join(dirname(fileURLToPath(import.meta.url)), "dsh_fake_bridge.mjs"), "cfg.json", "worker-1", "0"]),
-  CMUX_FLEET_DSH_SLOT: "worker-1", CMUX_FLEET_DSH_GEN: "0", CMUX_FLEET_DSH_MODE: "task", CMUX_FLEET_DSH_MODEL: "wb/deep-1",
-  CMUX_FLEET_DSH_WINDOW: "400000", CMUX_FLEET_DSH_SESSION_DIR: join(dir, "sessions"), CMUX_FLEET_DSH_STARTUP: "Reply READY only.",
-  CMUX_FLEET_DSH_LOG: join(dir, "plugin.log"), CMUX_FLEET_DSH_API_KEY: "sk-secret",
+  FLEETMUX_DSH_BRIDGE: JSON.stringify([process.execPath, join(dirname(fileURLToPath(import.meta.url)), "dsh_fake_bridge.mjs"), "cfg.json", "worker-1", "0"]),
+  FLEETMUX_DSH_SLOT: "worker-1", FLEETMUX_DSH_GEN: "0", FLEETMUX_DSH_MODE: "task", FLEETMUX_DSH_MODEL: "wb/deep-1",
+  FLEETMUX_DSH_WINDOW: "400000", FLEETMUX_DSH_SESSION_DIR: join(dir, "sessions"), FLEETMUX_DSH_STARTUP: "Reply READY only.",
+  FLEETMUX_DSH_LOG: join(dir, "plugin.log"), FLEETMUX_DSH_API_KEY: "sk-secret",
 })
 const require = createRequire(import.meta.url)
 const cp = require("node:child_process"), realSpawn = cp.spawn
@@ -78,7 +78,7 @@ if (scenario === "happy") {
   out.delivered_text = followups.at(-1).content[0].text
   out.tool = await tools.get("fleet_result").execute(REPORT, { concludeTurn: () => { out.concluded = true } })
   await settle(2)
-  out.bridge_has_key = "CMUX_FLEET_DSH_API_KEY" in (bridgeEnv || {})
+  out.bridge_has_key = "FLEETMUX_DSH_API_KEY" in (bridgeEnv || {})
   out.transcript = existsSync(join(dir, "sessions", SID + ".jsonl"))
 } else if (scenario === "late_settle") {
   await deliver("m1", 2)

@@ -12,7 +12,7 @@ Rules these helpers enforce (supervisor [M11]; design §8.4 item 7-8; py-1 m4-tm
   fallback runs after that, and when it actually signalled anything the teardown fails (the product stop did not
   clean up, and that must be visible).
 - fleetmux is either ``tests/fake_fleetmux.py`` (``fake``) or this worktree's own binary (``real``:
-  ``$CMUX_FLEET_FLEETMUX_REAL``, default ``fleetmux/target/debug/fleetmux``). A missing real binary is a failure,
+  ``$FLEETMUX_REAL_BIN``, default ``rust/target/debug/fleetmux``). A missing real binary is a failure,
   never a skip (design §8.4 item 6).
 - An M4 API that does not exist yet fails the test body through :func:`need` (a clear behaviour failure); module
   import and collection never reference anything M4 adds.
@@ -33,10 +33,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 FAKE = ROOT / 'tests' / 'fake_fleetmux.py'
-REAL = Path(os.environ.get('CMUX_FLEET_FLEETMUX_REAL') or ROOT / 'fleetmux/target/debug/fleetmux')
+REAL = Path(os.environ.get('FLEETMUX_REAL_BIN') or ROOT / 'rust/target/debug/fleetmux')
 # bound before any HOME change. FM4_EVIDENCE_ROOT wins; else M4E_ROOT, the kept root the m4 gate exports for the
 # integration slot (scripts/fleetmux_gate.sh: $HOME/.m4e/fm4-integ); else py-1's own slot root.
 BASE = Path(os.environ.get('FM4_EVIDENCE_ROOT') or os.environ.get('M4E_ROOT') or Path.home() / '.m4e' / 'fm4-py')
@@ -166,11 +166,11 @@ def fail_if_signalled(root: Path, signalled: list, stop_log: list) -> None:
 # ---------------------------------------------------------------- fleetmux server under test
 
 def install_fleetmux(monkeypatch, root: Path, kind: str) -> Path:
-    """Put a ``fleetmux`` launcher for ``kind`` on PATH / in ``$CMUX_FLEET_FLEETMUX``; returns it."""
+    """Put a ``fleetmux`` launcher for ``kind`` on PATH / in ``$FLEETMUX_BIN``; returns it."""
     if kind == 'real':
         if not (REAL.is_file() and os.access(REAL, os.X_OK)):
             pytest.fail('missing dependency: real fleetmux binary %s (cargo build -p fleetmux in this worktree, '
-                        'or set CMUX_FLEET_FLEETMUX_REAL)' % REAL)
+                        'or set FLEETMUX_REAL_BIN)' % REAL)
         target = [str(REAL)]
     else:
         target = [sys.executable, str(FAKE)]

@@ -5,7 +5,7 @@ used to count them by severity alone and blocked a clean PASS; only open P0 / P1
 """
 import json
 
-from cmux_fleet import lifecycle_deliver as d
+from fleetmux import lifecycle_deliver as d
 
 
 def _verdict(tmp_path, verdict, issues, rnd=2, reviewer='opus'):

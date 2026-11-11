@@ -13,7 +13,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture)
 from test_lifecycle_close import (as_task, deliver_spec, edit_table, notes, repo, result_json, stop_tail,  # noqa: F401
                                   submit, table, write_verdict)
-from cmux_fleet import fleet, lifecycle
+from fleetmux import fleet, lifecycle
 
 AGENTS = Path(fleet.__file__).resolve().parent / 'agents'
 ISSUES = [{'id': 'P1-07', 'severity': 'P1', 'title': 'late settle race'},

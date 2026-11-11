@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from cmux_fleet import cmux_manager
+from fleetmux import cmux_manager
 
 
 def test_session_target_is_quoted(tmp_path):

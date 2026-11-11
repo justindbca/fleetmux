@@ -3,11 +3,11 @@ import json
 
 import pytest
 
-from cmux_fleet import fleet, model_usage, profile_launch
-from cmux_fleet.agent_registry import AgentRegistry
-from cmux_fleet.assignment import assign_profiles
-from cmux_fleet.planner import build_dispatch_plan
-from cmux_fleet.router import route_task
+from fleetmux import fleet, model_usage, profile_launch
+from fleetmux.agent_registry import AgentRegistry
+from fleetmux.assignment import assign_profiles
+from fleetmux.planner import build_dispatch_plan
+from fleetmux.router import route_task
 from test_fleet import fx  # noqa: F401  (fixture)
 from test_profile_integration import dispatch
 from test_profile_live import live  # noqa: F401  (fixture)
@@ -310,7 +310,7 @@ def test_switching_back_to_the_default_is_gated(live):
 
 
 def test_start_without_profiles_refuses_more_default_slots_than_the_card_allows(monkeypatch):
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
 
     def forbidden():
         pytest.fail('the default-model cap must be checked before cmux/Redis provisioning')
@@ -324,7 +324,7 @@ def test_start_without_profiles_refuses_more_default_slots_than_the_card_allows(
 
 
 def test_a_sub_fleet_on_a_capped_default_is_refused(fx):
-    from cmux_fleet import subfleet
+    from fleetmux import subfleet
     f = fx
     f.cfg.update(worker_cli='claude', worker_model=REG.model('fable').model)
     reason = subfleet.check(f, 'worker-1', 'M0', 2)

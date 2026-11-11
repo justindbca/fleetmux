@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import fleet
-from cmux_fleet.agent_registry import AgentRegistry, AgentRegistryError
-from cmux_fleet.planner import build_dispatch_plan
-from cmux_fleet.router import route_task
+from fleetmux import fleet
+from fleetmux.agent_registry import AgentRegistry, AgentRegistryError
+from fleetmux.planner import build_dispatch_plan
+from fleetmux.router import route_task
 
 SEVEN = ['astra', 'fable', 'flashnext', 'flashnext-dsh', 'haiku', 'opencode-flash-free', 'opus', 'sol', 'sonnet',
          'workbuddy-ds-dsh']  # + opencode free tier, dsh (FlashNext, WorkBuddy DeepSeek)
@@ -137,7 +137,7 @@ def test_handoff_ratio_follows_the_running_profile_card():
 @pytest.mark.parametrize('extra,expected', [([], None), (['--host', ' Studio '], 'studio')])
 def test_start_host_is_written_to_config_only_when_given(tmp_path, monkeypatch, extra, expected):
     from test_pi import mock_start
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     args, _ = mock_start(tmp_path, monkeypatch)
     monkeypatch.setattr(cmux_manager, 'CmuxSessionManager', lambda name, **kw: SimpleNamespace(
         meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json', session_exists=lambda: False,

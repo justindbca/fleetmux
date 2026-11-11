@@ -3,7 +3,7 @@ import pytest
 import yaml
 
 import test_fleet  # noqa: F401  (puts the checkout on sys.path)
-from cmux_fleet import agent_registry, brake, cli_pairs, fleet_config, lifecycle
+from fleetmux import agent_registry, brake, cli_pairs, fleet_config, lifecycle
 
 
 def test_shipped_file_has_exactly_the_blocks():

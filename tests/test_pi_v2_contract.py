@@ -9,9 +9,9 @@ import pytest
 
 
 def _pi_root():
-    """The globally installed Pi package: $CMUX_FLEET_PI_ROOT, else <node prefix>/lib/node_modules/..."""
-    if os.environ.get('CMUX_FLEET_PI_ROOT'):
-        return Path(os.environ['CMUX_FLEET_PI_ROOT'])
+    """The globally installed Pi package: $FLEETMUX_PI_ROOT, else <node prefix>/lib/node_modules/..."""
+    if os.environ.get('FLEETMUX_PI_ROOT'):
+        return Path(os.environ['FLEETMUX_PI_ROOT'])
     node = shutil.which('node')
     prefix = Path(node).resolve().parents[1] if node else Path('/nonexistent')
     return prefix / 'lib/node_modules/@earendil-works/pi-coding-agent'
@@ -29,7 +29,7 @@ def test_actual_v2_extension_contract(tmp_path):
         pytest.skip('Node >=22.19 required')
     root = Path(__file__).resolve().parents[1]
     extension = tmp_path / 'extension.ts'
-    shutil.copy(root / 'cmux_fleet/pi_extension_v2.ts', extension)
+    shutil.copy(root / 'fleetmux/pi_extension_v2.ts', extension)
     (tmp_path / 'node_modules').symlink_to(PI_ROOT / 'node_modules', target_is_directory=True)
     records = tmp_path / 'bridge-records.jsonl'
     child = tmp_path / 'bridge-fixture.py'
@@ -62,8 +62,8 @@ for line in sys.stdin:
  print(json.dumps({'kind':'reply','call_id':d.get('call_id'),'answer':{'status':status}}),flush=True)
  if d['kind']=='shutdown': break
 ''')
-    env = dict(os.environ, CMUX_FLEET_PI_BRIDGE=json.dumps([sys.executable,'-u',str(child),str(records),'worker-1','0']),
-               CMUX_FLEET_PI_SLOT='worker-1', CMUX_FLEET_PI_MODE='service')
+    env = dict(os.environ, FLEETMUX_PI_BRIDGE=json.dumps([sys.executable,'-u',str(child),str(records),'worker-1','0']),
+               FLEETMUX_PI_SLOT='worker-1', FLEETMUX_PI_MODE='service')
     result = subprocess.run([node,'--experimental-strip-types',str(root/'tests/test_pi_extension_v2.mjs'),str(extension),str(records)],
         env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr

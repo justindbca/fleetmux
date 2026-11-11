@@ -8,7 +8,7 @@
 监工只判断、只派活；worker 只执行；任务什么时候算完成，由 daemon 判定，而不是由模型说了算。上下文快满的会话会写一份交接单，
 换一个新会话接着干，所以一个任务可以跨很多个模型会话连续跑几个小时。同一个 fleet 里可以混用官方 **Claude Code**、官方
 **Codex CLI**、**Pi**（Codex 模型与本地模型）和 **opencode**，任意「监工 × worker」组合均可，前提是该组合已通过真跑冒烟
-（`cmux_fleet/config/fleet.yaml#cli_pairs`）。
+（`fleetmux/config/fleet.yaml#cli_pairs`）。
 
 **日常在用。** 2026 年 10 月起，它在三台 Mac 上以常驻服务 fleet 和定时任务 fleet 支撑一套实盘交易运作：运维团队负责其他团队的
 起停，另有盯盘交易团队、对价格与指标触发作答的策略复盘团队、定时研究团队。每个团队都有 AI 组长和 AI 组员；盯盘交易与复盘两个
@@ -46,7 +46,7 @@
 - **看门与刹车。** 每个槽位有五态卡死检测；每个任务一张预算卡（调用次数、轮数、小时数、每个账号的额度），外加一张撞墙表：撞墙的
   槽位沿模型链往下换，或者可续跑地暂停。账号写在你私有配置文件的 `accounts` 块里，绝不进代码。
 - **只有一个配置文件。** 所有表（CLI 组合、生命周期模式、撞墙表、看门对话框、模型卡、配置档、账号）都是
-  `cmux_fleet/config/fleet.yaml` 里的一个块；同格式的私有 `~/.fleetmux/fleet.yaml` 覆盖运维方允许改的块。
+  `fleetmux/config/fleet.yaml` 里的一个块；同格式的私有 `~/.fleetmux/fleet.yaml` 覆盖运维方允许改的块。
 - **官方 CLI，你自己的登录。** Claude Code 一律以官方 `claude` 交互界面、用你本人的登录运行，Pi 永远拿不到 Claude 凭证；Codex
   模型在官方 Codex CLI 里运行，或经 Pi 自己的 OpenAI 登录运行。fleetmux 不抽取或转发凭证、不伪装客户端、不经代理转发 API 调用。
 - **子 fleet。** 一个 worker 可以成为它自己子 fleet 的监工。
@@ -70,7 +70,7 @@
 
 ## 应用场景
 
-每次 `start` 都要指定 `--lifecycle`，它规定「完成」的含义以及运行如何收尾（`cmux_fleet/config/fleet.yaml#lifecycle_modes`）。
+每次 `start` 都要指定 `--lifecycle`，它规定「完成」的含义以及运行如何收尾（`fleetmux/config/fleet.yaml#lifecycle_modes`）。
 下面是它面向的几类场景，其中定时报告、常驻服务和功能开发三类已在日常运行。
 
 - **只允许使用本地模型的运维场景。** 有些环境只允许调用部署在自己机器上的模型，而本地模型很不擅长协作：记不住谁在做什么、没做完就
@@ -83,7 +83,7 @@
   时，程序发出一条请求，例如 `{"to": "exit-1", "payload": {strategy, position, trigger, data}, "reply": {"required":
   ["verdict", "param", "evidence"]}}`，由负责该角色的 worker（每个角色一份提示词，经 `--roles` 提供；工具与 skill 经 `--worker-kit`
   载入）做一次完整复盘：读持仓和行情数据、重新检验策略的前提，用 JSON 作答。指定了 `to` 的请求不经监工回合；同时到达的多个触发按
-  `--max-busy` 排队；回复字段先由 daemon 校验，你的程序再去读（`cmux-fleet results --drain`）。请求没有全局时限：过期的请求只占住
+  `--max-busy` 排队；回复字段先由 daemon 校验，你的程序再去读（`fleetmux results --drain`）。请求没有全局时限：过期的请求只占住
   它自己的槽位；卡死的 Claude Code worker 会恢复它自己的会话，并重新收到同一条请求。`--clear-after-result` 让每次复盘都从干净的
   上下文开始。fleet 不下单，也不认交易日历：结论怎么用由你的程序决定，下单走它自己的校验，开收盘前后由它对 fleet 执行
   `pause` / `resume`。
@@ -97,7 +97,7 @@
 - **定时研究报告**（`scheduled`）。调用方自己的定时器在工作日的固定时点启动 fleet（开启 `clock_gate` 时，fleet 在休市日会自己拒绝
   启动）：一个监工加两个 Claude Code worker，研究用的 skill 和网络搜索 MCP 经 `--worker-kit` 载入。任务目标里声明报告文件及其
   必含章节；daemon 按字面验收，给这次运行设硬性时限，结束时关闭工作区。
-- **常驻判定服务**（`service`）。另一个程序用 `cmux-fleet request` 发 JSON 请求；指定了 `to` 的请求直接交给该角色的 worker
+- **常驻判定服务**（`service`）。另一个程序用 `fleetmux request` 发 JSON 请求；指定了 `to` 的请求直接交给该角色的 worker
   （`--worker-names exit-1,reentry-1,...`，每个角色一份提示词，经 `--roles` 提供）。daemon 按 `reply.required` / `reply.allowed`
   校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。对无状态的一次性任务（例如用小模型从会话记录里提取记忆），
   `--clear-after-result` 在每次作答后清空上下文。详见英文版[服务模式](README.md#service-mode-resident-fleet)。
@@ -111,7 +111,7 @@
   [子 fleet](README.md#sub-fleets-a-worker-becomes-a-sub-fleet-supervisor-development)与 `docs/design.md` §44。
 - **一个常驻运维 fleet 管几条业务线**（开发中）。主监工以 service 模式运行，每条业务线一个 worker；这些 worker 各自监管名单里声明的
   一个具名子 fleet，外部程序可以按它自己的时钟启停这些子 fleet（`docs/design.md` §29）。
-- **日间与夜间模型。** `start --roster day.yaml --night-roster night.yaml` 加 `cmux-fleet night on|off`，在空闲边界把配置档有差别的
+- **日间与夜间模型。** `start --roster day.yaml --night-roster night.yaml` 加 `fleetmux night on|off`，在空闲边界把配置档有差别的
   worker 换成夜间配置档（例如免费或本地模型），槽位名不变，并告诉监工哪些已做完、哪些还没做（完整的日 → 夜 → 日运行尚未做端到端
   验收）。`start --resume` 用同样的方式把中断的运行接回来。
 - **在哪都能跑，在哪都能看。** 在 Linux 上由 `fleetmux` 后端取代 cmux；`fleetmux attach`（也可经 `ssh -t`）或 `fleetmux gui` 能从另一个
@@ -122,9 +122,8 @@
 ## 安装
 
 只有一个命令：`fleetmux <subcommand>`（如 `fleetmux start`、`fleetmux status`、`fleetmux channel`）。二进制自己跑终端子命令（`server`、
-`attach`、`reap`、`web`、`gui --runtime D`），其余 fleet 子命令转交同一发版的 Python 命令行（docs/design.md §50）。旧名长期作为别名
-保留：`cmux-fleet` 命令、`CMUX_FLEET_*` 环境变量、`~/cmux-fleet-releases` / `~/cmux-fleet-current`；Python 包仍叫 `cmux_fleet`
-（fleet 最早跑在 [cmux](https://cmux.dev) 上）。
+`attach`、`reap`、`web`、`gui --runtime D`），其余 fleet 子命令转交同一发版的 Python 命令行（docs/design.md §50）。用项目旧名装好的环境
+照常可用：旧的命令名、环境变量名和发版目录名继续作为别名（docs/design.md §50）。
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
@@ -146,11 +145,11 @@ model = "gpt-5.5"
 ## 快速上手
 
 打开一个 cmux 终端，配置好你的 Pi provider/model，并替换下面的 `local/my-model`。新启动要求 Redis v2，并需显式的开发许可。不带
-`--supervisor-cli` / `--worker-cli` 时，`start` 取 `cmux_fleet/config/fleet.yaml#cli_pairs` 里的缺省组合：**Pi 监工跑
+`--supervisor-cli` / `--worker-cli` 时，`start` 取 `fleetmux/config/fleet.yaml#cli_pairs` 里的缺省组合：**Pi 监工跑
 `openai-codex/gpt-6-astra`（thinking high），配官方 Claude Code worker**。该表列出所有支持的组合及其状态（见英文版
 [Redis v2 development runtime](README.md#redis-v2-development-runtime)），表里没有的组合直接拒绝。`start` 还必须带
 `--lifecycle <mode>`（`service`、`dev_task`、`program`、`scheduled`、`review_loop`、`smoke`，见
-`cmux_fleet/config/fleet.yaml#lifecycle_modes`）；`unverified` 组合只能以 `--lifecycle smoke` 启动。英文版里 Codex 专用的配置与
+`fleetmux/config/fleet.yaml#lifecycle_modes`）；`unverified` 组合只能以 `--lifecycle smoke` 启动。英文版里 Codex 专用的配置与
 启动示例只作为 v1 旧版参考保留。
 
 ```bash

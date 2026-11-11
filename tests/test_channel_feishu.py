@@ -42,9 +42,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
-from cmux_fleet.channels import feishu
+from fleetmux import channels
+from fleetmux.channels import base, envelope
+from fleetmux.channels import feishu
 
 ROOT = Path(__file__).resolve().parents[1]
 API = '/open-apis'
@@ -465,7 +465,7 @@ def test_send_path_imports_no_lark(tmp_path, monkeypatch):
         else:
             continue
         for r in roots:
-            assert r in sys.stdlib_module_names or r == 'cmux_fleet', 'top-level import ' + r
+            assert r in sys.stdlib_module_names or r == 'fleetmux', 'top-level import ' + r
 
 
 # ====================================================================== P3b: receive

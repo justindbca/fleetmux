@@ -19,8 +19,8 @@ import yaml
 import hook_sim
 from test_fleet import FakeMgr, traffic
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import cli_pairs, cmux_manager, fleet, pi_adapter, runtime_v2
-from cmux_fleet import fleet_config
+from fleetmux import cli_pairs, cmux_manager, fleet, pi_adapter, runtime_v2
+from fleetmux import fleet_config
 
 WORKERS = ['worker-1', 'worker-2']
 

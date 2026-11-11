@@ -21,8 +21,8 @@ from urllib.parse import parse_qsl, urlsplit
 import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels
+from fleetmux.channels import base, envelope
 
 TOKEN = '123:FAKE'
 API_BASE = 'https://bot-api.invalid'
@@ -415,7 +415,7 @@ def test_oversize_or_unknown_media_goes_to_rejected_files(tmp_path):
 def test_offset_persists_via_redis_store(private_redis_v2):  # noqa: F811
     """The actor's production store (P1d ``actor.RedisStore``) keeps the cursor across adapter instances.
     Skipped only by the fixture itself when redis-server is unavailable (brief §6.9 exception)."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     api = FakeBotAPI([message(80, 8, 'before')])
     first = make(api, store=actor.RedisStore(r, 'telegram', ACCOUNT))
@@ -619,7 +619,7 @@ def test_check_getme_and_webhook_conflict_and_LOGIN_validates_token():
     api.webhook_url = ''
     assert ch.check().ok
 
-    from cmux_fleet.channels import telegram
+    from fleetmux.channels import telegram
     login_api = FakeBotAPI()
     io = FakeIO([TOKEN + '\n'])
     assert telegram.LOGIN(ACCOUNT, io, login_api) == {'BOT_TOKEN': TOKEN}

@@ -41,12 +41,12 @@ set -u
 export DISABLE_AUTOUPDATER=1  # every Claude Code this smoke starts never self-updates (10/14 01:36 broken shared install)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PY=${PYTHON:-python3}
-FLEET="$ROOT/cmux_fleet/fleet.py"
+FLEET="$ROOT/fleetmux/fleet.py"
 TMP=$(mktemp -d /tmp/cfe2e.XXXXXX)            # short path: Unix socket limit is 103 bytes
 unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-export CMUX_FLEET_HOME="$TMP/home" CMUX_FLEET_STATE="$TMP/state"
-mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE" "$TMP/evidence/screens"
-CFG="$CMUX_FLEET_HOME/latest.json"
+export FLEETMUX_HOME="$TMP/home" FLEETMUX_STATE="$TMP/state"
+mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE" "$TMP/evidence/screens"
+CFG="$FLEETMUX_HOME/latest.json"
 ROSTER="$TMP/roster.yaml"
 WORK=${E2E_WORK:-task}
 case "$WORK" in task) LIFECYCLE=${E2E_LIFECYCLE:-smoke};; service) LIFECYCLE=${E2E_LIFECYCLE:-service};;
@@ -64,8 +64,8 @@ cleanup() {
     "$PY" - "$CFG" "$ROOT" <<'EOF' 2>&1 | sed 's/^/cleanup: /'
 import sys
 sys.path.insert(0, sys.argv[2])
-from cmux_fleet import fleet
-mgr = fleet.manager_for(fleet.load(sys.argv[1]))   # isolated CMUX_FLEET_STATE: only this run's tabs
+from fleetmux import fleet
+mgr = fleet.manager_for(fleet.load(sys.argv[1]))   # isolated FLEETMUX_STATE: only this run's tabs
 left = list(mgr._meta().get('surfaces', {}))
 print('registry surfaces before close:', left)
 print('close_all ->', mgr.close_all())
@@ -101,7 +101,7 @@ timeout = float(timeout)
 sys.path.insert(0, root)
 from pathlib import Path
 import redis
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 ev = Path(ev_dir)
 cfg = fleet.load(cfg_path)
@@ -249,7 +249,7 @@ if work == 'service':
                 'reply': {'required': ['reply'], 'allowed': ['reply']}, 'timeout_s': 900}
         rids.append(rid)
         t0 = time.time()
-        cp = subprocess.run([py, str(Path(root) / 'cmux_fleet' / 'fleet.py'), 'request', '-', '--config', cfg_path],
+        cp = subprocess.run([py, str(Path(root) / 'fleetmux' / 'fleet.py'), 'request', '-', '--config', cfg_path],
                             input=json.dumps(spec), capture_output=True, text=True, timeout=120)
         ack = cp.stdout.strip()
         log('submit %d %s -> %s rc=%d ack=%s' % (k + 1, rid, w, cp.returncode, ack[:200]))
@@ -275,7 +275,7 @@ if work == 'service':
         if any(f['tag'] == 'g1-ready' for f in foot):
             break
         time.sleep(3)
-    cp = subprocess.run([py, str(Path(root) / 'cmux_fleet' / 'fleet.py'), 'results', '--config', cfg_path],
+    cp = subprocess.run([py, str(Path(root) / 'fleetmux' / 'fleet.py'), 'results', '--config', cfg_path],
                         capture_output=True, text=True, timeout=60)
     (ev / 'results-cli.txt').write_text(cp.stdout)
     summary['submissions'] = subs
@@ -284,7 +284,7 @@ if work == 'service':
     time.sleep(4)
     refresh()
     log('operator stop (service lifecycle: stop is user_only; this script is the operator)')
-    cp = subprocess.run([py, str(Path(root) / 'cmux_fleet' / 'fleet.py'), 'stop', '--config', cfg_path],
+    cp = subprocess.run([py, str(Path(root) / 'fleetmux' / 'fleet.py'), 'stop', '--config', cfg_path],
                         capture_output=True, text=True, timeout=120)
     summary['stop'] = {'rc': cp.returncode, 'out': cp.stdout.strip()[-300:]}
     log('stop rc=%d %s' % (cp.returncode, cp.stdout.strip()[-200:]))

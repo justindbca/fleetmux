@@ -1,4 +1,4 @@
-// Drives cmux_fleet/opencode_plugin/index.js with a fake opencode ctx. argv: <plugin index.js> <scenario>.
+// Drives fleetmux/opencode_plugin/index.js with a fake opencode ctx. argv: <plugin index.js> <scenario>.
 // Prints {frames: [...bridge frames...]} as JSON. Scenarios: manual_first, mixed_startup, setup_waits_for_session,
 // tui_shows_bound_session (also drives the TUI half tui.js next to index.js with a fake TUI router).
 import { readFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs"
@@ -15,10 +15,10 @@ process.chdir(launch)
 const MODEL = "opencode/deepseek-v4.1-flash-free"
 Object.assign(process.env, {
   OC_FAKE_LOG: log,
-  CMUX_FLEET_OC_BRIDGE: JSON.stringify([process.execPath, join(dirname(fileURLToPath(import.meta.url)), "oc_fake_bridge.mjs"), "cfg.json", "worker-1", "0"]),
-  CMUX_FLEET_OC_SLOT: "worker-1", CMUX_FLEET_OC_GEN: "0", CMUX_FLEET_OC_MODE: "task", CMUX_FLEET_OC_MODEL: MODEL,
-  CMUX_FLEET_OC_WINDOW: "200000", CMUX_FLEET_OC_SESSION_DIR: join(dir, "sessions"), CMUX_FLEET_OC_STARTUP: "Reply READY only.",
-  CMUX_FLEET_OC_CATALOG_WAIT_S: "2", CMUX_FLEET_OC_LABEL: "worker-1", CMUX_FLEET_OC_LAUNCH_CWD: launch,
+  FLEETMUX_OC_BRIDGE: JSON.stringify([process.execPath, join(dirname(fileURLToPath(import.meta.url)), "oc_fake_bridge.mjs"), "cfg.json", "worker-1", "0"]),
+  FLEETMUX_OC_SLOT: "worker-1", FLEETMUX_OC_GEN: "0", FLEETMUX_OC_MODE: "task", FLEETMUX_OC_MODEL: MODEL,
+  FLEETMUX_OC_WINDOW: "200000", FLEETMUX_OC_SESSION_DIR: join(dir, "sessions"), FLEETMUX_OC_STARTUP: "Reply READY only.",
+  FLEETMUX_OC_CATALOG_WAIT_S: "2", FLEETMUX_OC_LABEL: "worker-1", FLEETMUX_OC_LAUNCH_CWD: launch,
 })
 const SID = "ses_harness01"
 const queue = [], waiters = []

@@ -6,7 +6,7 @@ import shlex
 
 from test_v2_codex_claude import mixed, no_provisioning  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 SUPERVISOR_PROMPTS = ('supervisor.md', 'supervisor_v2.md', 'service_supervisor.md', 'service_supervisor_v2.md',
                       'service_supervisor_tui_v2.md')

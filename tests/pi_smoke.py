@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import fleet, pi_adapter
+from fleetmux import fleet, pi_adapter
 from test_fleet import FakeMgr
 
 

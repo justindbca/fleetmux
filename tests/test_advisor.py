@@ -11,7 +11,7 @@ import pytest
 from test_fleet import FakeMgr, FakeRedis, decision, fx, turn  # noqa: F401
 from test_kit import make_kit
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import advisor, control_view, fleet, kit as kitmod, profile_launch, profile_runtime, runtime_v2
+from fleetmux import advisor, control_view, fleet, kit as kitmod, profile_launch, profile_runtime, runtime_v2
 
 MATRIX = {'research_web': {'web-research': {'sonnet': {'verdict': 'enough'}, 'opus': {'verdict': 'overkill'},
                                             'haiku': {'verdict': 'untested'}}},
@@ -118,7 +118,7 @@ def test_advisor_process_flags_and_fixed_cwd(tmp_path, monkeypatch):
 
 
 def test_launch_extras_are_encoded_only_when_given_and_drift_covers_them():
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux.agent_registry import AgentRegistry
     reg = AgentRegistry()
     plain = profile_launch.resolve_launch(reg.get('claude-sonnet'), reg, {})
     assert 'extras' not in plain  # Phase 5 encodings stay byte-identical
@@ -131,7 +131,7 @@ def test_launch_extras_are_encoded_only_when_given_and_drift_covers_them():
 
 
 def test_registry_kit_domains_whitelist(tmp_path):
-    from cmux_fleet.agent_registry import AgentRegistry, AgentRegistryError
+    from fleetmux.agent_registry import AgentRegistry, AgentRegistryError
     card = {'id': 'claude-x', 'display_name': 'X', 'cli': 'claude', 'capabilities': ['planning'],
             'kit': {'domains': ['research_web']}}
     (tmp_path / 'x.json').write_text(json.dumps(card))
@@ -171,7 +171,7 @@ def test_control_line_shows_advice():
 # ------------------------------------------------------------------ v1 daemon (fake Redis / cmux)
 def advisor_on(run, workers):
     """The switch lives in the roster (advisor plan §2.1): <run>/roster.yaml with advisor: on."""
-    from cmux_fleet import roster
+    from fleetmux import roster
     roster.write_advisor(Path(run) / 'roster.yaml', True, workers)
 
 
@@ -557,7 +557,7 @@ def test_v2_domain_hotload_rewrites_the_bus_body(v2adv):
 # ------------------------------------------------------------------ start --advisor (sugar: writes the roster)
 def fake_start(monkeypatch, tmp_path):
     from types import SimpleNamespace
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
     monkeypatch.setattr(fleet.shutil, 'which', lambda name: '/bin/' + Path(str(name)).name)
     mgr = SimpleNamespace(session_exists=lambda: False, meta_path=tmp_path / 'cmux' / 'meta.json',
@@ -572,7 +572,7 @@ def fake_start(monkeypatch, tmp_path):
 
 
 def test_start_advisor_flag_only_writes_the_roster(monkeypatch, tmp_path):
-    from cmux_fleet import roster
+    from fleetmux import roster
     argv = fake_start(monkeypatch, tmp_path)
     kit = make_kit(tmp_path / 'kit')
     fleet.main(argv + ['--advisor', '--worker-kit', str(kit), '--workers', '2'])
@@ -590,7 +590,7 @@ def test_start_advisor_flag_only_writes_the_roster(monkeypatch, tmp_path):
 
 def test_start_advisor_refuses_bad_kit_before_provisioning(monkeypatch, tmp_path):
     argv = fake_start(monkeypatch, tmp_path)
-    from cmux_fleet import cmux_manager
+    from fleetmux import cmux_manager
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: pytest.fail('bad kit must be refused first'))
     kit = make_kit(tmp_path / 'kit')
     (kit / 'domains' / 'fleet' / 'RULES.md').unlink()
@@ -689,7 +689,7 @@ def test_held_worker_does_not_count_as_busy_for_the_dispatch_rule(v2adv2):
 def test_broken_card_file_is_advisor_unavailable_not_a_daemon_exit(afx, monkeypatch):
     """A bad card JSON must not escape pump (the v2 main loop does not catch it): fallback per §8."""
     f = afx
-    from cmux_fleet.agent_registry import AgentRegistryError
+    from fleetmux.agent_registry import AgentRegistryError
 
     def broken(*args, **kwargs):
         raise AgentRegistryError('could not load agent card claude-opus.json: Expecting value')
@@ -708,7 +708,7 @@ def test_advisor_respawn_waits_for_a_model_ticket_then_switches(afx):
     """fable max_concurrent 1: the first slot switches, the second waits queued (no re-advice) and
     switches once the first slot's fable generation is gone."""
     f = afx
-    from cmux_fleet.agent_registry import AgentRegistry
+    from fleetmux.agent_registry import AgentRegistry
     assert AgentRegistry().get('claude-fable').max_concurrent == 1
     f.advisor_runner = Runner({'model': 'fable', 'effort': 'high', 'domains': []})
     send_decision(f, [item(), item('worker-2', 'Summarize the advisor plan into worker-2/sum.md')])
@@ -736,11 +736,11 @@ def test_advisor_respawn_waits_for_a_model_ticket_then_switches(afx):
 
 def test_advisor_respawn_to_a_card_for_another_host_blocks_the_task(afx, monkeypatch, tmp_path):
     import shutil
-    from cmux_fleet import agent_registry
+    from fleetmux import agent_registry
     reg = tmp_path / 'agents'
     shutil.copytree(Path(agent_registry.__file__).parent / 'agents', reg)  # role files
     (reg / 'models').mkdir()
-    from cmux_fleet import fleet_config
+    from fleetmux import fleet_config
     for key, card in fleet_config.block('profiles').items():
         (reg / (key + '.json')).write_text(json.dumps(card))
     for key, card in fleet_config.block('models').items():

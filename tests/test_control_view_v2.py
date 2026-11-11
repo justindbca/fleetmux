@@ -15,7 +15,7 @@ import uuid
 import pytest
 import redis
 
-from cmux_fleet import control_view as control
+from fleetmux import control_view as control
 
 
 def sid(value):
@@ -509,9 +509,9 @@ def test_renderer_crash_falls_back_and_observer_internal_failure_visible(observe
 
 def test_v1_import_path_has_no_control_side_effects():
     result = subprocess.run([sys.executable, "-c",
-        "import sys, threading; import cmux_fleet.fleet; "
-        "assert 'cmux_fleet.control_view' not in sys.modules; "
-        "import cmux_fleet.control_view; assert len(threading.enumerate()) == 1"],
+        "import sys, threading; import fleetmux.fleet; "
+        "assert 'fleetmux.control_view' not in sys.modules; "
+        "import fleetmux.control_view; assert len(threading.enumerate()) == 1"],
         capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
 
@@ -560,7 +560,7 @@ def private_redis():
 
 
 def test_real_redis_replay_full_result_snapshot_and_no_work_ack(private_redis):
-    from cmux_fleet.message_bus import MessageBus
+    from fleetmux.message_bus import MessageBus
     r, cfg = private_redis
     bus = MessageBus(r, cfg["run_id"])
     bus.register_slot("worker-1", 0, "session-zero")

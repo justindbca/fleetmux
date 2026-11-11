@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from cmux_fleet import fleet, redis_runtime
+from fleetmux import fleet, redis_runtime
 
 
 @pytest.fixture

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import fleet, pi_adapter, profile_launch
-from cmux_fleet.agent_registry import AgentRegistry
+from fleetmux import fleet, pi_adapter, profile_launch
+from fleetmux.agent_registry import AgentRegistry
 from test_fleet import decision, fx, received, traffic, turn
 from test_profile_integration import dispatch
 from test_pi import pfx
@@ -185,7 +185,7 @@ def test_fifo_switches_to_official_claude_and_reuses_ready_runtime(live, monkeyp
     assert f.agent('worker-1')['generation'] == '2'
     assert f.agent('worker-1')['runtime_profile'] == 'claude-reviewer'
     assert f.mgr.spawned[-1]['metadata']['cli_type'] == 'claude'
-    assert 'CMUX_FLEET_PI_CALLBACK' not in f.mgr.spawned[-1]['env_vars']
+    assert 'FLEETMUX_PI_CALLBACK' not in f.mgr.spawned[-1]['env_vars']
     cfg_path = f.run_dir / 'runtime/worker-1-g2.json'
     assert fleet.load(cfg_path)['worker_model'] == 'opus'
     argv = []

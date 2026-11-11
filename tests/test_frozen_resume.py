@@ -22,7 +22,7 @@ from test_v2_codex_claude import answer_turn, dispatch_one, mixed, typed  # noqa
 from test_v2_codex_service import service  # noqa: F401  (fixture)
 from test_watchdog import WORKING, audits, screens, wd  # noqa: F401  (fixture)
 from test_request_no_deadline import post, result
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 SLOT = 'worker-1'
 

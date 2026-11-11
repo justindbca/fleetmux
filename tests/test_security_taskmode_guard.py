@@ -9,7 +9,7 @@ import json
 
 from test_security_guard import make_run, bind, pretool, denied, policy, pending_ids  # helpers only
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
-from cmux_fleet import channels
+from fleetmux import channels
 
 EDIT = {'old_string': 'a', 'new_string': 'b'}
 
@@ -60,7 +60,7 @@ def test_task_ids_and_notice_are_clean_but_channel_originated_requests_stay_guar
     r.set(channels.UNTRUSTED + 'ui-ch2', 'forwarded', ex=600)
     bind(r, request='ui-ch2')
     fleet_cfg = dict(cfg, security=policy(untrusted_actions='deny'))
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     fleet.save(path, fleet_cfg)
     rc, out, _, _ = pretool(path, 'worker-1', 'Edit', dict(edit, new_string='d'))
     assert denied(out) and len(pending_ids(r)) == 2

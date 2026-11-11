@@ -17,12 +17,12 @@ export DISABLE_AUTOUPDATER=1  # every Claude Code this smoke starts never self-u
 : "${PI_MODEL:?PI_MODEL=provider/model is required}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PY=${PYTHON:-python3}
-FLEET="$ROOT/cmux_fleet/fleet.py"
+FLEET="$ROOT/fleetmux/fleet.py"
 TMP=$(mktemp -d /tmp/cfinput.XXXXXX)
 unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
-export CMUX_FLEET_HOME="$TMP/home" CMUX_FLEET_STATE="$TMP/state"
-mkdir -p "$CMUX_FLEET_HOME" "$CMUX_FLEET_STATE"
-CFG="$CMUX_FLEET_HOME/latest.json"
+export FLEETMUX_HOME="$TMP/home" FLEETMUX_STATE="$TMP/state"
+mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE"
+CFG="$FLEETMUX_HOME/latest.json"
 
 cleanup() {
   set +e
@@ -32,7 +32,7 @@ cleanup() {
     "$PY" - "$CFG" "$ROOT" <<'EOF' >/dev/null 2>&1
 import sys
 sys.path.insert(0, sys.argv[2])
-from cmux_fleet import fleet
+from fleetmux import fleet
 fleet.manager_for(fleet.load(sys.argv[1])).close_all()
 EOF
   fi
@@ -57,7 +57,7 @@ import json, os, signal, subprocess, sys, time
 cfg_path, tmp, timeout, root = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
 sys.path.insert(0, root)
 from pathlib import Path
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 cfg = fleet.load(cfg_path)
 r = fleet.connect(cfg)

@@ -15,7 +15,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import control_view, fleet, redis_runtime
+from fleetmux import control_view, fleet, redis_runtime
 
 
 def main():
@@ -54,7 +54,7 @@ def main():
             if cycle == 1:
                 client.set('runtime:smoke', 'project-local')
                 child = subprocess.run([sys.executable, '-c',
-                    'from cmux_fleet import fleet; import sys; '
+                    'from fleetmux import fleet; import sys; '
                     'r=fleet.connect(fleet.load(sys.argv[1])); '
                     'assert r.get("runtime:smoke")=="project-local"; '
                     'print("PONG"); r.close(); r.connection_pool.disconnect()', str(config)],

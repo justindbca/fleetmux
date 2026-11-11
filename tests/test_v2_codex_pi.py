@@ -15,7 +15,7 @@ from test_fleet import FakeMgr
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, decision, drive, no_message_files, typed  # noqa: F401
 from test_runtime_v2 import event, receive, session, settle
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 WORKERS = ['worker-1', 'worker-2']
 

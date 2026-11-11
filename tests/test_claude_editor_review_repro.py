@@ -2,7 +2,7 @@
 checked Claude editor path. In-memory editor + fixture-owned private Redis only."""
 import pytest
 
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 from test_claude_editor_send import editor_backend  # noqa: F401
 from test_claude_supervisor import service_fleet, no_trust, event  # noqa: F401
@@ -65,7 +65,7 @@ def test_single_line_fleet_prompt_wider_than_pane_is_submitted(editor_backend, t
 
 @RETIRED
 def test_claude_2_1_280_idle_footer_is_recognized(editor_backend, monkeypatch):
-    """P1-03: footer row copied from fleetmux/fixtures/recordings/claude-1.rec (Claude Code 2.1.280)."""
+    """P1-03: footer row copied from rust/fixtures/recordings/claude-1.rec (Claude Code 2.1.280)."""
     mgr, editor = editor_backend
     editor.text, editor.width = '', 120
     real = '  ⏵⏵ bypass permissions on (shift+tab to cycle)' + ' ' * 55 + '● high · /effort'

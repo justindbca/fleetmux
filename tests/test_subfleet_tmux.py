@@ -11,7 +11,7 @@ import pytest
 
 from test_subfleet import (WorldMgr, child_daemon, die, hook, parent_hook, spawn_m0, step,  # noqa: F401
                            stop_child_like_daemon, tree, typed_return)
-from cmux_fleet import fleet, subfleet
+from fleetmux import fleet, subfleet
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).

@@ -2,7 +2,7 @@
 
 approve-1 P8kl-test-plan.md §2: ``oob.check(rec, ev, policy, *, r, now=None) -> (ok, reason)`` checks the second
 step against the record's frozen ``oob_modes`` (never the current policy); ``desk`` = only the local
-``cmux-fleet channel approve`` (a valid ``desk_proof`` from ``config_dir()/desk.key``, never the literal
+``fleetmux channel approve`` (a valid ``desk_proof`` from ``config_dir()/desk.key``, never the literal
 ``channel == 'desk'``); ``second_channel`` = another bound ``type:account``, whitelisted private verified sender;
 ``totp`` = same sender + conversation plus an RFC 6238 code (SHA-1, 30 s, 6 digits, +-1 step) used once
 (``fx:channel:totp_used:<code>`` EX 90). ``channel login totp`` writes ``config_dir()/totp.env`` 0600 and prints the
@@ -26,8 +26,8 @@ from test_watchdog import DIALOG_RM, audits, wd  # noqa: F401
 from test_channel_approve import (env, fake_account, mark_rm_with_channels, phone, r, record,  # noqa: F401
                                   user_table, wdc)
 from test_security_action_approve import Audit, POLICY, first_step, policy_with, reg, seed_agent, ev_for, ticket_keys
-from cmux_fleet import channels
-from cmux_fleet.channels import approve, envelope, oob, security
+from fleetmux import channels
+from fleetmux.channels import approve, envelope, oob, security
 
 RFC_SECRET = b'12345678901234567890'
 RFC_B32 = base64.b32encode(RFC_SECRET).decode()
@@ -35,7 +35,7 @@ RFC_B32 = base64.b32encode(RFC_SECRET).decode()
 
 def invoke(argv, stdin=''):
     """(exit code, stdout, stderr) of ``cli.run``; an argparse exit counts as its code."""
-    from cmux_fleet.channels import cli
+    from fleetmux.channels import cli
     out, err = io.StringIO(), io.StringIO()
     try:
         code = cli.run(argv, stdin=io.StringIO(stdin), stdout=out, stderr=err)

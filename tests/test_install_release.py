@@ -3,7 +3,7 @@ tool identity.
 
 The contract these tests pin (M50, Linux/UTM delivery):
 
-- the old CLI stays exactly `<sha> <tarball> [--test] [--activate]`; `CMUX_FLEET_PYTHON` still wins;
+- the old CLI stays exactly `<sha> <tarball> [--test] [--activate]`; `FLEETMUX_PYTHON` still wins;
 - the interpreter must satisfy `deps.yaml python.min` (3.14): a host with only `python3.12` stops with a message
   instead of silently building the release venv on 3.12, while `python3.14` on PATH or `$HOME/.local/bin/python3.14`
   is picked up (UTM: `/home/user/.local/bin/python3.14` = 3.14.10);
@@ -174,12 +174,13 @@ def host_tools(world):
 
 def run(world, args, env_extra=None, path=None, python=None):
     env = {k: v for k, v in os.environ.items()
-           if k not in ('CMUX_FLEET_PYTHON', 'CMUX_FLEET_RELEASES', 'CMUX_FLEET_TOOL_SHA')}
-    env.update(HOME=str(world['home']), CMUX_FLEET_RELEASES=str(world['releases']),
+           if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES', 'FLEETMUX_TOOL_SHA',
+                        'CMUX_FLEET_PYTHON', 'CMUX_FLEET_RELEASES', 'CMUX_FLEET_TOOL_SHA')}
+    env.update(HOME=str(world['home']), FLEETMUX_RELEASES=str(world['releases']),
                FAKE_PY_LOG=str(world['log']), FAKE_REAL_PY=sys.executable)
     env.update(env_extra or {})
     if python is not None:
-        env['CMUX_FLEET_PYTHON'] = str(python)
+        env['FLEETMUX_PYTHON'] = str(python)
     env['PATH'] = (path if path is not None else str(world['bin'])) + os.pathsep + str(host_tools(world))
     return subprocess.run(['bash', str(SCRIPT)] + [str(a) for a in args], capture_output=True, text=True,
                           env=env, timeout=120)
@@ -320,12 +321,12 @@ def test_install_picks_python314_on_path_and_never_falls_back_to_312(world):
     world['releases'].rename(world['tmp'] / 'releases-old')
     done = run(world, [APP_SHA, world['tarball']], path=str(only312))
     assert done.returncode != 0
-    assert '3.14' in done.stderr and 'CMUX_FLEET_PYTHON' in done.stderr
+    assert '3.14' in done.stderr and 'FLEETMUX_PYTHON' in done.stderr
     assert not release(world).exists()
     assert logged(world) == []  # the 3.12 stub was never even asked
 
 
-def test_install_honours_the_cmux_fleet_python_override(world):
+def test_install_honours_the_fleetmux_python_override(world):
     custom = write_exe(world['tmp'] / 'custom-python', PY_TEMPLATE.replace('__RC__', '0'))
     marker = world['tmp'] / 'custom-used'
     done = run(world, [APP_SHA, world['tarball']], env_extra={'FAKE_PY_MARK': str(marker)}, python=custom)
@@ -336,8 +337,22 @@ def test_install_honours_the_cmux_fleet_python_override(world):
     bad = write_exe(world['tmp'] / 'old-python', PY_TEMPLATE.replace('__RC__', '1'))
     done = run(world, [OTHER_SHA, world['tarball']], python=bad)
     assert done.returncode != 0
-    assert 'CMUX_FLEET_PYTHON' in done.stderr
+    assert 'FLEETMUX_PYTHON' in done.stderr
     assert not release(world, OTHER_SHA).exists()
+
+
+def test_install_honours_the_legacy_python_and_releases_names(world):
+    """CMUX_FLEET_PYTHON / CMUX_FLEET_RELEASES: legacy names, kept for compatibility (new names unset)."""
+    custom = write_exe(world['tmp'] / 'custom-python', PY_TEMPLATE.replace('__RC__', '0'))
+    marker, root = world['tmp'] / 'custom-used', world['tmp'] / 'legacy-root'
+    env = {k: v for k, v in os.environ.items() if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES')}
+    env.update(HOME=str(world['home']), CMUX_FLEET_RELEASES=str(root), CMUX_FLEET_PYTHON=str(custom),
+               FAKE_PY_LOG=str(world['log']), FAKE_REAL_PY=sys.executable, FAKE_PY_MARK=str(marker),
+               PATH=str(world['bin']) + os.pathsep + str(host_tools(world)))
+    done = subprocess.run(['bash', str(SCRIPT), APP_SHA, str(world['tarball'])], capture_output=True, text=True,
+                          env=env, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert marker.exists() and (root / APP_SHA).is_dir()
 
 
 def test_failed_dependency_check_removes_the_partial_release(world):
@@ -434,7 +449,7 @@ def test_installed_json_escapes_quotes_and_backslashes_and_parses(world):
     releases = world['tmp'] / 'rel "eases\\with\\backslashes'
     tool = 'fedcba98"x\\y'
     done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--tool-sha', tool],
-               env_extra={'CMUX_FLEET_RELEASES': str(releases)})
+               env_extra={'FLEETMUX_RELEASES': str(releases)})
     assert done.returncode == 0, done.stderr
     installed = json.loads((releases / APP_SHA / 'bin' / 'installed.json').read_text())
     assert installed['tool_sha'] == tool
@@ -480,7 +495,7 @@ def test_success_prints_the_explicit_start_command_with_the_release_bin_first(wo
     assert done.returncode == 0, done.stderr
     rel2 = release(world, OTHER_SHA)
     line2 = next(l for l in done.stdout.splitlines() if l.startswith('start (release bin first on PATH):'))
-    assert line2.endswith('PATH=%s/bin:$PATH %s/.venv/bin/python -m cmux_fleet.fleet --help' % (rel2, rel2)), line2
+    assert line2.endswith('PATH=%s/bin:$PATH %s/.venv/bin/python -m fleetmux.fleet --help' % (rel2, rel2)), line2
 
 
 def test_start_command_is_executable_when_the_release_path_has_spaces_and_quotes(world):
@@ -489,7 +504,7 @@ def test_start_command_is_executable_when_the_release_path_has_spaces_and_quotes
     built = make_bin_dir(world['tmp'] / 'built')
     releases = world['tmp'] / "rel eases 'q' \"dq\""
     done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built],
-               env_extra={'CMUX_FLEET_RELEASES': str(releases)})
+               env_extra={'FLEETMUX_RELEASES': str(releases)})
     assert done.returncode == 0, done.stderr
     rel = releases / APP_SHA
     line = next(l for l in done.stdout.splitlines() if l.startswith('start (release bin first on PATH):'))
@@ -509,13 +524,13 @@ def test_a_nested_releases_root_is_created_and_only_the_leaf_is_atomic(world):
     make_python(world['bin'])
     nested = world['tmp'] / 'a42' / 'releases' / 'utm'
     assert not nested.exists()
-    done = run(world, [APP_SHA, world['tarball']], env_extra={'CMUX_FLEET_RELEASES': str(nested)})
+    done = run(world, [APP_SHA, world['tarball']], env_extra={'FLEETMUX_RELEASES': str(nested)})
     assert done.returncode == 0, done.stderr
     rel = nested / APP_SHA
     assert (rel / '.venv' / 'bin' / 'python').exists()
     # a leaf that already exists is refused and left exactly as it was (the leaf mkdir is not -p)
     (rel / 'marker').write_text('keep me\n')
-    done = run(world, [APP_SHA, world['tarball']], env_extra={'CMUX_FLEET_RELEASES': str(nested)})
+    done = run(world, [APP_SHA, world['tarball']], env_extra={'FLEETMUX_RELEASES': str(nested)})
     assert done.returncode == 1
     assert 'release exists, not touched' in done.stderr
     assert (rel / 'marker').read_text() == 'keep me\n'

@@ -11,8 +11,8 @@ def done(result, reason):
     sys.exit({"pass": 0, "fail": 1, "defer": 2}[result])
 
 
-need_files = ["cmux_fleet/fleet.py", "cmux_fleet/lifecycle.py", "cmux_fleet/config/fleet.yaml",
-              "cmux_fleet/agents/supervisor.md"]
+need_files = ["fleetmux/fleet.py", "fleetmux/lifecycle.py", "fleetmux/config/fleet.yaml",
+              "fleetmux/agents/supervisor.md"]
 try:
     texts = {f: Path(f).read_text() for f in need_files}
 except OSError as e:
@@ -23,15 +23,15 @@ for f in [x for x in need_files if x.endswith(".py")]:
     except SyntaxError as e:
         done("fail", "语法错 %s：%s" % (f, e))
 checks = [
-    ("cmux_fleet/fleet.py", "--lifecycle"),
-    ("cmux_fleet/fleet.py", "cli_change_ok"),
-    ("cmux_fleet/fleet.py", "AskUserQuestion"),
-    ("cmux_fleet/config/fleet.yaml", "hard_timeout_min: 150"),
-    ("cmux_fleet/agents/supervisor.md", "Parallel by default"),
+    ("fleetmux/fleet.py", "--lifecycle"),
+    ("fleetmux/fleet.py", "cli_change_ok"),
+    ("fleetmux/fleet.py", "AskUserQuestion"),
+    ("fleetmux/config/fleet.yaml", "hard_timeout_min: 150"),
+    ("fleetmux/agents/supervisor.md", "Parallel by default"),
 ]
 miss = ["%s 缺 %s" % (f, m) for f, m in checks if m not in texts[f]]
 import yaml  # noqa: E402
-walls_rules = "\n".join(str(v) for v in (yaml.safe_load(texts["cmux_fleet/config/fleet.yaml"])["walls"] or {}).values())
+walls_rules = "\n".join(str(v) for v in (yaml.safe_load(texts["fleetmux/config/fleet.yaml"])["walls"] or {}).values())
 if "rate limited" in walls_rules.lower():
     miss.append("fleet.yaml#walls 仍含通用 rate limited 模式")
 if miss:

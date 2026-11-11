@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import roster
+from fleetmux import roster
 
-PACK = Path(__file__).resolve().parents[1] / 'cmux_fleet' / 'agents' / 'devflow'
+PACK = Path(__file__).resolve().parents[1] / 'fleetmux' / 'agents' / 'devflow'
 # Marker lines the supervisor greps for; the worker role must tell workers to write exactly these.
 MARKERS = ['IMPORT_OR_SKIP:', 'ROWS_WITHOUT_WRITER:', 'CONTRACT_TESTS:', '接口缺口', '待用户定']
 

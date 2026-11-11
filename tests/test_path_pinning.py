@@ -1,11 +1,11 @@
 """Isolated locations reach internal processes through config.json, not the environment.
 
 cmux starts the daemon, actors and hooks in fresh login shells; they need not inherit
-CMUX_FLEET_HOME / CMUX_FLEET_STATE / CMUX_BIN, so `start` pins them and every entry point applies them."""
+FLEETMUX_HOME / FLEETMUX_STATE / CMUX_BIN, so `start` pins them and every entry point applies them."""
 import json
 from pathlib import Path
 
-from cmux_fleet import cmux_manager, fleet, fleet_config
+from fleetmux import cmux_manager, fleet, fleet_config
 
 
 def pinned(monkeypatch):
@@ -16,7 +16,7 @@ def pinned(monkeypatch):
 
 def test_pin_paths_makes_the_config_win_over_the_environment(tmp_path, monkeypatch):
     pinned(monkeypatch)
-    monkeypatch.setenv('CMUX_FLEET_HOME', '/nonexistent/home-from-env')
+    monkeypatch.setenv('FLEETMUX_HOME', '/nonexistent/home-from-env')
     cfg = {'fleet_home': str(tmp_path / 'home'), 'cmux_bin': str(tmp_path / 'bin/cmux'),
            'cmux_state_dir': str(tmp_path / 'state')}
     assert fleet.pin_paths(cfg) is cfg

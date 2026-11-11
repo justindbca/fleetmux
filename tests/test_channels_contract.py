@@ -39,8 +39,8 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_v2_codex_service import service  # noqa: F401  (fixture: a v2 service fleet on that Redis)
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope
+from fleetmux import channels
+from fleetmux.channels import base, envelope
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -608,7 +608,7 @@ def test_p0_base_poll_applies_the_same_policy(fake_registered):
 def test_p0_no_business_in_the_channels_package():
     """fleetmux is exported as a public repo: no group ids, open_ids, engine banners or trade wording."""
     pattern = re.compile(r'\b(ou|oc)_[0-9a-f]{12,}|【[^】]*引擎】|STTE|oc-relay|secrets\.env|futures/|tgog', re.I)
-    hits = [(p.name, m.group(0)) for p in (ROOT / 'cmux_fleet' / 'channels').glob('*.py')
+    hits = [(p.name, m.group(0)) for p in (ROOT / 'fleetmux' / 'channels').glob('*.py')
             for m in pattern.finditer(p.read_text(encoding='utf-8'))]
     assert hits == []
 
@@ -618,7 +618,7 @@ def test_p0_no_global_proxy_scrubbing_in_the_channels_package():
     process environment: another channel in the same fleet may need the proxy (notify_bus feishu_ws.py:65)."""
     pattern = re.compile(r'_scrub_proxy_env|os\.environ\.(pop|clear|update|setdefault)\(|del os\.environ'
                          r'|os\.environ\[[^\]]+\]\s*=(?!=)|os\.unsetenv|os\.putenv')
-    hits = [(p.name, m.group(0)) for p in (ROOT / 'cmux_fleet' / 'channels').glob('*.py')
+    hits = [(p.name, m.group(0)) for p in (ROOT / 'fleetmux' / 'channels').glob('*.py')
             for m in pattern.finditer(p.read_text(encoding='utf-8'))]
     assert hits == []
 
@@ -758,7 +758,7 @@ def test_p0_seen_keys_are_per_account():
 def test_p0_tls_verification_is_never_switched_off():
     """SMTP_SSL / IMAP4_SSL / HTTPS use ssl.create_default_context(): certificate and host name checked."""
     pattern = re.compile(r'CERT_NONE|check_hostname\s*=\s*False|_create_unverified_context|verify\s*=\s*False')
-    hits = [(p.name, m.group(0)) for p in (ROOT / 'cmux_fleet' / 'channels').glob('*.py')
+    hits = [(p.name, m.group(0)) for p in (ROOT / 'fleetmux' / 'channels').glob('*.py')
             for m in pattern.finditer(p.read_text(encoding='utf-8'))]
     assert hits == []
 
@@ -844,7 +844,7 @@ def test_p0_contracts_and_design_document_the_freeze():
     design = (ROOT / 'docs' / 'design.md').read_text(encoding='utf-8')
     assert '## 8. Channels' in contracts and '## 53. Channels' in design
     for word in ('fx:channel:origin:', 'fx:channel:outq', 'fx:channel:last', 'channel login', 'channel send',
-                 'channel status', 'channel test', 'FLEETMUX_CONFIG_DIR', 'leases/', 'CMUX_FLEET_TG_CMD',
+                 'channel status', 'channel test', 'FLEETMUX_CONFIG_DIR', 'leases/', 'FLEETMUX_TG_CMD',
                  'fx:channel:pending:', 'CONTRACT', 'YES_CURSOR', 'approve_confirm_s',
                  'callback_data', 'CARRIES_TOKENS', 'inbound_button', 'UIDVALIDITY', 'OVERFLOW',
                  'create_default_context', 'RFC 8601', 'context_token', 'redirect_host',
@@ -871,8 +871,8 @@ def test_p0_process_model_is_approved_with_configurable_supervise_defaults():
     assert 'pending supervisor review' not in contracts and 'pending supervisor' not in design
     assert 'approved by the supervisor' in contracts and 'approved by the supervisor' in design
     # importing the frozen interface (what the daemon imports) loads no adapter module and no optional dependency
-    probe = ('import sys, cmux_fleet.channels, cmux_fleet.channels.base, cmux_fleet.channels.envelope;'
-             'print(sorted(m for m in sys.modules if m in set(cmux_fleet.channels.ADAPTER_MODULES.values())'
+    probe = ('import sys, fleetmux.channels, fleetmux.channels.base, fleetmux.channels.envelope;'
+             'print(sorted(m for m in sys.modules if m in set(fleetmux.channels.ADAPTER_MODULES.values())'
              ' or m.split(".")[0] in ("lark_oapi", "websockets")))')
     out = subprocess.run([sys.executable, '-c', probe], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -1046,7 +1046,7 @@ def test_p8a_security_push_event_default_on_and_audit_names():
     assert 'security' in channels.OUT_EVENTS
     assert len(P8A_AUDIT) == 16 and set(P8A_AUDIT) <= set(channels.AUDIT_EVENTS)
     assert len(set(channels.AUDIT_EVENTS)) == len(channels.AUDIT_EVENTS)
-    fields = dict(id='p-1', reason='r', decision='d', seconds=5, resume='cmux-fleet resume', action='A', rule='x',
+    fields = dict(id='p-1', reason='r', decision='d', seconds=5, resume='fleetmux resume', action='A', rule='x',
                   level='l')
     for name in P8A_RECEIPTS:
         template = envelope.RECEIPTS[name]
@@ -1058,7 +1058,7 @@ def test_p8a_security_push_event_default_on_and_audit_names():
 
 def test_p8a_parse_security_defaults_and_rejections():
     """P8a ⑦ (brief v2.2 §8.1 table; the six user points take the notes' recommended values, all parameters)."""
-    from cmux_fleet.channels import security
+    from fleetmux.channels import security
     expected = {   # brief v2.2 §8.1, row by row
         'provenance': {'spotlight': 'on'},
         'reader': {'mode': 'on', 'model': None, 'timeout_s': 120, 'max_chars': 32000, 'raw_to_supervisor': 'off'},
@@ -1122,7 +1122,7 @@ WORKERS_YAML = 'workers:\n  - name: worker-1\n'
 
 
 def test_red_p1_roster_accepts_channels(tmp_path):
-    from cmux_fleet import roster
+    from fleetmux import roster
     roster.parse_entries(WORKERS_YAML + 'channels:\n  - {type: telegram, account: fleet-bot-1, push: [result]}\n',
                          tmp_path)
     with pytest.raises(ValueError) as exc:
@@ -1131,7 +1131,7 @@ def test_red_p1_roster_accepts_channels(tmp_path):
 
 
 def test_red_p1_lease_is_exclusive_per_account():
-    from cmux_fleet.channels import lease
+    from fleetmux.channels import lease
     a = lease.acquire('telegram', 'fleet-bot-1', run_id='r1', run='/runs/r1')
     assert a is not None and channels.lease_path('telegram', 'fleet-bot-1').exists()
     assert lease.acquire('telegram', 'fleet-bot-1', run_id='r2', run='/runs/r2') is None
@@ -1146,13 +1146,13 @@ def test_red_p1_lease_is_exclusive_per_account():
 
 
 def test_red_p1_throttle_is_the_ported_one():
-    from cmux_fleet.channels import throttle
+    from fleetmux.channels import throttle
     assert (throttle.STORM_WINDOW, throttle.STORM_THRESHOLD, throttle.THROTTLE_WINDOW) == (120, 12, 5)
     assert throttle.KEY_PREFIX.startswith(channels.KEY_PREFIX)
 
 
 def test_red_p1_queue_retries_then_dead_letters(private_redis_v2):
-    from cmux_fleet.channels import queue
+    from fleetmux.channels import queue
     r = private_redis_v2
     r.flushdb()
     item = envelope.outbound('manual', text='hello', target='explicit', channel='telegram', account='a',
@@ -1174,7 +1174,7 @@ def _env(text, **kw):
 
 
 def test_red_p1_inbound_maps_to_operator_input(private_redis_v2):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     asked, replies = [], []
@@ -1205,7 +1205,7 @@ def test_red_p1_inbound_maps_to_operator_input(private_redis_v2):
 def test_red_p1_operator_input_stores_the_origin_with_the_request(service, monkeypatch):
     """C8: the actor is the only origin writer (after the accepted reply). Fleet.handle accepts operator_input
     with a channel source, or with an origin field from an older client, and never writes fx:channel:origin:*."""
-    from cmux_fleet import fleet, runtime_v2
+    from fleetmux import fleet, runtime_v2
     f = service
     monkeypatch.setattr(fleet, 'prompt_hook_slot', lambda *a, **k: True)  # stand in for a hook / pi supervisor
     monkeypatch.setattr(fleet, 'operator_channel_problem', lambda cfg: None)  # main §48: same stand-in at the gate
@@ -1239,7 +1239,7 @@ def test_red_p1_inbox_accept_is_atomic_and_replay_is_idempotent(private_redis_v2
     Retryable, no ack, retried later under the same request id. An accepted item replayed is a duplicate and is
     not submitted again. Message ids repeat across accounts: not a duplicate. (Name kept from v1; no
     inbox_accept / event_id API is required.)"""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     acked = []
@@ -1304,7 +1304,7 @@ def test_red_p1_results_go_back_to_their_origin_once(private_redis_v2):
     """A finished request goes back to its origin once (C8: the origin carries its 7-day expiry from acceptance;
     pushing does not delete it). A result found without an origin is waited for ORIGIN_GRACE_S, then treated as
     an outside request: marked pushed, not sent. <id>.done goes to <id>'s origin via envelope.origin_id (C7)."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     origin = envelope.origin_from(_env('q'))
@@ -1330,7 +1330,7 @@ def test_red_p1_delegated_result_keeps_its_origin_for_the_followup(private_redis
     """P7 hand-off: the delegated result (status ok, result.delegated) goes to the origin like any result; the
     origin keeps its 7-day expiry from acceptance (C8), so the follow-up <id>.done still finds it through
     envelope.origin_id (C7), failed follow-ups included."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     entries = [{'type': 'telegram', 'account': 'fleet-bot-1', 'push': list(channels.DEFAULT_PUSH)}]
@@ -1356,7 +1356,7 @@ def test_red_p1_delegated_result_keeps_its_origin_for_the_followup(private_redis
 
 
 def test_red_p1_targets_origin_then_last_then_first(private_redis_v2):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     r = private_redis_v2
     r.flushdb()
     entries = [{'type': 'telegram', 'account': 'fleet-bot-1', 'push': list(channels.DEFAULT_PUSH)}]
@@ -1372,7 +1372,7 @@ def test_red_p1_targets_origin_then_last_then_first(private_redis_v2):
 
 
 def test_red_p1_supervisor_restarts_with_backoff():
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     now = [0.0]
 
     class Proc:
@@ -1414,7 +1414,7 @@ def test_red_p1_supervisor_restarts_with_backoff():
 def test_red_p1_no_channels_means_no_actor_process(tmp_path):
     """C13: one actor child per fleet (`channel actor <config.json>`), however many channels; a run without
     channels starts none (behaviour unchanged). Supervisor settings stay optional and compatible."""
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     config = str(tmp_path / 'config.json')
     assert actor.plan_processes({}, config) == []
     assert actor.plan_processes({'channels': []}, config) == []
@@ -1430,7 +1430,7 @@ def test_red_p1_no_channels_means_no_actor_process(tmp_path):
 
 
 def test_red_p1_cli_has_the_channel_subcommands():
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     p = fleet.cli()
     a = p.parse_args(['channel', 'send', '--config', 'c.json', '--event', 'daemon_down', '--text', 'down'])
     assert (a.cmd, a.channel_cmd, a.event, a.text) == ('channel', 'send', 'daemon_down', 'down')
@@ -1441,14 +1441,14 @@ def test_red_p1_cli_has_the_channel_subcommands():
     assert (a.type, a.account, a.allow, a.set) == ('telegram', 'fleet-bot-1', ['111'], ['PUSH_TO=111'])
     a = p.parse_args(['channel', 'test', 'telegram', 'fleet-bot-1', '--to', '42'])
     assert (a.channel_cmd, a.to) == ('test', '42')
-    assert p.parse_args(['channel', 'send', '--text', '-']).text == '-'  # body from stdin (CMUX_FLEET_TG_CMD style)
+    assert p.parse_args(['channel', 'send', '--text', '-']).text == '-'  # body from stdin (FLEETMUX_TG_CMD style)
     a = p.parse_args(['channel', 'status', '--config', 'c.json', '--json'])
     assert a.channel_cmd == 'status' and a.json
 
 
 def test_red_p1_channels_take_over_from_the_tg_command(monkeypatch, tmp_path):
-    from cmux_fleet import lifecycle_close
-    from cmux_fleet.channels import actor
+    from fleetmux import lifecycle_close
+    from fleetmux.channels import actor
     sent = []
     monkeypatch.setattr(actor, 'send_direct', lambda cfg, item: sent.append(item) or {'status': 'sent'})
     monkeypatch.setenv(lifecycle_close.TG_ENV, 'false')
@@ -1469,9 +1469,9 @@ def test_red_p1_channels_take_over_from_the_tg_command(monkeypatch, tmp_path):
 
 
 def test_red_p6_delete_approval_hooks_exist():
-    from cmux_fleet import watchdog
-    from cmux_fleet import runtime_v2
-    from cmux_fleet.channels import approve  # P6b: the module responsible for writing fx:channel:pending:*
+    from fleetmux import watchdog
+    from fleetmux import runtime_v2
+    from fleetmux.channels import approve  # P6b: the module responsible for writing fx:channel:pending:*
     for name in ('register', 'card', 'handle_command', 'mark_done'):
         assert callable(getattr(approve, name, None)), name
     assert not hasattr(approve, 'answer')  # v1 entry point: no alias left behind
@@ -1481,7 +1481,7 @@ def test_red_p6_delete_approval_hooks_exist():
 
 
 def test_red_p6_daemon_down_section_sends_a_channel_message(tmp_path):
-    from cmux_fleet import fleet
+    from fleetmux import fleet
     cfg = {'python': '/usr/bin/python3', 'run': str(tmp_path),
            'channels': [{'type': 'telegram', 'account': 'fleet-bot-1', 'push': list(channels.DEFAULT_PUSH)}]}
     text = fleet.daemon_down_section(cfg, True)
@@ -1490,12 +1490,12 @@ def test_red_p6_daemon_down_section_sends_a_channel_message(tmp_path):
 
 
 def test_red_p7_split_budget_is_a_roster_limit():
-    from cmux_fleet import roster
+    from fleetmux import roster
     assert roster.parse_limits({'split_budget_h': 4}) == {'split_budget_h': 4}
 
 
 def test_red_p7_service_prompts_carry_the_split_line():
-    agents = ROOT / 'cmux_fleet' / 'agents'
+    agents = ROOT / 'fleetmux' / 'agents'
     # brief v2.1 #3: P7 reuses the §44 escalate machinery: the worker answers with a "proposal", the
     # supervisor sees the §44 "[escalate]" wording (P7b writes both md files; red until then).
     assert '"proposal"' in (agents / 'service_worker_v2.md').read_text(encoding='utf-8')

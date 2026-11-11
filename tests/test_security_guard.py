@@ -21,12 +21,12 @@ import uuid
 import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import fleet, guard, runtime_v2
-from cmux_fleet import channels
-from cmux_fleet.channels import envelope, security
+from fleetmux import fleet, guard, runtime_v2
+from fleetmux import channels
+from fleetmux.channels import envelope, security
 
 ROOT = Path(__file__).resolve().parents[1]
-FLEET = ROOT / 'cmux_fleet' / 'fleet.py'
+FLEET = ROOT / 'fleetmux' / 'fleet.py'
 BUSINESS = ('futu', 'moomoo', 'ibkr', 'stte', 'macmini', 'studio', 'notify_bus', 'order_gate', 'oc_', 'ou_')
 
 
@@ -130,7 +130,7 @@ def wait_for(fn, timeout=10.0, proc=None):
 
 def approve_pending(r, p_id, pol, sender='111', conversation='42'):
     """The real P8k two-step approval of one action record (first step -> nonce, second step -> ticket)."""
-    from cmux_fleet.channels import approve
+    from fleetmux.channels import approve
     import tempfile
     from unittest import mock
     cfgdir = tempfile.mkdtemp(prefix='fleetmux-cfg-')               # the whitelisted account; never the real home
@@ -143,7 +143,7 @@ def approve_pending(r, p_id, pol, sender='111', conversation='42'):
 
 
 def _approve_pending(r, p_id, pol, sender, conversation):
-    from cmux_fleet.channels import approve
+    from fleetmux.channels import approve
     replies, posted = [], []
     first = envelope.make('telegram', 'fleet-bot-1', conversation=conversation, message_id=str(uuid.uuid4().int % 10**6) + ':' + conversation,
                           sender=sender, text='/approve ' + p_id)
@@ -157,7 +157,7 @@ def _approve_pending(r, p_id, pol, sender, conversation):
     ev = posted[-1]
     rec = r.hgetall(channels.PENDING + p_id)
     answer = getattr(approve, 'answer_action')
-    from cmux_fleet.message_bus import MessageBus                   # as RuntimeV2.user_dialog_answer: the run's stream
+    from fleetmux.message_bus import MessageBus                   # as RuntimeV2.user_dialog_answer: the run's stream
     stream = MessageBus(r, rec.get('run_id', '')).audit_key
     sink = lambda event, **f: r.xadd(stream, dict({k: str(v) for k, v in f.items()}, event=event))  # noqa: E731
     return answer(r, rec, ev, policy=pol, audit=sink, now=time.time())
@@ -176,7 +176,7 @@ DELETE_NEG = ['pytest -q 2>/dev/null', 'ls >/dev/null 2>&1', 'git commit -m "rem
 
 
 def test_classify_delete_via_bash_uses_watchdog_markers(tmp_path):
-    from cmux_fleet import watchdog
+    from fleetmux import watchdog
     classify = getattr(guard, 'classify')
     pol, cfg = policy(), {'run': str(tmp_path), 'roster': str(tmp_path / 'roster.yaml')}
     for cmd in DELETE_POS:
@@ -248,7 +248,7 @@ def test_real_money_has_no_builtin_only_injected_patterns(tmp_path):
     got = classify('Bash', {'command': 'python order_gate.py --buy 1'}, injected, cfg)
     assert got == ('real_money', 'high')
     assert classify('Bash', {'command': 'node placeOrder.js'}, injected, cfg)[0] == 'real_money'
-    source = (ROOT / 'cmux_fleet' / 'guard.py').read_text().lower()
+    source = (ROOT / 'fleetmux' / 'guard.py').read_text().lower()
     assert not [w for w in BUSINESS if w in source]
     getattr(guard, 'action_hash')  # the module is complete, not just free of words
 

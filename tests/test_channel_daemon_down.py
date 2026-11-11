@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from cmux_fleet import channels, fleet
+from fleetmux import channels, fleet
 
 RUN = '/tmp/fleetmux-p6d-run'
 FLEET_PY = str(Path(fleet.__file__).resolve())
@@ -94,7 +94,7 @@ def test_channel_send_line_parses_with_shlex_same_prefix_as_restart():
                                              cmux_state_dir='/var/state dir'), watched)
         send, restart = shlex.split(channel_command(text)), shlex.split(restart_command(text))
         assert send[:send.index('channel')] == restart[:restart.index('start')]   # env + python + fleet.py
-        assert FLEET_PY in send and 'CMUX_FLEET_HOME=/opt/fleet home' in send
+        assert FLEET_PY in send and 'FLEETMUX_HOME=/opt/fleet home' in send
 
 
 def test_section_absent_for_subfleet_parent_config():

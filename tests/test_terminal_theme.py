@@ -1,4 +1,4 @@
-"""Tests for cmux_fleet.terminal_theme (OSC 10/11 colour probing).
+"""Tests for fleetmux.terminal_theme (OSC 10/11 colour probing).
 
 Hard rules for this file (it used to hang for 20 minutes):
 
@@ -24,7 +24,7 @@ import tty
 
 import pytest
 
-from cmux_fleet import terminal_theme
+from fleetmux import terminal_theme
 
 
 QUERY = b'\x1b]11;?\x1b\\\x1b]10;?\x1b\\'

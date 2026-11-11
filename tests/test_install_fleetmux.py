@@ -277,7 +277,7 @@ def test_release_appends_xterm_notices_to_fleetmux_web():
     web_tar = first(lambda l: 'tar ' in l and 'fleetmux-web LICENSE THIRD-PARTY-LICENSES' in l, web_about)
     web_part = lines[web_about:web_tar]
     cat = [i for i, l in enumerate(web_part)
-           if 'cat fleetmux/crates/web/assets/xterm/THIRD-PARTY-JS.txt' in l and '>> stage/THIRD-PARTY-LICENSES' in l]
+           if 'cat rust/crates/web/assets/xterm/THIRD-PARTY-JS.txt' in l and '>> stage/THIRD-PARTY-LICENSES' in l]
     grep = [i for i, l in enumerate(web_part)
             if "grep -q '@xterm/xterm 6.0.0' stage/THIRD-PARTY-LICENSES" in l]
     assert len(cat) == 1 and len(grep) == 1 and cat[0] < grep[0], web_part

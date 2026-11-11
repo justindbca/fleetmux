@@ -42,7 +42,7 @@ target() {
     'Darwin x86_64') echo x86_64-apple-darwin ;;
     'Linux x86_64'|'Linux amd64') echo x86_64-unknown-linux-musl ;;
     'Linux aarch64'|'Linux arm64') echo aarch64-unknown-linux-musl ;;
-    *) die "no prebuilt fleetmux for $system $machine (build it: cargo install --path fleetmux/crates/app)" ;;
+    *) die "no prebuilt fleetmux for $system $machine (build it: cargo install --path rust/crates/app)" ;;
   esac
 }
 

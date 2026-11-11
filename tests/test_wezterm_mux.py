@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet.backends import wezterm as wz  # noqa: E402
+from fleetmux.backends import wezterm as wz  # noqa: E402
 
 WEZTERM = shutil.which('wezterm')
 MUX = shutil.which('wezterm-mux-server')

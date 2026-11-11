@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import cmux_manager, fleet
+from fleetmux import cmux_manager, fleet
 
 WORKERS = ['memx-ops', 'tgog-ops']
 

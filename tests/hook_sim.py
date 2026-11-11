@@ -19,7 +19,7 @@ tests/test_claude_hook_delivery.py runs the real hook command in subprocesses in
 import json
 import os
 
-from cmux_fleet import claude_hook, fleet
+from fleetmux import claude_hook, fleet
 
 FEEDBACK = 'Stop hook feedback:\n'
 _armed = {}      # mailbox key -> (cfg, slot, generation, thread)

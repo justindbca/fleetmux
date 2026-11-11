@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cmux_fleet import codex_queue, fleet, handoff, midturn, runtime_v2, watchdog
+from fleetmux import codex_queue, fleet, handoff, midturn, runtime_v2, watchdog
 from test_runtime_v2_planning import plan  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
 from test_v2_codex_claude import mixed, answer_turn, dispatch_one  # noqa: F401
@@ -451,7 +451,7 @@ def test_watchdog_midturn_kill_continues_without_frozen_report_and_failure_resum
 def test_bridge_fault_text_says_held_or_link_lost(reason, msg, text):
     """The pane says "通信中断" only when the link itself is gone; a daemon hold shows the daemon's reason."""
     import threading
-    from cmux_fleet.agent_bridge import AgentBridge
+    from fleetmux.agent_bridge import AgentBridge
     frames = []
     bus = SimpleNamespace(message=lambda mid: msg, mark_uncertain=lambda *a: None)
     me = SimpleNamespace(lock=threading.RLock(), faulted=False, stop_event=threading.Event(),

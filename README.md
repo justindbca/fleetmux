@@ -9,7 +9,7 @@ terminal sessions. The supervisor only judges and dispatches; workers only execu
 decides when the work is done. Sessions near their context limit hand over to a fresh session with a written note,
 so one task can run for hours across many model sessions. Official **Claude Code**, official **Codex CLI**, **Pi**
 (Codex models and local models) and **opencode** mix in one fleet, in any supervisor × worker pairing that has
-passed a real smoke run (`cmux_fleet/config/fleet.yaml#cli_pairs`).
+passed a real smoke run (`fleetmux/config/fleet.yaml#cli_pairs`).
 
 **In daily use.** Since October 2026 it has run resident service fleets and scheduled task fleets on three Macs
 for a live trading operation: an ops team that starts and stops the other teams, a trading desk, a strategy review
@@ -58,7 +58,7 @@ Available for freelance work: AI setup from zero, agent harness tuning, LLM capa
   hours, per-account quota) and a usage-wall table that moves a walled slot down its model chain or pauses resumably.
   Accounts live in the `accounts` block of your private copy of the config file, never in code.
 - **One config file.** Every table (CLI pairs, lifecycle modes, walls, watchdog dialogs, model cards,
-  profiles, accounts) is a block of `cmux_fleet/config/fleet.yaml`; a private `~/.fleetmux/fleet.yaml`
+  profiles, accounts) is a block of `fleetmux/config/fleet.yaml`; a private `~/.fleetmux/fleet.yaml`
   in the same format overrides the blocks an operator may change.
 - **Official CLIs, your own login.** Claude Code always runs as the official `claude` TUI with your own login, and
   Pi is never given Claude credentials; Codex models run in the official Codex CLI or through Pi's own OpenAI login.
@@ -82,7 +82,7 @@ Available for freelance work: AI setup from zero, agent harness tuning, LLM capa
 ## Use cases
 
 Every `start` names a `--lifecycle`; it decides what "done" means and how the run closes
-(`cmux_fleet/config/fleet.yaml#lifecycle_modes`). These are the shapes it is built for; the scheduled report, the resident service and feature development run in daily use.
+(`fleetmux/config/fleet.yaml#lifecycle_modes`). These are the shapes it is built for; the scheduled report, the resident service and feature development run in daily use.
 
 - **Operations that may only use local models.** Some environments allow only models running on your own
   machines, and local models are poor at working together: they lose track of who is doing what, report work as
@@ -101,7 +101,7 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
   tools and skills through `--worker-kit`) runs a full review: it reads the position and the market data, rechecks
   the strategy's assumptions and answers in JSON. A request that names `to` skips the supervisor's turn; triggers
   that arrive together queue under `--max-busy`; the daemon checks the reply's fields before your program reads it
-  (`cmux-fleet results --drain`). Requests have no global deadline: one that expires holds only its own slot, and a
+  (`fleetmux results --drain`). Requests have no global deadline: one that expires holds only its own slot, and a
   frozen Claude Code worker resumes its own session and gets the same request again. `--clear-after-result` starts
   every review from a clean context. The fleet places no orders and knows no calendar: your program decides what to
   do with the verdict, sends any order through its own checks, and `pause` / `resume`s the fleet around market hours.
@@ -121,7 +121,7 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
   the business day (with `clock_gate` on, the fleet itself refuses to launch on a closed market day): a supervisor plus two Claude Code workers that carry research skills and a web-search MCP
   through `--worker-kit`. The goal declares the report file and the sections it must contain; the daemon
   accepts it literally, gives the run a hard time budget and closes the workspace when it ends.
-- **Resident judgment service** (`service`). Another program sends JSON requests with `cmux-fleet request`;
+- **Resident judgment service** (`service`). Another program sends JSON requests with `fleetmux request`;
   a request that names `to` goes straight to that role's worker (`--worker-names exit-1,reentry-1,...`, one
   prompt per role through `--roles`). The daemon checks each reply against `reply.required` / `reply.allowed`,
   and the caller holds the fleet outside its working hours with `pause` / `resume`. For stateless one-shot work
@@ -141,7 +141,7 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
 - **One resident operations fleet for several lines of work** (development). A main supervisor in service mode
   owns one worker per business line; each of those workers supervises a named child fleet declared in the roster,
   which an outside program can start and stop on its own clock (`docs/design.md` §29).
-- **Day and night models.** `start --roster day.yaml --night-roster night.yaml` and `cmux-fleet night on|off`
+- **Day and night models.** `start --roster day.yaml --night-roster night.yaml` and `fleetmux night on|off`
   swap each worker whose profile differs to its night profile (e.g. a free or local model) at an idle boundary, same slot names, and
   tell the supervisor what is done and what is left (a full day → night → day run is not yet accepted end to end). `start --resume` brings an interrupted run back the same way.
 - **Run anywhere, watch from anywhere.** On Linux the `fleetmux` backend replaces cmux; `fleetmux attach` (also
@@ -200,9 +200,9 @@ What the daemon enforces, independently of what the models claim:
 
 One command: `fleetmux <subcommand>` (e.g. `fleetmux start`, `fleetmux status`, `fleetmux channel`). The binary runs
 its own terminal subcommands (`server`, `attach`, `reap`, `web`, `gui --runtime D`) and hands every fleet subcommand
-to the Python CLI of the same release (docs/design.md §50). The older name stays a long-term alias: the `cmux-fleet`
-command, `CMUX_FLEET_*` variables, `~/cmux-fleet-releases` / `~/cmux-fleet-current`; the Python package is still
-`cmux_fleet` (the fleet first ran on [cmux](https://cmux.dev)).
+to the Python CLI of the same release (docs/design.md §50). Setups made under the project's
+earlier name keep working: its command, environment variable and release directory names stay accepted as aliases
+(docs/design.md §50).
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
@@ -227,16 +227,16 @@ scripts/install_release.sh <sha> <tarball> [--bin-dir DIR] [--tool-sha SHA] [--t
 ```
 
 One application release per full source SHA: the tarball (a `git archive <sha>`) is unpacked into
-`$FLEETMUX_RELEASES/<sha>` (old name `$CMUX_FLEET_RELEASES`; default `~/fleetmux-releases`, with a missing
-`~/cmux-fleet-releases` linked to it and an existing one left alone), the release's `.venv` is built from the pinned
+`$FLEETMUX_RELEASES/<sha>` (default `~/fleetmux-releases`; the releases directory of
+the project's earlier name is linked to it when missing and left alone when it exists), the release's `.venv` is built from the pinned
 requirements, an already-built `--bin-dir` (`fleetmux`, `fleetmux-web`, `SHA256SUMS`, `manifest.json`) is verified
 and both binaries land in `<release>/bin`, and `scripts/check_deps.py` runs with `<release>/bin` first on `PATH`.
 An existing release is never joined or overwritten (the directory is created with a bare `mkdir`), a failed
 install removes only the directory that run created, and `<sha>` must be 7-40 hex characters because it is the
 release directory name. `--test` runs the release's own suite and keeps the complete log outside the release
 dir, at `<releases>/.logs/<sha>-<timestamp>.log`, printing that path (so a failed run stays diagnosable);
-`--activate` is the only step that moves `~/fleetmux-current` (and the old name `~/cmux-fleet-current`, unless
-that is a real directory). On success the installer prints one explicit
+`--activate` is the only step that moves `~/fleetmux-current` (and the link of the project's earlier
+name, unless that is a real directory). On success the installer prints one explicit
 start command, and records it as `start_command` in `<release>/bin/installed.json`, so `fleetmux` resolves to
 this release instead of a stale `~/.local/bin` build:
 
@@ -251,10 +251,10 @@ not a native PASS and not an acceptance receipt.
 
 Open a cmux terminal, configure your Pi provider/model and replace `local/my-model` below.
 New starts require Redis v2 and an explicit development opt-in. Without `--supervisor-cli` / `--worker-cli`, `start`
-takes the default pair from `cmux_fleet/config/fleet.yaml#cli_pairs`: a **Pi supervisor on `openai-codex/gpt-6-astra` (thinking
+takes the default pair from `fleetmux/config/fleet.yaml#cli_pairs`: a **Pi supervisor on `openai-codex/gpt-6-astra` (thinking
 high) with official Claude Code workers**. That table lists every supported pair and its status
 (see "Redis v2 development runtime"); a pair it does not list is refused. `start` also requires `--lifecycle <mode>`
-(`service`, `dev_task`, `program`, `scheduled`, `review_loop`, `smoke`; see `cmux_fleet/config/fleet.yaml#lifecycle_modes`); an
+(`service`, `dev_task`, `program`, `scheduled`, `review_loop`, `smoke`; see `fleetmux/config/fleet.yaml#lifecycle_modes`); an
 `unverified` pair starts only with `--lifecycle smoke`.
 The Codex-specific setup and launch examples below are retained only as legacy v1 reference.
 
@@ -294,7 +294,7 @@ fleetmux start --backend wezterm --workers 2 --supervisor-cli pi --worker-cli pi
   embedded — fleet prints `<run>/history.html` in `daemon` and opens it with `open` / `xdg-open` when
   a desktop is available. Named sub-fleets still work through tmux.
 * **fleetmux** (the default off macOS since M3; on macOS only with `--backend fleetmux`): fleet's own
-  fixed-layout terminal written in Rust (`fleetmux/`, MIT) — see the subsection below.
+  fixed-layout terminal written in Rust (`rust/`, MIT) — see the subsection below.
 
 #### fleetmux backend (Linux default since M3)
 
@@ -303,15 +303,15 @@ Each run gets **one private `fleetmux server`** that owns every agent's PTY and 
 over `ssh`. Closing a viewer never stops an agent.
 
 * **Install** (one of):
-  * build from this checkout: `cd fleetmux && cargo install --path crates/app`, or `cd fleetmux && cargo build
-    --release` and put `target/release/fleetmux` on `PATH`. Run cargo inside `fleetmux/` so that the toolchain
-    pinned by `fleetmux/rust-toolchain.toml` is used. On Linux, building the workspace also needs
+  * build from this checkout: `cd rust && cargo install --path crates/app`, or `cd rust && cargo build
+    --release` and put `target/release/fleetmux` on `PATH`. Run cargo inside `rust/` so that the toolchain
+    pinned by `rust/rust-toolchain.toml` is used. On Linux, building the workspace also needs
     `libwebkit2gtk-4.1-dev` (for the `fleetmux-web` window, M2.5; `apt-get install libwebkit2gtk-4.1-dev`);
   * `scripts/install_fleetmux.sh [--dest DIR]` installs the prebuilt binary pinned by `deps.yaml`
     (`programs.fleetmux.min`) into `~/.local/bin` by default and refuses it unless its sha256 matches. It
     downloads from the GitHub release `v<min>` (`.github/workflows/release.yml`). If that release has not been
     published yet, the script fails and installs nothing; build from source instead.
-  * `$CMUX_FLEET_FLEETMUX` points fleet at a specific binary; otherwise `fleetmux` on `PATH` is used.
+  * `$FLEETMUX_BIN` points fleet at a specific binary; otherwise `fleetmux` on `PATH` is used.
     `fleetmux --version` must print `fleetmux <x.y.z> (protocol 1)` with a version of at least `deps.yaml`'s
     minimum, or `--backend fleetmux` is refused before anything starts (`scripts/check_deps.py --backend fleetmux`
     reports the same).
@@ -394,7 +394,7 @@ over `ssh`. Closing a viewer never stops an agent.
     run `fleetmux gui --runtime "$L"` in terminal 2 instead of `fleetmux attach`. The history page comes over the
     same socket into the local `page/history.html` (0600); no TCP port is opened.
 * **Layout**: fixed. Supervisor tabs top left; `history` (a terminal view of the run history,
-  `python -m cmux_fleet.history_view`) and `daemon` bottom left; worker tabs on the right. A successor takes
+  `python -m fleetmux.history_view`) and `daemon` bottom left; worker tabs on the right. A successor takes
   its predecessor's tab position.
 * **Tabs and separators**: each tab is a padded, clickable text block sitting on its group's border row, with a
   thin `│` between neighbours; a click selects a tab only inside its block (not in a gap or on the border after
@@ -522,7 +522,7 @@ over `ssh`. Closing a viewer never stops an agent.
     for 10,000 lines of scrollback) were met on both machines, and the Linux-side checks (`htop` end-to-end,
     the logind `KillUserProcesses` warning) ran green on the VM.
   * Replay snapshots: 9 real Claude Code / Codex / pi sessions were redacted under the operator's conditions and
-    imported (`fleetmux/fixtures/recordings/`); the targeted `replay` tests pass. The full `m3` gate and the
+    imported (`rust/fixtures/recordings/`); the targeted `replay` tests pass. The full `m3` gate and the
     final review are **not done yet**.
   * Design: [docs/design.md §33.6](docs/design.md#336-fleetmux-backend-linux-default-since-m3).
 
@@ -924,7 +924,7 @@ fleetmux task goal.json
 
 Validated locally with `--claude` pointing at the real Claude Code binary; the cmux `claude` shim found
 first on PATH inside cmux was not exercised. Pairs and their status (verified / unverified = `--lifecycle smoke`
-only / refused) live in `cmux_fleet/config/fleet.yaml#cli_pairs`; Codex workers (`codex+codex`) are still unverified, and any
+only / refused) live in `fleetmux/config/fleet.yaml#cli_pairs`; Codex workers (`codex+codex`) are still unverified, and any
 pair the table does not list is refused with a reason before provisioning or profile retirement.
 New `start` commands now require Redis v2 (the default); `--transport-version 1` is rejected. Existing v1 configs remain readable for draining/status/stop only: do not edit their transport version in place. The file-delivery and native-Codex/Claude startup descriptions above are legacy behavior, not a supported new v2 launch path. Unsupported CLI combinations fail rather than silently falling back to files. The development opt-in is still required.
 
@@ -982,7 +982,7 @@ and no model/GUI/production registry. The installed Pi packages are required by 
 
 ## Agent scope files
 
-`cmux_fleet/agents/supervisor.md` and `worker.md` are copied into each agent's cwd as `AGENTS.md` at
+`fleetmux/agents/supervisor.md` and `worker.md` are copied into each agent's cwd as `AGENTS.md` at
 spawn (`{{WORKSPACE}}` and `{{FLEET_CHROME}}` are filled in). They contain only prohibitions, a command
 table and the reply format; no methodology. Models follow prohibitions and tables far more reliably than
 prose about "how to think".
@@ -1019,7 +1019,7 @@ the verb, confines `js` files to the run directory, paces page actions (`--chrom
 
 - **2,000+ tests** on macOS (Python 3.14): `python -m pytest -q tests` takes about 13 minutes. Tests that
   need `redis-server`, `node`, `tmux` or an installed Pi skip themselves when those are missing.
-- Every supervisor × worker CLI pairing marked `verified` in `cmux_fleet/config/fleet.yaml#cli_pairs` passed a
+- Every supervisor × worker CLI pairing marked `verified` in `fleetmux/config/fleet.yaml#cli_pairs` passed a
   real smoke run (`scripts/smoke_pair.sh`: 1 supervisor + 2 workers, 4 checks); the run id is recorded
   in the row.
 - The fleet has been run as resident service fleets and scheduled task fleets on three Macs since

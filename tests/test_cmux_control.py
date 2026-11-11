@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import cmux_manager as cm
+from fleetmux import cmux_manager as cm
 
 
 @pytest.fixture
@@ -105,5 +105,5 @@ def test_cli_process_matches_native_claude_and_npm_node_only(tmp_path, monkeypat
         out = ('-zsh\n' + comm + '\n') if argv[-1] == 'comm=' else ('-zsh\n' + args + '\n')
         return SimpleNamespace(returncode=0, stdout=out, stderr='')
     monkeypatch.setattr(cm.subprocess, 'run', ps)
-    from cmux_fleet.fleet import RESUME_CLIS
+    from fleetmux.fleet import RESUME_CLIS
     assert mgr.has_cli_process('p', RESUME_CLIS) is live

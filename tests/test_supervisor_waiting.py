@@ -24,7 +24,7 @@ from test_claude_supervisor import no_trust, stop_hook, submit, task_fleet, type
 from test_fleet import decision, fx, last_to, traffic, turn  # noqa: F401  (fixture + helpers)
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 WAIT = {'for': 'owner native receipts for the 42 acceptance cases on both platforms',
         'check': 'operator-receipts/*.json newer than matrix.json and all 42 rows pass'}
@@ -94,7 +94,7 @@ def test_others_active_still_exempts_an_empty_dispatch():
     (lambda d: d['waiting'].update(for_hours=float('inf')), 'waiting.for_hours must be a number > 0 and <= 12'),
     (lambda d: d['waiting'].update(eta='later'), 'waiting has unknown keys: eta'),
     (lambda d: d.update(waiting='for receipts'), 'waiting must be an object'),
-    (lambda d: d['waiting'].update({'for': 'sudo systemctl restart cmux-fleet'}),
+    (lambda d: d['waiting'].update({'for': 'sudo systemctl restart fleetmux'}),
      'is a description, not a host command or a path'),
     (lambda d: d['waiting'].update({'check': '/Users/x/operator-receipts'}),
      'is a description, not a host command or a path'),

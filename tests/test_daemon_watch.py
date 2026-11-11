@@ -19,7 +19,7 @@ from test_runtime_v2 import fx  # noqa: F401  (fixture)
 from test_resume import managed, task_run, half_done, crash_and_resume, answer_turn  # noqa: F401  (fixtures)
 from test_v2_codex_claude import typed
 from test_pi_v2_contract import PI_ROOT
-from cmux_fleet import agent_bridge, fleet, fleet_config, pi_adapter, runtime_v2
+from fleetmux import agent_bridge, fleet, fleet_config, pi_adapter, runtime_v2
 
 
 # ------------------------------------------------------------------ AGENTS.md: this run's restart command
@@ -32,14 +32,14 @@ def test_supervisor_agents_md_names_this_runs_restart_command(fx):  # noqa: F811
     f.cfg.update(fleet_home='/h/fleet home', cmux_state_dir='/h/state', private_config='/h/fleet.yaml', cmux_bin='/h/cmux')
     scope = supervisor_scope(f)
     assert '## Daemon down' in scope and '{{' not in scope
-    env = ['env', 'CMUX_FLEET_HOME=/h/fleet home', 'CMUX_FLEET_STATE=/h/state', 'CMUX_FLEET_CONFIG=/h/fleet.yaml',
+    env = ['env', 'FLEETMUX_HOME=/h/fleet home', 'FLEETMUX_STATE=/h/state', 'FLEETMUX_CONFIG=/h/fleet.yaml',
            'CMUX_BIN=/h/cmux', sys.executable, str(Path(fleet.__file__).resolve())]
     assert shlex.join(env + ['start', '--allow-development-v2', '--resume', str(f.run_dir)]) in scope
     assert shlex.join(env + ['status', '--config', str(f.run_dir / 'config.json')]) in scope
     assert '[Daemon watchdog]' in scope and 'PROGRESS.md' in scope
     assert 'Daemon down' not in f.role_scope('worker-1', f.runtime_cfg('worker-1'), {})
     f.cfg['private_config'] = 'none'  # the run recorded that it has no private file: none is named
-    assert 'CMUX_FLEET_CONFIG' not in supervisor_scope(f)
+    assert 'FLEETMUX_CONFIG' not in supervisor_scope(f)
     f.cfg['parent_config'] = str(f.run_dir / 'parent.json')  # a sub-fleet's daemon is its parent's to revive
     assert 'Daemon down' not in supervisor_scope(f)
 
@@ -47,14 +47,14 @@ def test_supervisor_agents_md_names_this_runs_restart_command(fx):  # noqa: F811
 def test_pi_environment_gives_the_watch_knobs_to_the_main_supervisor_only(fx, monkeypatch, tmp_path):  # noqa: F811
     f = fx
     env = pi_adapter.environment(f.path, f.cfg, 'supervisor', 0)
-    assert json.loads(env['CMUX_FLEET_DAEMON_WATCH']) == {'check_interval_s': 120, 'stale_after_s': 120,
+    assert json.loads(env['FLEETMUX_DAEMON_WATCH']) == {'check_interval_s': 120, 'stale_after_s': 120,
                                                            'realert_after_s': 600}
-    assert 'CMUX_FLEET_DAEMON_WATCH' not in pi_adapter.environment(f.path, f.cfg, 'worker-1', 0)
-    assert 'CMUX_FLEET_DAEMON_WATCH' not in pi_adapter.environment(f.path, dict(f.cfg, parent_config='p'), 'supervisor', 0)
+    assert 'FLEETMUX_DAEMON_WATCH' not in pi_adapter.environment(f.path, f.cfg, 'worker-1', 0)
+    assert 'FLEETMUX_DAEMON_WATCH' not in pi_adapter.environment(f.path, dict(f.cfg, parent_config='p'), 'supervisor', 0)
     private = tmp_path / 'fleet.yaml'
     private.write_text('daemon_watch:\n  stale_after_s: 300\n')
     monkeypatch.setenv(fleet_config.USER_ENV, str(private))
-    knobs = json.loads(pi_adapter.environment(f.path, f.cfg, 'supervisor', 0)['CMUX_FLEET_DAEMON_WATCH'])
+    knobs = json.loads(pi_adapter.environment(f.path, f.cfg, 'supervisor', 0)['FLEETMUX_DAEMON_WATCH'])
     assert knobs == {'check_interval_s': 120, 'stale_after_s': 300, 'realert_after_s': 600}
 
 
@@ -143,14 +143,14 @@ def test_extension_daemon_watchdog_contract(tmp_path):
         pytest.skip('installed Pi/Node dependencies needed for the actual TS harness')
     root = Path(__file__).resolve().parents[1]
     extension = tmp_path / 'extension.ts'
-    shutil.copy(root / 'cmux_fleet/pi_extension_v2.ts', extension)
+    shutil.copy(root / 'fleetmux/pi_extension_v2.ts', extension)
     (tmp_path / 'node_modules').symlink_to(PI_ROOT / 'node_modules', target_is_directory=True)
     records = tmp_path / 'bridge-records.jsonl'
     child = tmp_path / 'bridge-fixture.py'
     child.write_text(BRIDGE)
-    env = dict(os.environ, CMUX_FLEET_PI_BRIDGE=json.dumps([sys.executable, '-u', str(child), str(records), 'supervisor', '0']),
-               CMUX_FLEET_PI_SLOT='supervisor', CMUX_FLEET_PI_MODE='service',
-               CMUX_FLEET_DAEMON_WATCH=json.dumps({'check_interval_s': 0.05, 'stale_after_s': 120, 'realert_after_s': 600}))
+    env = dict(os.environ, FLEETMUX_PI_BRIDGE=json.dumps([sys.executable, '-u', str(child), str(records), 'supervisor', '0']),
+               FLEETMUX_PI_SLOT='supervisor', FLEETMUX_PI_MODE='service',
+               FLEETMUX_DAEMON_WATCH=json.dumps({'check_interval_s': 0.05, 'stale_after_s': 120, 'realert_after_s': 600}))
     result = subprocess.run([node, '--experimental-strip-types', str(root / 'tests/test_pi_daemon_watch.mjs'), str(extension),
                              str(records)], env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr

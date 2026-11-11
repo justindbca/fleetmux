@@ -11,7 +11,7 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, settle  # noqa: F401  (fx fixture)
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 WRITE = {'to': 'worker-1', 'instruction': 'Write worker-1/report.md with Conclusion evidence.'}
 ART = [{'path': 'worker-1/report.md', 'contains': ['Conclusion']}]

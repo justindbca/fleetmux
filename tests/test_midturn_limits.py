@@ -1,7 +1,7 @@
 """r3 policy, bounded readers and clocks. No CLI hooks or A/B capability policy."""
 import json
 import pytest
-from cmux_fleet import midturn, roster
+from fleetmux import midturn, roster
 
 
 def test_defaults_never_clamp_the_200k_window():

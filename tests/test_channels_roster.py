@@ -18,7 +18,7 @@ from test_runtime_v2 import fx  # noqa: F401  (fixture: a v2 service fleet)
 from test_v2_codex_claude import WORKERS, mixed, no_provisioning  # noqa: F401  (mixed: fixture)
 from test_roster import hot, write_roster  # noqa: F401  (hot: fixture, a task fleet with a roster)
 from test_pi import mock_start
-from cmux_fleet import channels, fleet, night, roster
+from fleetmux import channels, fleet, night, roster
 
 SERVICE_ONLY = '只挂本机常驻 service fleet'
 BOT1 = 'channels:\n  - {type: telegram, account: fleet-bot-1}\n'

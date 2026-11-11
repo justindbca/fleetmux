@@ -14,7 +14,7 @@ import pytest
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import dispatch_one, mixed  # noqa: F401
 from test_watchdog import audits, keys, screens, wd  # noqa: F401
-from cmux_fleet import fleet_config, watchdog
+from fleetmux import fleet_config, watchdog
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'watchdog_screens'
 TABLE = watchdog.parse_table(fleet_config.block('watchdog_prompts'))

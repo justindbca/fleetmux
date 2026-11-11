@@ -6,7 +6,7 @@
 #      读 PI_HANDOFF_FILE 注入，命令行保持短，不把长交接单塞进 cmux --command。
 #
 # 环境: PI_HANDOFF_RELAUNCH（有则照它启动，见 auto-handoff.ts）、PI_WORKDIR、PI_HANDOFF_TASK、PI_HANDOFF_HOP、PI_AUTO_HANDOFF_MODEL、
-#      CMUX_BIN、CMUX_FLEET_PI_DIR、PI_BIN、PI_CANONICAL_LAUNCHER
+#      CMUX_BIN、FLEETMUX_PI_DIR、PI_BIN、PI_CANONICAL_LAUNCHER
 #
 # 机器差异：本机 canonical 有 --terminal 分支且认 PI_WORKDIR；Studio 的 canonical 两者都没有。
 # 所以：canonical 含 IN_TERMINAL → 走 --terminal；否则直接调 pi，cwd 用 PI_WORKDIR。
@@ -21,7 +21,7 @@ esac
 
 CMUX_BIN="${CMUX_BIN:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 # fleet 仓根目录（可选）；没设就跳过这一候选。
-FLEET_DIR="${CMUX_FLEET_PI_DIR:-}"
+FLEET_DIR="${FLEETMUX_PI_DIR:-${CMUX_FLEET_PI_DIR:-}}"  # CMUX_FLEET_PI_DIR: legacy name, kept for compatibility
 PI_WORKDIR="${PI_WORKDIR:-$PWD}"
 TASK="${PI_HANDOFF_TASK:-$(basename "$PI_WORKDIR")}"
 HOP="${PI_HANDOFF_HOP:-1}"

@@ -11,7 +11,7 @@ import pytest
 
 from test_fleet import FakeMgr
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
-from cmux_fleet import dsh_adapter, fleet, pi_adapter, runtime_v2
+from fleetmux import dsh_adapter, fleet, pi_adapter, runtime_v2
 
 MODEL = 'flashnext/Qwen3.8-Flash-Next-Uncensored-MLX-Serve-4bit'
 REPORT = {'done': ['wrote worker-1/ok.txt'], 'evidence': ['worker-1/ok.txt 2 bytes'], 'not_done': 'none', 'blocked': 'none'}

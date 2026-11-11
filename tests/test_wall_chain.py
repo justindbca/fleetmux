@@ -12,7 +12,7 @@ from test_brake import isolated_claude_trust, pools_file  # noqa: F401  (autouse
 from test_fleet import turn
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, req, session  # noqa: F401
-from cmux_fleet import brake, discover, fleet, runtime_v2
+from fleetmux import brake, discover, fleet, runtime_v2
 
 ASTRA, SOL, TERRA = 'openai-codex/gpt-6-astra', 'openai-codex/gpt-6.1-sol', 'openai-codex/gpt-6.1-terra'
 DS_PI, DS_FREE = 'workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg', 'opencode/deepseek-v4.1-flash-free'
@@ -261,7 +261,7 @@ def test_a_run_without_the_key_resolves_the_chains_once_on_its_first_wall(tmp_pa
 def test_worker_default_thinking_is_high(tmp_path):
     """User 2026-11-11 「默认worker也是high」: fleet.yaml#discovery.worker_thinking = high; it fills the run-wide pi
     thinking and a Claude worker's --effort when nothing names its own; an explicit level still wins."""
-    from cmux_fleet import fleet_config
+    from fleetmux import fleet_config
     assert (fleet_config.block('discovery', fleet_config.SHIPPED) or {}).get('worker_thinking') == 'high'
     assert fleet.worker_thinking() == 'high'
     f = make(tmp_path, {'goal': 'x'}, worker_cli='claude', worker_model='claude-opus-5-5')

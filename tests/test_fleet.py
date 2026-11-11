@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cmux_fleet import claude_hook, fleet, handoff  # noqa: E402
+from fleetmux import claude_hook, fleet, handoff  # noqa: E402
 import hook_sim  # noqa: E402
 
 THREADS = {'supervisor': '11111111-1111-1111-1111-111111111111',
@@ -638,7 +638,7 @@ def test_one_page_layout_and_history_page_lists_every_generation(fx):
 
 
 def test_history_page_escapes_script_end():
-    from cmux_fleet import history
+    from fleetmux import history
     import tempfile
     run = Path(tempfile.mkdtemp())
     snap = run / 's.txt'
@@ -1043,7 +1043,7 @@ SERVICE_SUPERVISOR_TEMPLATES = ('service_supervisor.md', 'service_supervisor_v2.
 def test_service_supervisor_templates_let_it_answer_simple_requests():
     # M0: the service supervisor judges each request itself: it answers a simple factual one in answer[],
     # dispatches everything else to a worker, and dispatches when unsure. v1 / v2 / tui say the same rule.
-    agents = ROOT / 'cmux_fleet' / 'agents'
+    agents = ROOT / 'fleetmux' / 'agents'
     rules = set()
     for name in SERVICE_SUPERVISOR_TEMPLATES:
         text = (agents / name).read_text(encoding='utf-8')
@@ -1219,7 +1219,7 @@ def test_role_profiles_and_request_validation(sfx):
 
 
 def test_kill_pane_retries_with_force_when_cmux_asks(monkeypatch, tmp_path):
-    from cmux_fleet import cmux_manager as cm
+    from fleetmux import cmux_manager as cm
     calls = []
 
     def fake_run(*args):
@@ -1243,7 +1243,7 @@ def test_kill_pane_retries_with_force_when_cmux_asks(monkeypatch, tmp_path):
 
 
 def test_workers_become_tabs_of_one_pane_and_successor_takes_its_place(monkeypatch):
-    from cmux_fleet import cmux_manager as cm
+    from fleetmux import cmux_manager as cm
     calls = []
 
     def fake_run(*args):
@@ -1288,7 +1288,7 @@ def test_workers_become_tabs_of_one_pane_and_successor_takes_its_place(monkeypat
 
 def test_history_page_follows_the_control_tab_theme(fx, monkeypatch):
     """design §39: the daemon asks the control tab once, the page follows that answer."""
-    from cmux_fleet import terminal_theme
+    from fleetmux import terminal_theme
     monkeypatch.setattr(terminal_theme, 'probe', lambda timeout=0.3: {'bg': '#1e1e1e', 'fg': '#e8e6e1'})
     fx.capture_terminal_theme()
     saved = json.loads((fx.run_dir / terminal_theme.FILE).read_text())
@@ -1304,7 +1304,7 @@ def test_history_page_follows_the_control_tab_theme(fx, monkeypatch):
 
 def test_capture_terminal_theme_logs_when_the_terminal_does_not_answer(fx, monkeypatch):
     """A silent terminal must not block the start: no file, one `theme.unavailable`, page as before."""
-    from cmux_fleet import terminal_theme
+    from fleetmux import terminal_theme
     monkeypatch.setattr(terminal_theme, 'probe', lambda timeout=0.3: None)
     assert fx.capture_terminal_theme() is None
     assert not (fx.run_dir / terminal_theme.FILE).exists()

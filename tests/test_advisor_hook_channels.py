@@ -17,7 +17,7 @@ import time
 from test_advisor import Runner, afx, item, report, send_decision, v2adv  # noqa: F401
 from test_fleet import decision, turn
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import claude_hook, codex_queue, fleet, watchdog
+from fleetmux import claude_hook, codex_queue, fleet, watchdog
 
 MARK = re.compile(r'\n\n\(fleet delivery fx-[0-9a-f]{16}\)$')
 

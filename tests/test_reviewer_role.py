@@ -1,14 +1,14 @@
 """Independent reviewer worker: claude-reviewer card -> reviewer.md role (fleet copy of the review rules)."""
-from cmux_fleet import fleet, profile_launch
-from cmux_fleet.agent_registry import AgentRegistry, PACKAGE_DIR
-from cmux_fleet.planner import build_dispatch_plan
+from fleetmux import fleet, profile_launch
+from fleetmux.agent_registry import AgentRegistry, PACKAGE_DIR
+from fleetmux.planner import build_dispatch_plan
 from test_fleet import fx  # noqa: F401  (fixture used by live)
 from test_profile_integration import dispatch
 from test_profile_live import live  # noqa: F401
 
 REQUIRED = [
     "复核是为了尽快上线",                        # top principle, verbatim
-    "multi-round-review.md", "R-WKF-033",       # sync note to the source rules
+    "fleet copy of the operator's review rules",  # sync note to the source rules
     "Read-only",
     "**P0**", "**P1**", "**P2**",
     "Unsure → go down (P2)",
@@ -69,7 +69,7 @@ import json
 
 import pytest
 
-from cmux_fleet.router import route_task
+from fleetmux.router import route_task
 from test_v2_codex_claude import mixed  # noqa: F401,E402
 from test_message_bus_v2 import private_redis_v2  # noqa: F401,E402
 

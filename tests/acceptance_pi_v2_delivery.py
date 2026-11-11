@@ -53,14 +53,14 @@ def run(pi):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 34, 100, 0, 0))
         argv = [pi, '--model', 'fleet-v2-fixture/fixture', '--thinking', 'off', '--tui-mode', 'regular',
-                '--no-extensions', '--extension', str(root_dir / 'cmux_fleet/pi_extension_v2.ts'),
+                '--no-extensions', '--extension', str(root_dir / 'fleetmux/pi_extension_v2.ts'),
                 '--extension', str(Path(__file__).with_name('pi_v2_offline_provider_fixture.ts').resolve()),
                 '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files',
                 '--no-approve', '--offline', '--tools', 'read,fleet_result',
                 '--session-dir', str(root / 'sessions'), '--name', 'worker-1', '--', 'startup: reply READY']
         env = dict(os.environ, PI_CODING_AGENT_DIR=str(home), PI_SKIP_VERSION_CHECK='1', TERM='xterm-256color',
-                   CMUX_FLEET_PI_BRIDGE=json.dumps([sys.executable, '-u', str(bridge), str(records), 'worker-1', '0']),
-                   CMUX_FLEET_PI_SLOT='worker-1', CMUX_FLEET_PI_MODE='service')
+                   FLEETMUX_PI_BRIDGE=json.dumps([sys.executable, '-u', str(bridge), str(records), 'worker-1', '0']),
+                   FLEETMUX_PI_SLOT='worker-1', FLEETMUX_PI_MODE='service')
         proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=root, env=env,
                                 start_new_session=True)
         os.close(slave)

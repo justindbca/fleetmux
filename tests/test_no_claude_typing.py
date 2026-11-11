@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from cmux_fleet import claude_input, clear_after_result, fleet, roster, runtime_v2
+from fleetmux import claude_input, clear_after_result, fleet, roster, runtime_v2
 from test_fleet import traffic
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx, audits, cards, req, receive  # noqa: F401  (fixture + helpers)

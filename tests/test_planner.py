@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from cmux_fleet import fleet
-from cmux_fleet.agent_registry import AgentRegistry
-from cmux_fleet.planner import build_dispatch_plan
+from fleetmux import fleet
+from fleetmux.agent_registry import AgentRegistry
+from fleetmux.planner import build_dispatch_plan
 
 
 def test_code_change_plan_has_implementation_and_independent_review():

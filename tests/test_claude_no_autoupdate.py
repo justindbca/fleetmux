@@ -15,7 +15,7 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import mixed  # noqa: F401  (fixture: Codex supervisor + 6 Claude workers)
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 ROOT = Path(__file__).resolve().parents[1]
 

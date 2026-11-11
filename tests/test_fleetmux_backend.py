@@ -2,11 +2,11 @@
 
 Every test runs twice through the ``impl`` fixture: ``fake`` = tests/fake_fleetmux.py (the Python
 protocol fake, the reference reading of PROTOCOL.md) and ``real`` = the Rust binary
-(``$CMUX_FLEET_FLEETMUX_REAL``, default ``fleetmux/target/debug/fleetmux``; skipped when it is not built).
+(``$FLEETMUX_REAL_BIN``, default ``rust/target/debug/fleetmux``; skipped when it is not built).
 A case the real binary fails: first check the fake's reading of the protocol.
 
 The manager is driven through its public interface only; what the server *really* did is read back
-straight from the run's control socket (:func:`ctl`, fleetmux/PROTOCOL.md v1: the top-level ``id`` is the
+straight from the run's control socket (:func:`ctl`, rust/PROTOCOL.md v1: the top-level ``id`` is the
 request number, a pane is always ``pane``), so an assertion never trusts the manager's own account.
 Phase 0: every manager method raises ``NotImplementedError``, so these tests are red until M0.
 
@@ -31,12 +31,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from cmux_fleet.backends import base  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
-from cmux_fleet.backends.base import PaneStatus  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
+from fleetmux.backends.base import PaneStatus  # noqa: E402
 
 FAKE = Path(__file__).with_name('fake_fleetmux.py')  # py-fake's protocol fake (plan §3.5)
-REAL = Path(os.environ.get('CMUX_FLEET_FLEETMUX_REAL') or ROOT / 'fleetmux/target/debug/fleetmux')
+REAL = Path(os.environ.get('FLEETMUX_REAL_BIN') or ROOT / 'rust/target/debug/fleetmux')
 SESSION = 'fm-test'
 PANE_ID = re.compile(r'[0-9a-z]{4}-[1-9][0-9]*\Z')  # <epoch>-<seq>, PROTOCOL.md §1.4
 GROUPS = ('supervisor', 'lower', 'workers')
@@ -46,7 +46,7 @@ GOOD_VERSION = 'fleetmux 0.2.0 (protocol %d)' % fm.PROTOCOL
 # ---------------------------------------------------------------- fixture: fake and real server
 
 def _launcher(path: Path, argv) -> Path:
-    """A ``fleetmux`` on PATH / in $CMUX_FLEET_FLEETMUX that runs ``argv`` (the fake is a .py file)."""
+    """A ``fleetmux`` on PATH / in $FLEETMUX_BIN that runs ``argv`` (the fake is a .py file)."""
     path.write_text('#!/bin/sh\nexec ' + shlex.join([str(a) for a in argv]) + ' "$@"\n')
     path.chmod(0o755)
     return path
@@ -58,7 +58,7 @@ def impl(request, monkeypatch):
     if request.param == 'real':
         if not (REAL.is_file() and os.access(REAL, os.X_OK)):
             shutil.rmtree(root, ignore_errors=True)
-            pytest.skip('real fleetmux not built: ' + str(REAL) + ' (cargo build, or set CMUX_FLEET_FLEETMUX_REAL)')
+            pytest.skip('real fleetmux not built: ' + str(REAL) + ' (cargo build, or set FLEETMUX_REAL_BIN)')
         target = [REAL]
     else:
         target = [sys.executable, FAKE]
@@ -418,7 +418,7 @@ def test_registry_file_is_session_dot_fleetmux_json(impl, monkeypatch):
     mgr._tag('abcd-1', type='worker', label='worker-1')
     entry = surfaces(impl)['abcd-1']
     assert entry['type'] == 'worker' and entry['label'] == 'worker-1'
-    monkeypatch.setenv('CMUX_FLEET_STATE', str(impl.root / 'st2'))  # default state dir, as the other backends
+    monkeypatch.setenv('FLEETMUX_STATE', str(impl.root / 'st2'))  # default state dir, as the other backends
     assert fm.FleetmuxSessionManager('other').meta_path == (impl.root / 'st2').resolve() / 'other.fleetmux.json'
 
 
@@ -450,7 +450,7 @@ def test_get_or_create_session_starts_server_and_hello_matches(impl):
 
 
 def test_server_theme_env_passes_through_and_hello_reports_it(impl, monkeypatch):
-    """``CMUX_FLEET_FLEETMUX_THEME`` is the one knob (plan §2.5): the server argv gets ``--theme FILE`` and
+    """``FLEETMUX_THEME`` is the one knob (plan §2.5): the server argv gets ``--theme FILE`` and
     ``hello.theme`` reports the merged palette (PROTOCOL.md §4.1 / §9.1)."""
     path = impl.root / 'theme.json'
     path.write_text(json.dumps({'bg': '#123456'}))
@@ -1012,7 +1012,7 @@ def test_arrange_spawns_history_view_returns_its_real_id_and_is_idempotent(impl)
     entry = surfaces(impl)[hist]
     assert entry['type'] == 'history' and entry['url'] == url
     args = ps_args(rows[hist]['pid'])
-    assert 'cmux_fleet.history_view' in args and str(run) in args
+    assert 'fleetmux.history_view' in args and str(run) in args
     assert mgr.arrange(s, [w2, w1], url) == hist  # re-entry: the same pane, not a second one
     assert [p['pane'] for p in panes(impl) if p['type'] == 'history'] == [hist]
 
@@ -1365,7 +1365,7 @@ def test_supervisor_rotation_label_names_new_generation(impl, monkeypatch):
 # ================================================================ M2.5 web window (brief-m25 §3.1 W0; green in W4)
 
 class _WebWindow:
-    """Stands in for an attach client whose web window is open (fleetmux/PROTOCOL.md §6.3 ``0x84`` / ``0x04``):
+    """Stands in for an attach client whose web window is open (rust/PROTOCOL.md §6.3 ``0x84`` / ``0x04``):
     one view connection that reports ``{"event":"window","state":"open"}`` and answers every ``0x84`` the way a
     window would (``url`` = the last URL it was sent). It never raises: when the server refuses the view
     connection or the frames, ``error`` says why and the backend simply sees no window."""
@@ -1808,7 +1808,7 @@ def _lines_with(text, needle):
 def test_protocol_1_5_documents_the_shell_pane_type():
     """Plan §14.3 / §22.2; user 2026-11-09: the `shell` pane type is the sidebar's bash, a tab of the root page's
     `workers` group that the root fleet registers but never treats as a worker."""
-    proto = _doc('fleetmux', 'PROTOCOL.md')
+    proto = _doc('rust', 'PROTOCOL.md')
     start = proto.index('### 1.5')
     table = proto[start:proto.index('## 2.', start)]
     row = [line for line in table.splitlines() if line.startswith('| pane type |')]

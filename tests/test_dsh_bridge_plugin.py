@@ -1,4 +1,4 @@
-"""dsh bridge plugin (cmux_fleet/dsh_bridge.mjs, design §41 v1) against a fake dsh-TUI cordis ctx and a fake
+"""dsh bridge plugin (fleetmux/dsh_bridge.mjs, design §41 v1) against a fake dsh-TUI cordis ctx and a fake
 agent_bridge.py (tests/js): followup / claimed correlation, turn ends, fleet_result, human turns, approvals,
 rebinding, the startup retry. Not a TUI or model test; the real smoke is scripts/smoke_pair.sh pi dsh task."""
 import json
@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 HARNESS = Path(__file__).with_name('js') / 'dsh_plugin_harness.mjs'
-PLUGIN = Path(__file__).resolve().parents[1] / 'cmux_fleet' / 'dsh_bridge.mjs'
+PLUGIN = Path(__file__).resolve().parents[1] / 'fleetmux' / 'dsh_bridge.mjs'
 
 
 def harness(scenario):

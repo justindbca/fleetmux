@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import cmux_manager as cm
-from cmux_fleet import fleet
+from fleetmux import cmux_manager as cm
+from fleetmux import fleet
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ def test_control_move_failure_preserves_console_and_retry_does_not_split(scene, 
 def test_daemon_uses_persisted_registry_even_without_start_environment(tmp_path, monkeypatch):
     default = tmp_path / 'default-state'
     isolated = tmp_path / 'isolated-state'
-    monkeypatch.delenv('CMUX_FLEET_STATE', raising=False)
+    monkeypatch.delenv('FLEETMUX_STATE', raising=False)
     monkeypatch.setattr(cm, 'STATE_DIR', default)
     old = cm.CmuxSessionManager(fleet.SESSION)
     old._save_meta({'workspace': 'existing-fleet', 'control_workspace': None, 'surfaces': {}})

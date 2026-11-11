@@ -14,7 +14,7 @@ import pytest
 from test_advisor import Runner, v2adv, v2adv2  # noqa: F401  (fixtures)
 from test_advisor_rescue import consult, respawn_sheet, v2_worked
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from cmux_fleet import advisor, claude_hook, fleet
+from fleetmux import advisor, claude_hook, fleet
 
 AGENTS = Path(fleet.__file__).resolve().parent / 'agents'
 

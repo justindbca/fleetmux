@@ -1,10 +1,10 @@
-# cmux-fleet dependency manifest. Check it on the target machine before every release:
+# fleetmux dependency manifest. Check it on the target machine before every release:
 #   PATH=<dir of codex/pi>:$PATH <release>/.venv/bin/python scripts/check_deps.py
 # A missing or too-old item blocks the release. Raise a minimum in the same commit as the code needing it.
 # `when:` gates an item on the terminal backend of the run (design §6): cmux is required only for
 # backend=cmux, wezterm (plus its mux server, design §4.4) only for backend=wezterm, fleetmux only
 # for backend=fleetmux. Items without
-# `when:` are required for every backend. Pick the backend with `--backend` or CMUX_FLEET_BACKEND.
+# `when:` are required for every backend. Pick the backend with `--backend` or FLEETMUX_BACKEND.
 # `desktop: true` items are needed only in a desktop session (macOS, or DISPLAY / WAYLAND_DISPLAY set): missing on a
 # headless box they are reported as a warning, not a failure.
 # fleetmux.min is also the release scripts/install_fleetmux.sh downloads (GitHub release v<min>, sha256-checked).

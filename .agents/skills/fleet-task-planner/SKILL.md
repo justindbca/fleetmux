@@ -1,11 +1,11 @@
 ---
 name: fleet-task-planner
-description: "Split a complex task into dispatchable subtasks and hand them to cmux-fleet / Fleet agents to execute. Use when the user asks to split a task, plan a task, dispatch work in parallel, hand work to fleet agents, schedule execution the way Claude Code Task/subagent does, or needs supervisor+workers collaboration."
+description: "Split a complex task into dispatchable subtasks and hand them to fleetmux / Fleet agents to execute. Use when the user asks to split a task, plan a task, dispatch work in parallel, hand work to fleet agents, schedule execution the way Claude Code Task/subagent does, or needs supervisor+workers collaboration."
 ---
 
 # Fleet Task Planner — split a task and dispatch it to Fleet agents
 
-Goal of this skill: **the main model only plans, submits, validates and summarizes; the actual execution goes to cmux-fleet's supervisor/worker agents.**
+Goal of this skill: **the main model only plans, submits, validates and summarizes; the actual execution goes to fleetmux's supervisor/worker agents.**
 
 Triggers:
 - "split this task" / "plan and dispatch" / "let the fleet agents do it"
@@ -62,7 +62,7 @@ fi
 printf '%s\n' "$FLEET_BIN"
 ```
 
-If it is empty: report "cmux-fleet not found on this machine, cannot dispatch".
+If it is empty: report "fleetmux not found on this machine, cannot dispatch".
 
 Check the status:
 
@@ -143,10 +143,10 @@ Hard rules:
 
 ### 3.1 Coding tasks: use the devflow role pack (tests first, interfaces frozen first)
 
-When several workers change code in parallel, do not write role files yourself; use the framework's own role pack `cmux_fleet/agents/devflow/`:
+When several workers change code in parallel, do not write role files yourself; use the framework's own role pack `fleetmux/agents/devflow/`:
 
 ```bash
-PACK="<cmux-fleet source>/cmux_fleet/agents/devflow"
+PACK="<fleetmux source>/fleetmux/agents/devflow"
 # add to the start arguments: --roles "$PACK" --roster <a yaml copied from $PACK/roster.example.yaml with the worker count changed>
 ```
 

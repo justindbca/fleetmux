@@ -19,8 +19,8 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import cmux_manager as cm  # noqa: E402
-from cmux_fleet import fleet, lifecycle_close  # noqa: E402
+from fleetmux import cmux_manager as cm  # noqa: E402
+from fleetmux import fleet, lifecycle_close  # noqa: E402
 
 
 def tree():

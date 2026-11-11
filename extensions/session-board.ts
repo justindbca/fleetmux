@@ -3,7 +3,7 @@
  *
  * Writes this pi session onto the shared board (~/.fleetmux/board, FLEETMUX_BOARD_DIR) and relays
  * collision notices ("another session is editing the same repo / branch / file"). All storage and
- * detection lives in cmux_fleet/session_board.py; this file only calls it through pi.exec.
+ * detection lives in fleetmux/session_board.py; this file only calls it through pi.exec.
  *
  * Board writes: session_start, input (the user's goal), tool_result (edit / write / bash), session_shutdown.
  * Comparison: on those events and every 30 s; the timer starts in session_start and is cleared in
@@ -13,7 +13,7 @@
  *
  * Off: PI_SESSION_BOARD=0
  * Script: PI_SESSION_BOARD_SCRIPT, else session_board.py beside this file (launchers/install-session-board.sh
- *         links it there), else $CMUX_FLEET_PI_DIR/cmux_fleet/session_board.py
+ *         links it there), else $FLEETMUX_PI_DIR/fleetmux/session_board.py
  * Interval: PI_SESSION_BOARD_INTERVAL_MS (default 30000)
  */
 
@@ -25,9 +25,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 type Phase = "start" | "input" | "tool" | "timer";
 type Delivery = { deliverAs: "steer" | "nextTurn"; triggerTurn?: boolean };
 
-/** Env set on fleet-launched pi panes: cmux_fleet/pi_adapter.py environment() — v2 BRIDGE / SLOT, v1 CALLBACK. */
+/** Env set on fleet-launched pi panes: fleetmux/pi_adapter.py environment() — v2 BRIDGE / SLOT, v1 CALLBACK. */
 export function isFleetManaged(env: Record<string, string | undefined>): boolean {
-	return Boolean(env.CMUX_FLEET_PI_SLOT || env.CMUX_FLEET_PI_BRIDGE || env.CMUX_FLEET_PI_CALLBACK);
+	return Boolean(env.FLEETMUX_PI_SLOT || env.FLEETMUX_PI_BRIDGE || env.FLEETMUX_PI_CALLBACK);
 }
 
 export function deliveryOptions(s: { fleet: boolean; idle: boolean; phase: Phase }): Delivery {
@@ -41,7 +41,8 @@ function scriptPath(): string {
 		const sibling = join(dirname(fileURLToPath(import.meta.url)), "session_board.py");
 		if (existsSync(sibling)) return sibling;
 	} catch {}
-	return join(process.env.CMUX_FLEET_PI_DIR ?? "", "cmux_fleet", "session_board.py");
+	// CMUX_FLEET_PI_DIR: legacy name, kept for compatibility.
+	return join(process.env.FLEETMUX_PI_DIR || process.env.CMUX_FLEET_PI_DIR || "", "fleetmux", "session_board.py");
 }
 
 export default function (pi: ExtensionAPI) {

@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import history_view  # noqa: E402
-from cmux_fleet.history_view import Entry, HistoryModel, View  # noqa: E402
+from fleetmux import history_view  # noqa: E402
+from fleetmux.history_view import Entry, HistoryModel, View  # noqa: E402
 
 ENTER = 10
 
@@ -352,7 +352,7 @@ def test_history_exits_after_pty_close_even_with_ignored_hup(tmp_path):
         proc = subprocess.Popen(
             [sys.executable, '-c',
              'import signal,sys; signal.signal(signal.SIGHUP, signal.SIG_IGN); '
-             'from cmux_fleet.history_view import main; sys.exit(main(sys.argv))', str(tmp_path)],
+             'from fleetmux.history_view import main; sys.exit(main(sys.argv))', str(tmp_path)],
             stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
         assert select.select([master], [], [], 5)[0], 'history did not draw'

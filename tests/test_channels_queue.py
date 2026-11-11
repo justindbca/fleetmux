@@ -21,8 +21,8 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_channels_contract import Audit
-from cmux_fleet import channels
-from cmux_fleet.channels import base, envelope, queue, throttle
+from fleetmux import channels
+from fleetmux.channels import base, envelope, queue, throttle
 
 FAKE_CONTEXT_TOKEN = 'ctx-FAKE-0123456789'
 FAKE_BOT_TOKEN = '123:FAKE'

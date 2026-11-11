@@ -17,9 +17,9 @@ import pytest
 
 from test_fleet import FakeMgr, traffic
 from test_message_bus_v2 import private_redis_v2
-from cmux_fleet import fleet, pi_adapter, runtime_v2
-from cmux_fleet.agent_bridge import AgentBridge
-from cmux_fleet.message_bus import BusError
+from fleetmux import fleet, pi_adapter, runtime_v2
+from fleetmux.agent_bridge import AgentBridge
+from fleetmux.message_bus import BusError
 
 
 @pytest.fixture
@@ -393,7 +393,7 @@ def test_service_skip_is_ui_only_and_does_not_dispatch(fx):
 
 
 def test_control_failure_cannot_fail_daemon_recovery_or_shutdown_redis(fx,monkeypatch):
-    from cmux_fleet import control_view
+    from fleetmux import control_view
     monkeypatch.setattr(control_view,'start_control',lambda cfg: (_ for _ in ()).throw(RuntimeError('slow panel failed')))
     fx.stopping=True
     fx.run()

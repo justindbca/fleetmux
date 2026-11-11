@@ -27,9 +27,9 @@ import urllib.parse
 
 import pytest
 
-from cmux_fleet import __version__ as FLEETMUX_VERSION
-from cmux_fleet import channels
-from cmux_fleet.channels import base, weixin
+from fleetmux import __version__ as FLEETMUX_VERSION
+from fleetmux import channels
+from fleetmux.channels import base, weixin
 
 # The protocol constant the source names (login-qr.ts:39, accounts.ts:13). Asserted as a value only: FakeILink
 # answers every request in-process, nothing ever connects to it.

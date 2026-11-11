@@ -19,8 +19,8 @@ import redis
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the repo's private test Redis)
 from test_runtime_v2 import fx  # noqa: F401  (fixture: v2 service fleet, pi supervisor)
 from test_channels_contract import Audit, FakeChannel, config_dir, fake_registered  # noqa: F401
-from cmux_fleet import channels
-from cmux_fleet.channels import envelope, security, strangers
+from fleetmux import channels
+from fleetmux.channels import envelope, security, strangers
 
 ACCOUNT = 'contract-1'
 REQ = 'fx:req:'
@@ -93,7 +93,7 @@ def outq(r):
 
 
 def deliver(f, text, segs=None, pol=None):
-    from cmux_fleet.channels import actor
+    from fleetmux.channels import actor
     from test_channel_actor_inbound import fleet_submit, replies_sink
     env = envelope.make('fake', ACCOUNT, conversation='c-1', message_id=uuid.uuid4().hex[:12], sender='u-1',
                         text=text, reply_ref={'chat': 'c-1'}, provenance=segs)
@@ -354,7 +354,7 @@ def test_strangers_window_resets_after_600s(private_redis_v2):
 
 # ---------------------------------------------------------------------------------------------- 6
 def test_stranger_alert_never_replies_to_the_stranger(private_redis_v2, fake_registered, tmp_path):
-    from cmux_fleet.channels import base
+    from fleetmux.channels import base
     from test_channels_contract import FAKE_CONTRACT
     r = private_redis_v2
     r.flushdb()

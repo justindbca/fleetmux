@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cmux_fleet import backends, fleet, subfleet  # noqa: E402
-from cmux_fleet.backends import base  # noqa: E402
+from fleetmux import backends, fleet, subfleet  # noqa: E402
+from fleetmux.backends import base  # noqa: E402
 
 
 class _Stop(Exception):

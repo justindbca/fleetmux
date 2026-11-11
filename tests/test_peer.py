@@ -9,7 +9,7 @@ import json
 import pytest
 
 from test_contracts import cf, frozen_state, inbox, item, report, submit, sup, to_parallel  # noqa: F401
-from cmux_fleet import fleet, peer, runtime_v2
+from fleetmux import fleet, peer, runtime_v2
 
 NOTICE = ('[iface-notice] IF-M0-src 1 -> 2 | breaking | UNAPPROVED\n'
           'changed: column `title` renamed `headline`\nsample: worker-1/stubs/IF-M0-src.v2.md\nfrom: worker-1 (M0)')

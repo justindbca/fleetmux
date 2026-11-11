@@ -33,8 +33,8 @@ import hook_sim  # noqa: E402,F401  (the conftest stand-in drives the Claude tur
 import test_subfleet as ts  # noqa: E402  (helpers only: no fixture of it is used here)
 from _fleetmux_milestone import milestone  # noqa: E402
 from test_fleet import received  # noqa: E402
-from cmux_fleet import fleet, fleetmux_sidebar, named_subfleet, roster, subfleet  # noqa: E402
-from cmux_fleet.backends import fleetmux as fm  # noqa: E402
+from fleetmux import fleet, fleetmux_sidebar, named_subfleet, roster, subfleet  # noqa: E402
+from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 RS = W.ROOT_SESSION
 OLD_REFUSAL = 'sub-fleets are not supported on the fleetmux backend'
@@ -120,7 +120,7 @@ def start_fm_tree(request, monkeypatch, kind, tag='sf', prepare=None, **over):
         for slot in f.names:
             assert ts.hook(t, f, slot, 'READY', prompt='startup')['status'] == 'ready'
         if cfg['mode'] == 'task':
-            from cmux_fleet import runtime_v2
+            from fleetmux import runtime_v2
             runtime_v2.post_event(f.v2.bus, dict(kind='task', request_id='new-task',
                                                  spec={'goal': 'write the report'}), 'new-task')
         ts.step(t)

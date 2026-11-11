@@ -23,8 +23,8 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import audits, fx, receive, req  # noqa: F401  (fx: pi supervisor + pi worker, service, v2)
 from test_fleet import FakeMgr
 from test_channels_contract import Audit
-from cmux_fleet import channels, fleet, fleetmux_sidebar, lifecycle_close, subfleet, tabs
-from cmux_fleet.channels import envelope, supervise
+from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, subfleet, tabs
+from fleetmux.channels import envelope, supervise
 
 OLD_PARTS = ['roster', 'advisor', 'lifecycle', 'result', 'contracts', 'subfleet', 'tabs', 'fleetmux',
              'escalations', 'waiting', 'notices', 'vetoes']  # Fleet.tick at 4cd1156 / 26392b9, in order

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from cmux_fleet import cli_pairs, runtime_v2, transport_inventory
-from cmux_fleet import fleet_config
+from fleetmux import cli_pairs, runtime_v2, transport_inventory
+from fleetmux import fleet_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -142,6 +142,6 @@ def test_inventory_uses_same_rule_and_wording():
 def test_yaml_ships_as_package_data():
     tomllib = pytest.importorskip('tomllib')
     data = tomllib.loads((ROOT / 'pyproject.toml').read_text())
-    globs = data['tool']['setuptools']['package-data']['cmux_fleet']
-    shipped = {p for g in globs for p in (ROOT / 'cmux_fleet').glob(g)}
+    globs = data['tool']['setuptools']['package-data']['fleetmux']
+    shipped = {p for g in globs for p in (ROOT / 'fleetmux').glob(g)}
     assert fleet_config.SHIPPED in shipped

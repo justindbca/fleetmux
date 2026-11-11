@@ -220,7 +220,7 @@ def daemon_of(procs, cfg_path):
     """The `fleet.py daemon <cfg>` process (with or without --resume) of one config, or None."""
     for p in procs.values():
         parts = p['command'].split()
-        if len(parts) >= 4 and parts[1].endswith('cmux_fleet/fleet.py') and parts[2] == 'daemon' \
+        if len(parts) >= 4 and parts[1].endswith('fleetmux/fleet.py') and parts[2] == 'daemon' \
                 and parts[3] == str(cfg_path) and parts[4:] in ([], ['--resume']):
             return p
     return None

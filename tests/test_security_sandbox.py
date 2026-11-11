@@ -14,8 +14,8 @@ import pytest
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import fx  # noqa: F401  (fixture)
-from cmux_fleet import channels, fleet, sandbox
-from cmux_fleet.channels import security
+from fleetmux import channels, fleet, sandbox
+from fleetmux.channels import security
 
 BUSINESS = ('futu', 'moomoo', 'ibkr', 'stte', 'macmini', 'studio', 'notify_bus', 'order_gate', 'oc_', 'ou_')
 RUN = '/tmp/R'

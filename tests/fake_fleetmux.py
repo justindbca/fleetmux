@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.14
 """A fake ``fleetmux`` binary: the control protocol without waiting for Rust (plan.md §3.5).
 
-Normative source: ``fleetmux/PROTOCOL.md`` (proto-1's draft, supervisor rulings R1–R12 + the three extra ones).
+Normative source: ``rust/PROTOCOL.md`` (proto-1's draft, supervisor rulings R1–R12 + the three extra ones).
 Same command line as the real binary:
 
 * ``fleetmux --version`` prints ``fleetmux 0.2.0 (protocol 1)`` (R9).
@@ -34,7 +34,7 @@ cursor addressing is ignored. Test knobs (env, read when the server starts): ``F
 ``FAKE_FM_PROTOCOL`` protocol number; ``FAKE_FM_FAIL`` comma list of commands that answer ``internal``;
 ``FAKE_FM_START_FAIL`` = message: written to server.log, then exit 1 instead of starting; ``FAKE_FM_EXPECT_UID``
 the uid peers must have (default: ours); ``FAKE_FM_KEYS`` path of keys.json (default
-``../fleetmux/protocol/keys.json`` from this file); ``FAKE_FM_SCROLLBACK`` scrollback rows (10000);
+``../rust/protocol/keys.json`` from this file); ``FAKE_FM_SCROLLBACK`` scrollback rows (10000);
 ``FAKE_FM_LOG`` path every request line is appended to. ``FAKE_FM_*`` is removed from every pane's environment.
 ``--theme FILE`` (§9.1): a JSON object with the optional keys ``bg`` / ``fg`` / ``cursor`` (``#rrggbb``, either
 case, stored lowercase) and ``ansi`` (exactly 16 colours); it is merged over ``CMUX_THEME`` (the Python copy of
@@ -246,7 +246,7 @@ def answers(sock_path):
 
 
 def load_keys():
-    path = os.environ.get('FAKE_FM_KEYS') or Path(__file__).resolve().parent.parent / 'fleetmux/protocol/keys.json'
+    path = os.environ.get('FAKE_FM_KEYS') or Path(__file__).resolve().parent.parent / 'rust/protocol/keys.json'
     return {k: v.encode() for k, v in json.loads(Path(path).read_text())['keys'].items()}
 
 

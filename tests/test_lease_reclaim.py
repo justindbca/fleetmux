@@ -27,7 +27,7 @@ from test_request_no_deadline import post, result
 from test_link_loss import tick as plan_tick
 from test_midturn_v2 import SLOT, order_plan
 from test_runtime_v2_planning import plan  # noqa: F401  (fixture)
-from cmux_fleet import fleet, runtime_v2
+from fleetmux import fleet, runtime_v2
 
 REPORT = 'Done:\n- wrote part.md\nEvidence:\n- worker-1/part.md 8 bytes\nNot done: none\nBlocked: none'
 

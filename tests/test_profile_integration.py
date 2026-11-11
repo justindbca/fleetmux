@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cmux_fleet import fleet
+from fleetmux import fleet
 from test_fleet import FakeMgr, FakeRedis, decision, fx, last_to, traffic, turn, write_rollout, THREADS
 from test_pi import callback, operator_input, pfx, pi_turn
 
@@ -124,7 +124,7 @@ def test_revalidate_before_delivery_and_before_context_rotation(routed, monkeypa
         f.r.hset(fleet.TASK, mapping={'profile_assignments': json.dumps(assignments)})
     elif change == 'unknown_card':
         # The marker and trusted assignment agree, but the registry no longer has the card.
-        from cmux_fleet.agent_registry import AgentRegistry
+        from fleetmux.agent_registry import AgentRegistry
         registry = AgentRegistry()
         registry._cards = ()
         monkeypatch.setattr(fleet, 'AgentRegistry', lambda *args: registry)

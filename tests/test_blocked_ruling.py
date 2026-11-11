@@ -10,7 +10,7 @@ import pytest
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_v2_codex_claude import answer_turn, dispatch_one, mixed, submit, typed  # noqa: F401  (fixture)
 from test_contracts import cf, inbox, item, report, sup, to_parallel, write  # noqa: F401
-from cmux_fleet import fleet
+from fleetmux import fleet
 
 KEY = 'blocked:worker-1'
 STUCK = 'Done:\n- read the spec\nEvidence:\n- worker-1/notes.md\nNot done: section 3\nBlocked: need permission to change design §3'

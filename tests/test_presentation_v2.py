@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cmux_fleet.presentation import (
+from fleetmux.presentation import (
     CardError, MECHANICAL_KINDS, STOP_CONFIRMED, STOP_RUNNING, STOP_UNKNOWN,
     classify_routing, event_id, mask_secrets, result_card, routing_card, sanitize_text,
     timeline_line,
