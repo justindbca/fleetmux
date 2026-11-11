@@ -9,7 +9,13 @@ run's own rule (design §5), not the manifest's line order:
   `--backend` / `FLEETMUX_BACKEND` -> that backend;
   otherwise macOS (darwin) -> cmux when it works, else wezterm; off macOS -> fleetmux.
 
-Gated items of the other backend print as `skip` and never fail the check."""
+Gated items of the other backend print as `skip` and never fail the check.
+
+`agent: true` marks an agent CLI (codex, claude, pi, opencode). A fleet uses only the CLIs its roster names, and
+`start` checks exactly those, so here one installed agent CLI is enough: an installed one must meet its minimum, a
+missing one prints as `not installed` and does not fail, and no agent CLI at all fails the `agent CLI` row.
+`with: <program>` ties an item to another program (node for pi): it is checked only when that program is
+installed."""
 import os
 import re
 import subprocess
@@ -93,11 +99,26 @@ def check(root=ROOT, backend=None, plat=None, probe_it=None):
         except metadata.PackageNotFoundError:
             have = None
         rows.append((name, have or 'missing', '==' + want, have == want))
-    for name, item in spec['programs'].items():
+    programs = spec['programs']
+    found = {}
+
+    def have_of(name):
+        if name not in found:
+            found[name] = probe_it(programs[name]['cmd'])
+        return found[name]
+
+    agents = [n for n, item in programs.items() if item.get('agent')]
+    for name, item in programs.items():
         if item.get('when') and item['when'] != backend:
             rows.append((name, 'skip (backend=' + item['when'] + ')', '>=' + item['min'], True))
             continue
-        have = probe_it(item['cmd'])
+        if item.get('with') and have_of(item['with']) is None:
+            rows.append((name, 'skip (only with ' + item['with'] + ')', '>=' + item['min'], True))
+            continue
+        have = have_of(name)
+        if have is None and item.get('agent'):
+            rows.append((name, 'not installed (optional: one agent CLI is enough)', '>=' + item['min'], True))
+            continue
         shown = '.'.join(map(str, have)) if have else 'missing'
         ok = at_least(have, item['min'])
         if have is None and item.get('desktop') and not desktop:
@@ -109,6 +130,9 @@ def check(root=ROOT, backend=None, plat=None, probe_it=None):
             # design §4.4: a wezterm run needs both binaries; say so instead of a bare version miss.
             shown += ' (needed for the private mux server: install wezterm, it ships both)'
         rows.append((name, shown, '>=' + item['min'], ok))
+    if agents:
+        usable = [n for n in agents if at_least(have_of(n), programs[n]['min'])]
+        rows.append(('agent CLI', ', '.join(usable) or 'none installed', 'one of ' + ' / '.join(agents), bool(usable)))
     return rows
 
 

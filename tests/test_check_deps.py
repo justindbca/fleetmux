@@ -263,3 +263,53 @@ def test_shipped_fleetmux_web_matches_fleetmux_and_is_desktop_only(tmp_path, mon
     assert _rows(tmp_path, backend='fleetmux', plat='darwin')['fleetmux-web'][3] is False
     monkeypatch.setenv('WAYLAND_DISPLAY', 'wayland-0')
     assert _rows(tmp_path, backend='fleetmux', plat='linux')['fleetmux-web'][3] is False
+
+
+# ---------------------------------------------------------------- agent CLIs and their runtimes
+# A fleet uses the agent CLIs its roster names (`start` checks exactly those), so the install check needs only one
+# of them: an installed one must meet its minimum, a missing one is reported, not failed. `with: <program>` items
+# (node for pi) are needed only when that program is installed.
+
+def _agents(tmp_path, monkeypatch, installed):
+    (tmp_path / 'deps.yaml').write_text(
+        'python: {min: "3.0"}\npython_packages: req.txt\n'
+        'programs:\n'
+        '  claude: {cmd: [claude, --version], min: "2.0", agent: true}\n'
+        '  pi: {cmd: [pi, --version], min: "1.2", agent: true}\n'
+        '  node: {cmd: [node, --version], min: "22.0", with: pi}\n')
+    (tmp_path / 'req.txt').write_text('')
+    monkeypatch.setattr(check_deps, 'probe', lambda cmd: installed.get(cmd[0]))
+    return _rows(tmp_path, backend='fleetmux')
+
+
+def test_one_agent_cli_is_enough_and_the_others_are_not_failed(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {'claude': (2, 1)})
+    assert rows['claude'][3] and rows['pi'][3] and 'not installed' in rows['pi'][1]
+    assert rows['node'][3] and 'pi' in rows['node'][1]  # skipped: pi is not installed
+    assert all(r[3] for r in rows.values())
+
+
+def test_no_agent_cli_at_all_fails(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {})
+    assert not rows['agent CLI'][3] and 'claude' in rows['agent CLI'][2] and 'pi' in rows['agent CLI'][2]
+
+
+def test_an_installed_agent_below_its_minimum_fails(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {'claude': (2, 1), 'pi': (1, 1), 'node': (22, 1)})
+    assert not rows['pi'][3] and rows['claude'][3]
+
+
+def test_a_with_item_is_required_once_its_program_is_installed(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {'pi': (1, 2), 'node': (18, 19)})
+    assert not rows['node'][3]
+    rows = _agents(tmp_path, monkeypatch, {'pi': (1, 2)})
+    assert not rows['node'][3] and rows['node'][1] == 'missing'
+
+
+def test_the_shipped_manifest_marks_the_agent_clis_and_ties_node_to_pi():
+    import yaml
+    programs = yaml.safe_load((ROOT / 'deps.yaml').read_text())['programs']
+    assert {n for n, p in programs.items() if p.get('agent')} == {'codex', 'claude', 'pi', 'opencode'}
+    assert programs['node']['with'] == 'pi'
+    for name in ('redis-server', 'tmux', 'git'):
+        assert not programs[name].get('agent') and not programs[name].get('with'), name

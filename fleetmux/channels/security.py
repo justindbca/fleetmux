@@ -34,7 +34,7 @@ DEFAULTS = {
                 'patterns': {}, 'high': 'desk'},
     'stop': {'level': 'interrupt'},
     'limits': {'inbound_per_sender_10m': 60, 'requests_per_h': 30, 'outbound_per_h': 300,
-               'tool_calls_per_delivery': 400, 'on_trip': 'pause'},
+               'security_alerts_per_h': 10, 'tool_calls_per_delivery': 400, 'on_trip': 'pause'},
     'audit_log': {'enabled': 'on', 'dir': 'audit', 'uappend': 'on',
                   'events': ['channel.*', 'security.*', 'dialog.*', 'execution.*', 'hook.*', 'service.*']},
     'sandbox': {'mode': 'off', 'allow_domains': [], 'deny_read': [], 'memory': 'off', 'codex_hooks': 'off'},
@@ -54,7 +54,7 @@ _CHOICES = {
 _POSITIVE = {('reader', 'timeout_s'), ('reader', 'max_chars'), ('strangers', 'alert_after'), ('strangers', 'window_s'),
              ('strangers', 'cooldown_s'), ('confirm', 'wait_s'), ('confirm', 'ticket_ttl_s'),
              ('limits', 'inbound_per_sender_10m'), ('limits', 'requests_per_h'), ('limits', 'outbound_per_h'),
-             ('limits', 'tool_calls_per_delivery')}
+             ('limits', 'security_alerts_per_h'), ('limits', 'tool_calls_per_delivery')}
 _STR_LISTS = {('links', 'allow'), ('audit_log', 'events'), ('sandbox', 'allow_domains'), ('sandbox', 'deny_read')}
 _BUDGET_WORDS = ('usd', 'cost', 'budget', 'calls', 'rounds', 'hours', 'tokens')
 

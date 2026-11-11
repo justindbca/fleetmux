@@ -159,3 +159,34 @@ def test_no_policy_no_counters(private_redis_v2):  # [baseline]
     assert lim.outbound(envelope.outbound('result', target='last', text='x')) is True
     assert not list(r.scan_iter(channels.LIMIT + '*'))
     assert not [x for x in rows if x['event'].startswith('security.')]
+
+
+def test_the_trip_alert_is_not_stopped_by_the_outbound_limit_it_reports(private_redis_v2):
+    r = private_redis_v2
+    r.flushdb()
+    lim = limits.Limits(r, policy(on_trip='alert'), clock=Clock())
+    results = [envelope.outbound('result', target='last', text='done ' + str(i)) for i in range(3)]
+    assert [lim.outbound(x) for x in results] == [True, True, False]          # the third trips the limit
+    alert, = [json.loads(x) for x in r.lrange(channels.OUTQ, 0, -1)]
+    assert alert['event'] == 'security'
+    assert lim.outbound(alert) is True                                        # ... and its alert still goes out
+    assert all(json.loads(x).get('event') != 'security' for x in r.lrange(channels.DEAD, 0, -1))
+
+
+def test_security_alerts_have_their_own_hourly_budget(private_redis_v2):
+    r = private_redis_v2
+    r.flushdb()
+    rows = []
+    lim = limits.Limits(r, policy(security_alerts_per_h=2, outbound_per_h=100), clock=Clock(), audit=audit_sink(rows))
+    alerts = [envelope.outbound('security', target='last', user_only=True, text='alert ' + str(i)) for i in range(3)]
+    assert [lim.outbound(x) for x in alerts] == [True, True, False]           # the event name is no way around a cap
+    dead, = [json.loads(x) for x in r.lrange(channels.DEAD, 0, -1)]
+    assert dead['dead_reason'] == 'limit' and dead['event'] == 'security'
+    assert lim.outbound(envelope.outbound('result', target='last', text='done')) is True   # counted apart
+    assert r.lrange(channels.OUTQ, 0, -1) == []                               # a refused alert queues no new alert
+
+
+def test_default_policy_gives_security_alerts_ten_an_hour():
+    pol, errors = security.parse_security('')
+    assert not errors and pol['limits']['security_alerts_per_h'] == 10
+

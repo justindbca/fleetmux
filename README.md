@@ -176,23 +176,28 @@ What the daemon enforces, independently of what the models claim:
 
 ## Requirements
 
-- macOS with [cmux](https://cmux.dev) ≥ 0.64.25 (`new-surface --command`). Run `start` **inside a cmux
-  terminal**, or set cmux's *automation → socket control mode* away from `cmuxOnly`; by default cmux
-  only accepts commands from processes it started.
-- For Codex agents: [Codex CLI](https://github.com/openai/codex) ≥ 0.156 (per-file profiles, `check_for_update_on_startup`). The daemon parses Codex's rollout `.jsonl` files (`token_count`,
-  `task_complete`, subagent metadata); if a Codex release changes that format, pin the version that
-  works for you.
-- `redis-server` on PATH (`brew install redis`). Each run starts its own private instance under the
-  checkout's `.runtime/redis/<token>/` (socket, PID, log and data); TCP is disabled and it never
-  touches `localhost:6379`. The binary is still an external dependency, not bundled.
-- Python 3.14 (the version the test suite runs on; `deps.yaml` lists every external program and its
-  minimum version) and the packages in `requirements.txt`.
-- Any model Codex can talk to: OpenAI API, ChatGPT login, or a local OpenAI-compatible server. The
-  daemon reads the context window from the rollout, so no window size has to be configured.
-- Agents run in an **isolated Codex home** (`--codex-home`, default `~/.fleetmux/codex-home`):
-  `auth.json` and the profile file are symlinked from your `~/.codex`, so the login is shared, but
-  your hooks, MCP servers, plugins and skills do not run inside agents (`skills.include_instructions=false`). Per-agent "trust this folder" entries
-  are written there automatically.
+| Item | Version | Notes |
+|---|---|---|
+| OS | Linux or macOS, x86_64 or ARM64 | The Linux `fleetmux` binary is static. The desktop window `fleetmux-web` needs glibc >= 2.39 and WebKitGTK 4.1 (Ubuntu 24.04 desktop has both). |
+| Python | 3.14 | `scripts/install.sh` provides it through [uv](https://docs.astral.sh/uv/). The system Python is not used. |
+| `redis-server` | >= 7.0 | Each run starts its own private instance under the release's `.runtime/redis/<token>/` (socket, PID, log, data). TCP is off; it never touches `localhost:6379`. |
+| `tmux` | >= 3.4 | Sub-fleets show one session in two tabs. |
+| `git` | >= 2.30 | The delivery gate fast-forwards branches. |
+| One agent CLI | see `deps.yaml` | [Claude Code](https://code.claude.com), [Codex](https://github.com/openai/codex), [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) or [opencode](https://opencode.ai), logged in. Install only the ones your roster uses. pi also needs Node.js >= 22. |
+| cmux (macOS only) | >= 0.65.0 | The default terminal on macOS. Run `start` inside a cmux terminal, or set cmux's *automation -> socket control mode* away from `cmuxOnly`. Without cmux, macOS uses WezTerm or `--backend fleetmux`. |
+
+`scripts/check_deps.py` checks all of these against `deps.yaml` and prints one line per item.
+
+Notes for Codex agents:
+
+- The daemon parses Codex's rollout `.jsonl` files (`token_count`, `task_complete`, subagent metadata). If a Codex
+  release changes that format, pin the version that works for you.
+- Any model Codex can talk to works: OpenAI API, ChatGPT login, or a local OpenAI-compatible server. The daemon reads
+  the context window from the rollout.
+- Agents run in an **isolated Codex home** (`--codex-home`, default `~/.fleetmux/codex-home`). `auth.json` and the
+  profile file are symlinked from your `~/.codex`, so the login is shared, but your hooks, MCP servers, plugins and
+  skills do not run inside agents (`skills.include_instructions=false`). Per-agent "trust this folder" entries are
+  written there automatically.
 
 ## Install
 
@@ -200,6 +205,37 @@ One command: `fleetmux <subcommand>` (e.g. `fleetmux start`, `fleetmux status`, 
 its own terminal subcommands (`server`, `attach`, `reap`, `web`, `gui --runtime D`) and hands every fleet subcommand
 to the Python CLI of the same release (docs/design.md §50). A machine set up under the project's earlier name
 moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
+
+### Quick install (Linux and macOS)
+
+1. **Install the system packages.**
+
+   ```bash
+   sudo apt install redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                # macOS
+   ```
+
+2. **Run the installer.** It needs only `curl` and `tar`. It installs the latest release into
+   `~/fleetmux-releases/v<version>`, gets Python 3.14 through uv, downloads the prebuilt binaries (sha256-checked),
+   links `fleetmux` into `~/.local/bin` and runs the dependency check. No root, no compiler.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+   ```
+
+3. **Install and log in to one agent CLI**, for example Claude Code:
+
+   ```bash
+   curl -fsSL https://claude.ai/install.sh | bash && claude
+   ```
+
+4. **Check.** `fleetmux start --help` prints the options. Run `~/fleetmux-releases/v<version>/.venv/bin/python
+   ~/fleetmux-releases/v<version>/scripts/check_deps.py` again after step 3: every line must say `ok`.
+
+Options: `FLEETMUX_VERSION=0.2.1` installs a given release; `FLEETMUX_RELEASES` and `FLEETMUX_BIN_DIR` move the
+install and the links (see the header of `scripts/install.sh`).
+
+### From source (development)
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux

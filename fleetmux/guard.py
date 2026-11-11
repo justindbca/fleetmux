@@ -62,6 +62,7 @@ _PIPE_INTERP = re.compile(r'\|&?\s*(?:sudo\s+)?(?:\S*/)?(?:' + '|'.join(_SHELLS)
 _FORCED = re.compile(r'(?:^|[;&|(\n])\s*(?:eval\b|\$)')        # U2: eval / a variable as the command word
 _WRAPPERS = {'sudo', 'nohup', 'time', 'command', 'exec', 'nice', 'builtin', 'stdbuf', 'doas'}
 _DEVNULL = ('/dev/null',)
+_OPERATOR = re.compile(r'[<>&]*[<>][<>&|]*|\n|;;|;&|;|\|\||\|&|\||&&|&|\(|\)')
 
 
 def _delete_patterns():
@@ -85,7 +86,11 @@ def _tokens(cmd):
     lex.whitespace = ' \t\r'
     lex.whitespace_split = True
     lex.commenters = ''
-    return list(lex)
+    out = []
+    for tok in lex:
+        # shlex returns a run of punctuation as one token ('\n\n', ';\n', ');'): split it into operators
+        out.extend(_OPERATOR.findall(tok) if tok and not tok.strip('();<>|&\n') else [tok])
+    return out
 
 
 class _Seg:
@@ -302,9 +307,14 @@ _NET = {'curl', 'wget', 'nc', 'ncat', 'netcat', 'telnet', 'socat', 'ftp', 'sftp'
         'https', 'xh', 'aria2c'}
 _CURL_ARG = {'-H', '--header', '-o', '--output', '-d', '--data', '--data-raw', '--data-binary', '--data-urlencode',
              '-X', '--request', '-u', '--user', '-A', '--user-agent', '-e', '--referer', '-F', '--form', '-T',
-             '--upload-file', '-b', '--cookie', '-c', '--cookie-jar', '-O', '--output-document', '-P', '-m',
-             '--max-time', '--connect-timeout', '-w', '--write-out', '-K', '--config', '--unix-socket', '-i',
-             '-p', '-l', '-F', '-o', '-E', '--cert', '--key', '--cacert', '-x', '--proxy'}
+             '--upload-file', '-b', '--cookie', '-c', '--cookie-jar', '-P', '-m',
+             '--max-time', '--connect-timeout', '-w', '--write-out', '-K', '--config', '--unix-socket',
+             '-E', '--cert', '--key', '--cacert', '-x', '--proxy'}
+_WGET_ARG = {'-o', '--output-file', '-a', '--append-output', '-O', '--output-document', '-P', '--directory-prefix',
+             '-i', '--input-file', '-T', '--timeout', '-t', '--tries', '-w', '--wait', '-e', '--execute', '-A',
+             '--accept', '-R', '--reject', '-D', '--domains', '-X', '--exclude-directories', '-l', '--level', '-U',
+             '--user-agent', '-Q', '--quota', '--header', '--referer', '--user', '--password', '--post-data',
+             '--post-file', '--method', '--body-data', '--body-file', '--load-cookies', '--save-cookies'}
 _INSTALLERS = {'pip', 'pip3', 'uv', 'npm', 'pnpm', 'yarn', 'brew', 'apt', 'apt-get', 'cargo', 'gem', 'pipx',
                'poetry', 'bun', 'go', 'conda', 'mamba', 'port', 'dnf', 'yum', 'apk', 'pacman'}
 _INSTALL_VERBS = {'install', 'add', 'i', 'get', '-S'}
@@ -342,7 +352,9 @@ def _send_out_seg(argv):
     for a in args:
         if skip:
             skip = False
-        elif a in _CURL_ARG and base in ('curl', 'wget', 'http', 'https', 'xh'):
+            if '://' not in a:          # a URL is never taken for an option's value
+                continue
+        if a in (_WGET_ARG if base == 'wget' else _CURL_ARG) and base in ('curl', 'wget', 'http', 'https', 'xh'):
             skip = True
         elif not a.startswith('-'):
             rest.append(a)

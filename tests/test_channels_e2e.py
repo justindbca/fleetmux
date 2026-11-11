@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ from test_runtime_v2 import event, fx, receive, result, session, settle  # noqa:
 from test_v2_codex_claude import dispatch_one, mixed  # noqa: F401  (fixture + helper)
 from test_watchdog import DIALOG_RM_LITERAL, keys, wd  # noqa: F401  (fixture + helpers)
 from test_channels_contract import Audit, FakeChannel, _fake_transport, config_dir  # noqa: F401
-from fleetmux import channels, fleet
+from fleetmux import channels, fleet, runtime_v2
 from fleetmux.channels import envelope
 
 ALLOWED = 'u-1'
@@ -679,9 +680,16 @@ def test_security_forwarded_message_is_wrapped_and_write_action_needs_approval(f
     nonce = [c for c in confirm if (c.get('card') or {}).get('ref') == p_id][-1]['card']['buttons'][0]['command'] \
         .split()[-1]
     assert len(nonce) == 16
-    sec_inbound(f, sec_env('/approve ' + p_id + ' ' + nonce, 143), replies=replies, post=f.v2.user_dialog_answer)
-    for _ in range(3):
-        f.v2.step(10)  # RuntimeV2.user_dialog_answer is the only ticket writer
+    def post(event):  # as the channel actor: onto the run's event stream, answered by the daemon's event loop
+        rid = 'ch-' + uuid.uuid4().hex[:16]
+        runtime_v2.post_event(f.v2.bus, dict(event, request_id=rid), rid)
+        for _ in range(20):
+            f.v2.step(10)  # RuntimeV2.user_dialog_answer is the only ticket writer
+            rows = f.r.xrange(f.v2.prefix + ':reply:' + rid, count=1)
+            if rows:
+                return json.loads(rows[0][1]['data'])
+        raise AssertionError('the daemon never answered the event')
+    sec_inbound(f, sec_env('/approve ' + p_id + ' ' + nonce, 143), replies=replies, post=post)
     assert len(list(f.r.scan_iter('fx:guard:ticket:*'))) == 1
     assert any(a.get('stage') == 'answered' for a in security_audits(f, 'security.action_approved'))
     second, proc = pretool(f, 'worker-1', 'Edit', edit)

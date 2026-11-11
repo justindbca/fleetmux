@@ -7,23 +7,26 @@
 # `when:` are required for every backend. Pick the backend with `--backend` or FLEETMUX_BACKEND.
 # `desktop: true` items are needed only in a desktop session (macOS, or DISPLAY / WAYLAND_DISPLAY set): missing on a
 # headless box they are reported as a warning, not a failure.
+# `agent: true` items are the agent CLIs: one installed is enough (a fleet uses the ones its roster names, and
+# `start` checks those); an installed one must meet its minimum. `with: <program>` items are needed only when that
+# program is installed (node for pi).
 # fleetmux.min is also the release scripts/install_fleetmux.sh downloads (GitHub release v<min>, sha256-checked).
 python:
   min: "3.14"                # the release .venv interpreter (tests run on 3.14)
 python_packages: requirements.txt
 programs:
-  redis-server: {cmd: [redis-server, --version], min: "8.4.0", why: "private Redis of every run"}
-  codex: {cmd: [codex, --version], min: "0.162.0", why: "codex queue delivery needs turn_attribution in the rollout"}
-  claude: {cmd: [claude, --version], min: "2.1.280", why: "Claude workers: Stop / StopFailure hook delivery"}
-  pi: {cmd: [pi, --version], min: "1.2.0", why: "pi supervisor / FlashNext workers"}
-  opencode: {cmd: [opencode, --version], min: "2.0.29", why: "opencode workers: v2 plugin API (setup ctx.tool/event/session/permission), --standalone"}
+  redis-server: {cmd: [redis-server, --version], min: "7.0.0", why: "private Redis of every run (Lua scripts, streams, GETDEL / LMOVE); 7.0 is the oldest tested"}
+  codex: {cmd: [codex, --version], min: "0.162.0", agent: true, why: "codex queue delivery needs turn_attribution in the rollout"}
+  claude: {cmd: [claude, --version], min: "2.1.280", agent: true, why: "Claude workers: Stop / StopFailure hook delivery"}
+  pi: {cmd: [pi, --version], min: "1.2.0", agent: true, why: "pi supervisor / FlashNext workers"}
+  opencode: {cmd: [opencode, --version], min: "2.0.29", agent: true, why: "opencode workers: v2 plugin API (setup ctx.tool/event/session/permission), --standalone"}
   cmux: {cmd: [cmux, --version], min: "0.65.0", when: cmux, why: "paste-buffer --bracketed (0.64.25 ignores it: multi-line pastes lose Enter); backend=cmux only"}
   wezterm: {cmd: [wezterm, --version], min: "20240203", when: wezterm, why: "mux server + cli (spawn / split-pane / get-text / send-text); backend=wezterm only"}
   wezterm-mux-server: {cmd: [wezterm-mux-server, --version], min: "20240203", when: wezterm, why: "each run's private mux server (design §4.1 / §4.4); backend=wezterm only"}
   fleetmux: {cmd: [fleetmux, --version], min: "0.2.0", when: fleetmux, why: "one private fleetmux server per run (fleetmux design §2); backend=fleetmux only"}
   fleetmux-web: {cmd: [fleetmux-web, --version], min: "0.2.0", when: fleetmux, desktop: true, why: "native history window (C-b o, browser_goto; fleetmux design §3.5); same release as fleetmux; desktop sessions only"}
-  node: {cmd: [node, --version], min: "22.0.0", why: "pi runtime"}
-  tmux: {cmd: [tmux, -V], min: "3.6", why: "named sub-fleet: one session shown in two tabs"}
+  node: {cmd: [node, --version], min: "22.0.0", with: pi, why: "pi runtime"}
+  tmux: {cmd: [tmux, -V], min: "3.4", why: "sub-fleets: one session shown in two tabs (3.4 = Ubuntu 24.04, the oldest tested)"}
   git: {cmd: [git, --version], min: "2.30", why: "delivery gate fast-forward"}
 # Optional Python packages, one per channel type that needs one (contracts §8 「可选依赖清单」). Not in
 # requirements.txt and not checked by scripts/check_deps.py: only a fleet whose roster configures that channel

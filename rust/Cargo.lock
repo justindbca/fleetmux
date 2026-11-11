@@ -800,7 +800,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "fleetmux"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "crossterm",
  "fleetmux-layout",
@@ -817,14 +817,14 @@ dependencies = [
 
 [[package]]
 name = "fleetmux-layout"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "fleetmux-proto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "fleetmux-term"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alacritty_terminal",
  "serde_json",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "fleetmux-web"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "fleetmux-proto",
  "gtk",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "ft-probe"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "crossterm",
  "libc",

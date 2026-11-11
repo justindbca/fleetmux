@@ -2,7 +2,8 @@
 
 Without a policy every check lets the message through and writes nothing (behaviour unchanged). With one, three
 fixed-window counters under ``fx:channel:limit:`` (INCR, EXPIRE set once when the key is new, never refreshed):
-inbound per sender (10 min), requests (1 h), outbound items (1 h). A trip is a deterministic refusal: inbound /
+inbound per sender (10 min), requests (1 h), outbound items (1 h; ``security`` alerts are counted apart, under
+``security_alerts_per_h``, so the alert about a trip is not stopped by that trip). A trip is a deterministic refusal: inbound /
 request -> no submit, a ``rate_limited`` receipt; outbound -> dead letter with ``dead_reason=limit``. Any trip
 also queues one ``security`` alert per hour and, with ``on_trip: pause``, pauses the fleet through P8m's
 ``stop.pause_service`` (this module never writes ``fx:service`` itself). Commands are never counted (C19).
@@ -16,6 +17,7 @@ from fleetmux.channels import envelope
 IN_WINDOW_S = 600
 HOUR_S = 3600
 ALERT_KEY = channels.LIMIT + 'alerted'
+SECURITY_ALERTS_PER_H = 10   # for a run whose pinned policy predates the security_alerts_per_h key
 _COUNT_LUA = "local n = redis.call('INCR', KEYS[1]) if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return n"
 
 
@@ -72,6 +74,17 @@ class Limits:
     def outbound(self, item=None):
         if self.policy is None:
             return True
+        if (item or {}).get('event') == 'security':
+            # The alert that says a limit tripped must not be stopped by that limit. It has a small budget of
+            # its own, so the event name is not a way around the cap.
+            budget = int(self._limits().get('security_alerts_per_h') or SECURITY_ALERTS_PER_H)
+            if self._count(channels.LIMIT + 'out:security', HOUR_S) <= budget:
+                return True
+            dead = dict(item, dead_reason='limit')
+            self.r.lpush(channels.DEAD, json.dumps(dead, ensure_ascii=False, default=str))
+            self.r.ltrim(channels.DEAD, 0, 999)
+            self._audit('security.limit_tripped', kind='security_alert', limit=budget, id=str(item.get('id', '')))
+            return False
         limit = int(self._limits().get('outbound_per_h') or 0)
         if limit and self._count(channels.LIMIT + 'out', HOUR_S) > limit:
             dead = dict(item or {}, dead_reason='limit')

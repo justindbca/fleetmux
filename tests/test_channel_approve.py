@@ -169,12 +169,27 @@ def step_one(rr, pid, replies, *, post=None, **env_kw):
     return calls
 
 
-def phone(f, decision='approve', **env_kw):
+def through_the_daemon(f):
+    """post= as the channel actor binds it: the event goes onto the run's event stream and the daemon's own
+    event loop answers it (nothing calls the handler directly)."""
+    def post(event):
+        rid = 'ch-' + uuid.uuid4().hex[:16]
+        runtime_v2.post_event(f.v2.bus, dict(event, request_id=rid), rid)
+        for _ in range(20):
+            f.v2.step(10)
+            rows = f.r.xrange(f.v2.prefix + ':reply:' + rid, count=1)
+            if rows:
+                return json.loads(rows[0][1]['data'])
+        raise AssertionError('the daemon never answered the event')
+    return post
+
+
+def phone(f, decision='approve', post=None, **env_kw):
     """The whole phone side for the slot's current pending record: step one + step two (or one reject), the
-    second step posted straight to RuntimeV2.user_dialog_answer (the daemon's handler)."""
+    second step posted straight to RuntimeV2.user_dialog_answer (the daemon's handler) unless ``post`` is given."""
     pid = pending_id(f)
     replies = []
-    post = f.v2.user_dialog_answer
+    post = post or f.v2.user_dialog_answer
     if decision == 'approve':
         step_one(f.r, pid, replies, post=post, **env_kw)
         nonce = nonce_of(replies)
@@ -788,3 +803,56 @@ def test_dialog_record_kind_and_card_title_by_class(r):
     card, = [x for x in replies if isinstance(x, dict)]
     assert nonce_of(replies) and '确认删除' not in json.dumps(card, ensure_ascii=False)
     assert card['title'] == '安装确认' and matches(card['text'], 'confirm_action', action='pip install requests')
+
+
+# ============================================================ the answer event through the daemon's event loop
+def test_approve_posted_as_an_event_is_answered_and_the_key_is_pressed(wdc, tmp_path):
+    f = wdc
+    user_table(f, tmp_path)
+    pid = mark_rm_with_channels(f)
+    before = f.r.get('fx:escalations')
+    _, _, replies = phone(f, post=through_the_daemon(f))
+    assert said(replies, 'answer_taken') and record(f.r, pid)['status'] == 'answered'
+    assert keys(f, 'worker-1') == [] and f.r.get('fx:escalations') == before
+    f.v2.watchdog.tick(time.time() + 1)
+    assert keys(f, 'worker-1') == TABLE_KEYS
+    answered, = user_answered(f)
+    assert answered['decision'] == 'approve' and answered['pending_id'] == pid
+
+
+def test_reject_posted_as_an_event_presses_escape(wdc, tmp_path):
+    f = wdc
+    user_table(f, tmp_path)
+    mark_rm_with_channels(f)
+    _, _, replies = phone(f, 'reject', post=through_the_daemon(f))
+    assert said(replies, 'answer_taken')
+    f.v2.watchdog.tick(time.time() + 1)
+    assert keys(f, 'worker-1') == ['Escape']
+
+
+def test_wrong_nonce_posted_as_an_event_is_stale_and_presses_nothing(wdc, tmp_path):
+    f = wdc
+    user_table(f, tmp_path)
+    pid = mark_rm_with_channels(f)
+    step_one(f.r, pid, [])
+    answer = through_the_daemon(f)({'kind': 'dialog_user_answer', 'pending_id': pid, 'decision': 'approve',
+                                    'nonce': 'f' * 16, 'channel': 'fake', 'account': 'contract-1',
+                                    'sender': 'u-1', 'conversation': 'c-1'})
+    assert answer == {'status': 'stale', 'reason': 'nonce'} and record(f.r, pid)['status'] == 'confirming'
+    f.v2.watchdog.tick(time.time() + 1)
+    assert keys(f, 'worker-1') == []
+
+
+def test_answer_check_that_breaks_is_refused_not_replayed(wdc, tmp_path, monkeypatch):
+    f = wdc
+    user_table(f, tmp_path)
+    pid = mark_rm_with_channels(f)
+
+    def broken(*a, **k):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(approve, 'answer_dialog', broken)
+    answer = through_the_daemon(f)({'kind': 'dialog_user_answer', 'pending_id': pid, 'decision': 'reject',
+                                    'channel': 'fake', 'account': 'contract-1', 'sender': 'u-1',
+                                    'conversation': 'c-1'})
+    assert answer == {'status': 'stale', 'reason': 'answer check failed'}
+    assert record(f.r, pid)['status'] == 'pending' and audits(f, 'dialog.user_answer_failed')

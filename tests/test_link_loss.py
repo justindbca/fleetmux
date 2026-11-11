@@ -147,3 +147,42 @@ def test_failed_restart_is_not_retried_every_tick(plan, monkeypatch):
     f.setf(SLOT, state='held', link_lost=1)
     wd.link_restart(SLOT, f.agent(SLOT), time.time())
     assert f.agent(SLOT)['link_lost'] == 'failed'
+
+
+def test_busy_bridge_slot_is_not_called_lost_right_after_a_sleep(plan, monkeypatch):
+    f, rt, source, env = order_plan(plan)
+    now = time.time()
+    # slept 15 min: the bridge (asleep too) could not renew; the work deadline is still far away
+    source.hset(rt.bus.lease_key(SLOT), mapping={'lease_until': int((now - 600) * 1000)})
+    rt.last_tick = now - 900
+    tick(f, rt, monkeypatch)
+    assert rt.hb_grace_until > now
+    assert f.agent(SLOT)['state'] == 'busy' and not f.agent(SLOT).get('link_lost')
+    rt.hb_grace_until = 0.0                                       # the grace passed and the bridge never renewed
+    tick(f, rt, monkeypatch)
+    assert f.agent(SLOT)['state'] == 'held' and f.agent(SLOT)['link_lost'] == '1'
+
+
+def test_slow_ticks_do_not_keep_the_heartbeat_check_off(plan, monkeypatch):
+    f, rt, source, env = order_plan(plan)
+    source.hset(rt.bus.lease_key(SLOT), mapping={'status': 'idle', 'current_delivery': '', 'message_id': ''})
+    f.setf(SLOT, state='idle', runtime_ready=1, bridge_hb_g=0)   # the bridge beat once; its key is gone (bridge dead)
+    t0 = time.time()
+    rt.last_tick = t0
+    for n in range(1, 4):                                         # a loaded daemon: one tick every 25 s
+        now = t0 + 25 * n
+        monkeypatch.setattr(time, 'time', lambda now=now: now)
+        rt.daemon_gap(now)
+        rt.heartbeat_check(SLOT, f.agent(SLOT))
+    assert f.agent(SLOT).get('link_lost') == '1'
+
+
+def test_a_real_sleep_during_slow_ticks_still_gets_the_wait(plan, monkeypatch):
+    f, rt, source, env = order_plan(plan)
+    now = time.time()
+    rt.last_tick, rt.gap_before = now - 900, True                # slow ticks before, then 15 min asleep
+    source.hset(rt.bus.lease_key(SLOT), mapping={'lease_until': int((now - 600) * 1000)})
+    tick(f, rt, monkeypatch)
+    assert rt.hb_grace_until > now
+    assert f.agent(SLOT)['state'] == 'busy' and not f.agent(SLOT).get('link_lost')
+

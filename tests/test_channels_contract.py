@@ -1074,7 +1074,7 @@ def test_p8a_parse_security_defaults_and_rejections():
                     'patterns': {}, 'high': 'desk'},                                       # A3 (user point 1)
         'stop': {'level': 'interrupt'},                                                    # E2 (user point 4)
         'limits': {'inbound_per_sender_10m': 60, 'requests_per_h': 30, 'outbound_per_h': 300,
-                   'tool_calls_per_delivery': 400, 'on_trip': 'pause'},                    # E3 (user point 6)
+                   'security_alerts_per_h': 10, 'tool_calls_per_delivery': 400, 'on_trip': 'pause'},  # E3 (user point 6)
         'audit_log': {'enabled': 'on', 'dir': 'audit', 'uappend': 'on',
                       'events': ['channel.*', 'security.*', 'dialog.*', 'execution.*', 'hook.*', 'service.*']},
         'sandbox': {'mode': 'off', 'allow_domains': [], 'deny_read': [], 'memory': 'off', 'codex_hooks': 'off'},  # C4 (user point 2)

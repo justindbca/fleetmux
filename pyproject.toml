@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fleetmux"
-version = "0.1.0"
+version = "0.2.1"
 description = "Run AI teams: a supervisor agent leads worker agents (Claude Code, Codex, Pi, opencode), and the program, not the model, accepts the work."
 readme = "README.md"
 license = { file = "LICENSE" }

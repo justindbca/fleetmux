@@ -125,6 +125,33 @@
 `attach`、`reap`、`web`、`gui --runtime D`），其余 fleet 子命令转交同一发版的 Python 命令行（docs/design.md §50）。用项目旧名装好的机器
 用 `fleetmux home migrate` 把数据一次搬过来（docs/design.md §50.1）。
 
+### 一键安装（Linux 与 macOS）
+
+1. **装系统包。**
+
+   ```bash
+   sudo apt install redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                # macOS
+   ```
+
+2. **运行安装脚本。** 只需要 `curl` 和 `tar`。它把最新发版装到 `~/fleetmux-releases/v<版本>`，用 uv 取得 Python 3.14，下载预编译程序（校验 sha256），把 `fleetmux` 链接到 `~/.local/bin`，最后跑依赖检查。不需要 root，不需要编译器。
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+   ```
+
+3. **装好并登录一个 agent 命令行**，例如 Claude Code：
+
+   ```bash
+   curl -fsSL https://claude.ai/install.sh | bash && claude
+   ```
+
+4. **检查。** `fleetmux start --help` 能列出选项即可。
+
+要求：`redis-server` ≥ 7.0、`tmux` ≥ 3.4、`git` ≥ 2.30，加一个 agent 命令行（Claude Code、Codex、pi 或 opencode，只装名单里用到的；pi 另需 Node.js ≥ 22）。完整表格见英文版 [Requirements](README.md#requirements)。
+
+### 从源码安装（开发用）
+
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
 pip install -e .
@@ -139,8 +166,8 @@ model = "gpt-5.5"
 
 别的不用配：fleet 会给 agent 建一个独立的 Codex home，并替每个 agent 目录自动回答 Codex 的「信任此目录？」提示。
 
-依赖清单（cmux、Codex CLI、`redis-server`、Python 版本）和在目标机上按发版安装（`scripts/install_release.sh`），见英文版的
-[Requirements](README.md#requirements) 与 [Release install](README.md#release-install-on-a-target-machine-macos-or-linux)。
+在目标机上按发版安装（`scripts/install_release.sh`）见英文版的
+[Release install](README.md#release-install-on-a-target-machine-macos-or-linux)。
 
 ## 快速上手
 

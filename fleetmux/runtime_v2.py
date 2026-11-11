@@ -548,6 +548,7 @@ return 'applied'
 
 class RuntimeV2:
     last_tick = None  # wall clock of the previous tick: a long gap = the daemon did not run (daemon_gap, §24)
+    gap_before = False    # the previous tick also followed a daemon gap (daemon_gap)
     hb_grace_until = 0.0  # after a daemon gap, heartbeat_check waits this long for the bridges' next beat (§35)
 
     def __init__(self, fleet):
@@ -955,6 +956,18 @@ class RuntimeV2:
                 self.audit('event.stale', slot=slot or '')
                 return
             peer.unsolicited(self.f, slot, str(ev.get('text') or ''))
+            return
+        if kind == 'dialog_user_answer':  # the phone's step two / reject (contracts §8)
+            _request_id(ev.get('request_id'))
+            try:
+                answer = self.user_dialog_answer(ev)
+            except (ValueError, TypeError, KeyError):
+                raise
+            except Exception as exc:  # fail closed: nothing is approved, the phone is told to look again
+                self.audit('dialog.user_answer_failed', level='error', error=type(exc).__name__,
+                           pending_id=str(ev.get('pending_id') or ''))
+                answer = {'status': 'stale', 'reason': 'answer check failed'}
+            self.reply(ev, answer)
             return
         if kind == 'chrome':
             # An external broker call is a side effect and cannot be planned/replayed.
@@ -2205,15 +2218,18 @@ class RuntimeV2:
         ``{status: stale, reason}`` and the record is unchanged. Never touches ``fx:escalations`` or a key."""
         from fleetmux import channels
         from fleetmux.channels import approve, security
+        # The record is settled by one compare-and-set script, which an effect plan cannot hold: inside a
+        # transaction use the real client (the audits still go through the plan).
+        r = self.effects.source if self.effects else self.f.r
         pid = str(ev.get('pending_id') or '')
-        if pid.startswith('p-') and self.f.r.hget(channels.PENDING + pid, 'kind') == 'action':
+        if pid.startswith('p-') and r.hget(channels.PENDING + pid, 'kind') == 'action':
             # P8k: an action confirmation; the ticket is written only here (contracts §8 动作确认)
             policy = security.policy(self.f.cfg)
             if policy is None:
                 return {'status': 'stale', 'reason': 'no_policy'}
-            return approve.answer_action(self.f.r, self.f.r.hgetall(channels.PENDING + pid), ev, policy=policy,
+            return approve.answer_action(r, r.hgetall(channels.PENDING + pid), ev, policy=policy,
                                          audit=self.audit)
-        return approve.answer_dialog(self.f.r, ev, audit=self.audit)
+        return approve.answer_dialog(r, ev, audit=self.audit)
 
     def prompt_escalate(self, slot, rec, tail):
         """A non-delete dialog goes to the supervisor to rule on (plan F' 8.3): mark the slot, record the
@@ -2893,10 +2909,14 @@ class RuntimeV2:
         stall-window baseline and floor their activity at now (``act_floor``, read by ``Fleet.last_activity``)."""
         last, self.last_tick = self.last_tick, now
         beat = min(10, self.bus.lease_ms / 3000)  # the bridge's renew period (AgentBridge.renew_loop)
-        if last is not None and now - last > 2 * beat:  # shorter gaps cannot outlive the key's 3-beat TTL
+        gap = last is not None and now - last > 2 * beat  # shorter gaps cannot outlive the key's 3-beat TTL
+        if gap and (now - last > 3 * beat or not self.gap_before):
             # The bridges slept too: their heartbeat keys expired during the gap. Give them three beats to write
             # it again before heartbeat_check calls the link lost (a woken laptop is not a dead bridge, §35).
+            # A busy daemon ticks every two to three beats (§47): only the first of such consecutive gaps
+            # starts the wait, or it would be renewed on every tick and a dead bridge never judged.
             self.hb_grace_until = now + 3 * beat
+        self.gap_before = gap
         window = float(watchdog.setting(self.f.cfg, 'stall_window')) or self.bus.lease_ms / 1000.0
         if last is None or now - last < max(30.0, window / 2):
             return
@@ -3257,6 +3277,8 @@ class RuntimeV2:
                         deadline = max(deadline, int(now * 1000) + 1000)
                     if (int(state['lease_until']) <= int(now*1000) < deadline
                             and not tui_slot(self.slot_cfg(slot), slot)):
+                        if now < self.hb_grace_until:
+                            continue  # just woken: the bridge slept too and renews within the grace (§35)
                         self.link_lost(slot, 'lease not renewed by the bridge')  # the work's own deadline still runs
                         continue
                     elif int(state['lease_until']) <= int(now*1000) < deadline and self.reclaim_tui(slot):

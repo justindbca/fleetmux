@@ -182,6 +182,33 @@ exécute lui-même ses sous-commandes de terminal (`server`, `attach`, `reap`, `
 sous-commandes de flotte au CLI Python de la même version (docs/design.md §50). Une machine installée sous l'ancien
 nom du projet déplace ses données une fois avec `fleetmux home migrate` (docs/design.md §50.1).
 
+### Installation rapide (Linux et macOS)
+
+1. **Installez les paquets système.**
+
+   ```bash
+   sudo apt install redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                # macOS
+   ```
+
+2. **Lancez l'installeur.** Il ne demande que `curl` et `tar`. Il installe la dernière version dans `~/fleetmux-releases/v<version>`, obtient Python 3.14 via uv, télécharge les binaires précompilés (vérifiés par sha256), crée le lien `fleetmux` dans `~/.local/bin` et lance la vérification des dépendances. Ni root, ni compilateur.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+   ```
+
+3. **Installez un CLI d'agent et connectez-vous**, par exemple Claude Code :
+
+   ```bash
+   curl -fsSL https://claude.ai/install.sh | bash && claude
+   ```
+
+4. **Vérifiez.** `fleetmux start --help` affiche les options.
+
+Prérequis : `redis-server` ≥ 7.0, `tmux` ≥ 3.4, `git` ≥ 2.30, et un CLI d'agent (Claude Code, Codex, pi ou opencode ; seulement ceux que votre roster utilise ; pi demande aussi Node.js ≥ 22). Tableau complet : [Requirements](README.md#requirements).
+
+### Depuis les sources (développement)
+
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
 pip install -e .
@@ -198,9 +225,8 @@ model = "gpt-5.5"
 Rien d'autre : la flotte crée son propre home Codex pour les agents et répond elle-même, pour chaque répertoire d'agent, à
 la question de Codex « faire confiance à ce dossier ? ».
 
-Les prérequis (cmux, Codex CLI, `redis-server`, version de Python) et l'installation par version sur une machine cible
-(`scripts/install_release.sh`) sont décrits dans le README en anglais :
-[Requirements](README.md#requirements) et [Release install](README.md#release-install-on-a-target-machine-macos-or-linux).
+L'installation par version sur une machine cible (`scripts/install_release.sh`) est décrite dans le README en anglais :
+[Release install](README.md#release-install-on-a-target-machine-macos-or-linux).
 
 ## Démarrage rapide
 
