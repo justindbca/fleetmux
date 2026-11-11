@@ -52,6 +52,9 @@ Available for freelance work: AI setup from zero, agent harness tuning, LLM capa
   false `COMPLETED` claims are counted and block the task.
 - **Context rotation.** At a configurable share of the context window the session writes a handoff note
   and a successor (`worker-1` → `worker-1.1`) continues in the same tab.
+- **Sleep recovery.** Close the laptop lid, move, open it and reconnect: the run continues. The daemon tells
+  a sleeping machine from a lost link, retries a startup that failed on the network with a backoff, and
+  restarts no session until the network answers.
 - **Private Redis per run** (Unix socket only, no TCP) carrying a bounded message bus with
   generation-checked deliveries, so a late callback from a retired session can never act.
 - **Watchdog and brake.** Five-state stall detection per slot; a per-task budget card (calls, rounds,

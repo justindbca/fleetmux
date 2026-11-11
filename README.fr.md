@@ -59,6 +59,9 @@ d'exécution d'agents, exploitation des capacités des LLM et orchestration mult
   doivent contenir ; les fausses déclarations `COMPLETED` sont comptées et bloquent la tâche.
 - **Rotation du contexte.** À une proportion configurable de la fenêtre de contexte, la session rédige une note de passation
   et un successeur (`worker-1` → `worker-1.1`) prend la suite dans le même onglet.
+- **Reprise après la veille.** Fermez le portable, changez d'endroit, rouvrez-le et reconnectez-vous : l'exécution
+  continue. Le daemon distingue une machine en veille d'un lien perdu, relance avec un délai croissant un démarrage qui a
+  échoué sur le réseau, et ne redémarre aucune session tant que le réseau ne répond pas.
 - **Un Redis privé par exécution** (socket Unix uniquement, pas de TCP) qui porte un bus de messages borné, avec des
   livraisons contrôlées par numéro de génération : un rappel tardif d'une session retirée ne peut jamais agir.
 - **Chien de garde et frein.** Détection de blocage à cinq états pour chaque emplacement ; une carte de budget par tâche

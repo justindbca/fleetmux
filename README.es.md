@@ -58,6 +58,9 @@ agentes, aprovechamiento de las capacidades de los LLM y orquestación multiagen
   declaraciones `COMPLETED` falsas se cuentan y bloquean la tarea.
 - **Rotación de contexto.** Al llegar a una proporción configurable de la ventana de contexto, la sesión escribe una nota de
   traspaso y un sucesor (`worker-1` → `worker-1.1`) continúa en la misma pestaña.
+- **Recuperación tras la suspensión.** Cierre el portátil, cambie de lugar, ábralo y vuelva a conectarse: la ejecución
+  continúa. El daemon distingue una máquina suspendida de un enlace perdido, reintenta con espera creciente un arranque que
+  falló por la red y no reinicia ninguna sesión hasta que la red responde.
 - **Un Redis privado por ejecución** (solo socket Unix, sin TCP) que transporta un bus de mensajes acotado con entregas
   verificadas por generación, de modo que una llamada de retorno tardía de una sesión retirada nunca puede actuar.
 - **Vigilancia y freno.** Detección de bloqueos con cinco estados por ranura; una tarjeta de presupuesto por tarea (llamadas,
