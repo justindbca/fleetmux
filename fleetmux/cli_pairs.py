@@ -4,10 +4,6 @@ Every check re-reads the table, so an edit takes effect at the next start. A pai
 table does not list is refused with its reason, never silently replaced by another
 CLI/model or by the old file mailbox.
 """
-from pathlib import Path
-
-import yaml
-
 from fleetmux import fleet_config
 
 DEFAULT_PATH = None  # None = the cli_pairs block of fleet.yaml; a path = that file (blocks or a bare table)

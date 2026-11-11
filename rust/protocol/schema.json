@@ -274,7 +274,10 @@
       "kill_timeout",
       "write_failed",
       "protocol_version",
-      "internal"
+      "internal",
+      "no_window",
+      "web_timeout",
+      "not_implemented"
      ]
     },
     "error": {

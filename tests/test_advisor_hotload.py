@@ -39,7 +39,7 @@ def cfx(tmp_path, monkeypatch):
     kit = make_kit(tmp_path / 'kit')
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': ['worker-1', 'worker-2'], 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
            'codex_home': str(tmp_path / 'codex-home'), 'worker_cli': 'claude', 'worker_kit': str(kit),
            'claude': '/bin/claude', 'claude_window': 200000, 'token': 'abcd1234',

@@ -26,7 +26,7 @@ export function boundSession(dir) {
 }
 
 export default {
-  id: "cmux-fleet.bridge.tui",  // legacy name, kept for compatibility: the registered plugin id
+  id: "fleetmux.bridge.tui",
   setup(api) {
     const dir = process.env.FLEETMUX_OC_SESSION_DIR || ""
     if (!dir) return

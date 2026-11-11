@@ -49,11 +49,6 @@ impl ByteBackend {
         std::mem::take(&mut self.out)
     }
 
-    /// The viewer's colour depth this backend was built for.
-    pub fn depth(&self) -> Depth {
-        self.depth
-    }
-
     fn move_to(&mut self, x: u16, y: u16) {
         if !(self.cursor_known && self.cursor == Position::new(x, y)) {
             let _ = write!(self.out, "\x1b[{};{}H", y as u32 + 1, x as u32 + 1);

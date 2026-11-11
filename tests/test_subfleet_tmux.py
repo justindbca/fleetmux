@@ -106,11 +106,11 @@ def test_tmux_slot_is_shown_in_both_workspaces_and_comes_back_without_moving(tmu
     child_cfg = fleet.load(Path(rec['run']) / 'config.json')
     # no placeholder, nothing released: the parent keeps its own tab of the session
     assert rec['view'] == 1 and rec['placeholder'] == '' and not getattr(f.mgr, 'windows', [])
-    assert t.world.owner[sid] == 'cmux-fleet' and f.mgr.owns(sid)
+    assert t.world.owner[sid] == 'fleetmux' and f.mgr.owns(sid)
     info = f.agent('worker-1')
     assert info['state'] == 'delegated' and info['pane'] == sid and info['delegated_pane'] == sid
     assert child_cfg['adopt']['info']['tmux_session'] == 'worker-1-g0'
-    assert json.loads(Path(t.world.mgrs['cmux-fleet:M0'].meta_path).read_text()) == {}  # child registry: nothing of the parent
+    assert json.loads(Path(t.world.mgrs['fleetmux:M0'].meta_path).read_text()) == {}  # child registry: nothing of the parent
     # the child opens a second client tab as its supervisor; the role change is typed there
     cf = child_daemon(t, rec)
     view = cf.agent('supervisor')['pane']
@@ -137,7 +137,7 @@ def test_tmux_slot_is_shown_in_both_workspaces_and_comes_back_without_moving(tmu
     assert rec['state'] == 'returned' and out.read_text() == 'merged'
     assert f.agent('worker-1')['pane'] == sid and f.agent('worker-1')['state'] == 'starting'
     assert 'worker of the main fleet again' in [x for p, x in t.world.sent if p == sid][-1]
-    assert sid in t.world.alive and t.world.owner[sid] == 'cmux-fleet'
+    assert sid in t.world.alive and t.world.owner[sid] == 'fleetmux'
 
 
 def test_tmux_slot_on_the_hook_channel_returns_as_the_next_generations_tmux_session(tmux_tree):
@@ -204,4 +204,4 @@ def test_failed_child_start_rolls_back_without_touching_the_parent_tab(tmux_tree
     with pytest.raises(subfleet.Refused):
         spawn_m0(t)
     assert f.agent('worker-1')['state'] == 'idle' and f.agent('worker-1')['pane'] == sid
-    assert t.world.owner[sid] == 'cmux-fleet' and sid in t.world.alive
+    assert t.world.owner[sid] == 'fleetmux' and sid in t.world.alive

@@ -65,7 +65,7 @@ def test_start_parser_accepts_only_the_two_backends():
 
 
 def test_run_backend_and_manager_for_follow_the_config(tmp_path):
-    cfg = {'backend': 'wezterm', 'session': 'cmux-fleet:M0', 'cmux_state_dir': str(tmp_path)}
+    cfg = {'backend': 'wezterm', 'session': 'fleetmux:M0', 'cmux_state_dir': str(tmp_path)}
     assert fleet.run_backend(cfg) == 'wezterm'
     assert fleet.run_backend({}) == 'cmux'  # a config written before the choice existed stays on cmux
     mgr = fleet.manager_for({k: v for k, v in cfg.items() if k != 'backend'})
@@ -90,7 +90,7 @@ def test_sub_fleet_manager_inherits_the_backend(tmp_path, monkeypatch):
     """subfleet builds child registries with manager_for(child_cfg); the child config carries the backend."""
     from fleetmux import subfleet
     parent = {'backend': 'wezterm', 'run': '/parent', 'workers': ['worker-1'], 'title_path': ['fleet'],
-              'session': 'cmux-fleet'}
+              'session': 'fleetmux'}
     fake = SimpleNamespace(cfg=parent, path=Path('/parent/config.json'), runtime_cfg=lambda slot: parent,
                            agent=lambda slot: {'generation': 0},
                            mgr=SimpleNamespace(workspace_id=lambda: 'ws-parent'),
@@ -101,8 +101,8 @@ def test_sub_fleet_manager_inherits_the_backend(tmp_path, monkeypatch):
     assert child['backend'] == 'wezterm'  # the child config carries the parent's backend field
     calls = []
     monkeypatch.setattr(backends, 'build', lambda name, session, **kw: calls.append((name, session)))
-    fleet.manager_for({'backend': 'wezterm', 'session': 'cmux-fleet:M0'})
-    assert calls == [('wezterm', 'cmux-fleet:M0')]
+    fleet.manager_for({'backend': 'wezterm', 'session': 'fleetmux:M0'})
+    assert calls == [('wezterm', 'fleetmux:M0')]
 
 
 # ---- degradation: no browser surface --------------------------------------------------------------

@@ -100,7 +100,7 @@ In the large session roughly one turn in two failed.
 
 ## 7. Fix log and status, 2026-10-19
 
-### 1. What was fixed (branch fast-forwarded step by step; the running `cmux-fleet-pi` is `3b99ef26`)
+### 1. What was fixed (branch fast-forwarded step by step; the running pi checkout is `3b99ef26`)
 
 | Commit | Change |
 |---|---|

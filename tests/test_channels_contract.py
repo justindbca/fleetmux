@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(autouse=True)
 def config_dir(monkeypatch, tmp_path):
-    """Never the operator's ~/.config/fleetmux: every test gets its own."""
+    """Never the operator's ~/.fleetmux/config: every test gets its own."""
     d = tmp_path / 'fleetmux-config'
     monkeypatch.setenv(channels.CONFIG_ENV, str(d))
     return d

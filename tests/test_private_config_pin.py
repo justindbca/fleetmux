@@ -1,7 +1,7 @@
 """The private config file reaches internal processes through config.json, not FLEETMUX_CONFIG.
 
 cmux starts the daemon, actors and hooks in fresh shells that need not inherit FLEETMUX_CONFIG,
-so `start` resolves the private file once (env -> ~/.cmux-fleet/fleet.yaml), records it in config.json
+so `start` resolves the private file once (env -> ~/.fleetmux/fleet.yaml), records it in config.json
 (`private_config`: absolute path, or 'none' when there is no such file) and every entry point reads that."""
 import io
 import json

@@ -24,7 +24,6 @@ from pathlib import Path
 from fleetmux import channels
 from fleetmux.channels import security
 
-_STUB = 'P8h: not implemented (A2\' stub)'
 KEY = 'CANARY_TOKEN'
 PREFIX = 'fmx-canary-'
 _LINE = re.compile(KEY + r'=(' + PREFIX + r'[0-9a-f]{24})\n?')

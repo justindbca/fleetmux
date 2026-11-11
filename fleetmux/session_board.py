@@ -446,6 +446,7 @@ def _new_notices(rec, others, now, ttl, window):
             if not pair or now - pair['ts'] > ttl:  # a new collision (or the same two again after a quiet TTL)
                 pair = {'repo': repo, 'other': _key(other), 'first': _key(first_of(rec, other, repo, now, ttl)),
                         'files': [], 'targets': [], 'at': now}
+                notified.pop(key, None)
             pair.update(files=sorted(set(pair['files']) | hit['files']),
                         targets=sorted(set(pair['targets']) | hit['targets']), ts=now)
             pairs[key] = pair

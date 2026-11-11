@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """fleetmux fleet commands: one supervisor + N workers in cmux tabs, coordinated by a daemon.
-(`cmux-fleet` is the long-term alias of the same commands; docs/design.md §50.)
 
 Agents use Codex by default, with optional Pi supervisors/workers and official Claude
 Code workers. The daemon never reads screens: each CLI's hook/extension calls back at
@@ -63,8 +62,8 @@ from fleetmux.message_bus import BusError  # noqa: E402
 from fleetmux.planner import build_dispatch_plan  # noqa: E402
 from fleetmux.router import route_task  # noqa: E402
 
-SESSION = 'cmux-fleet'  # cmux registry name (legacy name, kept for compatibility: live registrations)
-HOME = paths.home()  # $FLEETMUX_HOME, else ~/.fleetmux (legacy ~/.cmux-fleet until migrated)
+SESSION = 'fleetmux'  # registry / session name of the main fleet; a sub-fleet is 'fleetmux:<task id>'
+HOME = paths.home()  # $FLEETMUX_HOME, else ~/.fleetmux
 LATEST = HOME / 'latest.json'
 
 
@@ -106,6 +105,7 @@ KIT_FLEET_RE = r'[a-z][a-z0-9-]*'  # start --kit-fleet NAME: <worker kit>/fleets
 # Display name of the supervisor's first generation; successors are supervisor-1.1, supervisor-1.2, ...
 # (same <slot>.<generation> pattern as worker-1 -> worker-1.1). Redis keys and the cwd stay 'supervisor'.
 SUPERVISOR_LABEL = 'supervisor-1'
+DECIDED = {'approve': 'approved', 'revise': 'revised', 'reject': 'rejected'}  # escalation answers, past tense
 RESULT_TTL = 7 * 86400
 RESUME_CLIS = ('codex', 'claude')  # CLIs whose live process proves a reattachable pane (cmux_manager._is_cli);
 # pi / opencode are never reattached: their bridge never reconnects after a Redis outage (next generation instead)
@@ -219,7 +219,7 @@ def slot_base(name):
 
 
 def manager_for(cfg):
-    """The registry of one fleet: the main fleet is 'cmux-fleet', a sub-fleet 'cmux-fleet:<task id>'.
+    """The registry of one fleet: the main fleet is 'fleetmux', a sub-fleet 'fleetmux:<task id>'.
 
     Which terminal backend that registry talks to is a property of the run (``config.json``), decided once
     by ``start`` and followed by the daemon, the actors, ``--resume`` and every sub-fleet (docs/design.md
@@ -1721,10 +1721,11 @@ def claude_user_prompts(path, count=3):
                     row = json.loads(line)
                 except ValueError:
                     continue
-                if row.get('type') != 'user' or row.get('isSidechain'):
+                if not isinstance(row, dict) or row.get('type') != 'user' or row.get('isSidechain'):
                     continue
-                content, origin = (row.get('message') or {}).get('content'), 'user'
-                if (row.get('origin') or {}).get('kind') == 'task-notification':
+                message, came = row.get('message'), row.get('origin')
+                content, origin = (message if isinstance(message, dict) else {}).get('content'), 'user'
+                if (came if isinstance(came, dict) else {}).get('kind') == 'task-notification':
                     # A finished background task continues the current turn's work; a hook-channel
                     # rewake (Stop hook feedback notification) is a delivery.
                     content, origin = claude_hook.rewake_text(content), 'hook'
@@ -3474,8 +3475,9 @@ class Fleet:
                 for p in proposal):
             raise ValueError('proposal must be a non-empty list of {id, instruction (>= 12 chars), output}')
         ids = [p['id'] for p in proposal]
-        parents = {i.rsplit('.', 1)[0] for i in ids if re.fullmatch(contracts.M_RE + r'\.\d+', i)}
-        if len(parents) != 1 or len(set(ids)) != len(ids) or not all('.' in i for i in ids):
+        shaped = all(re.fullmatch(contracts.M_RE + r'\.\d+', i) for i in ids)
+        parents = {i.rsplit('.', 1)[0] for i in ids}
+        if not shaped or len(parents) != 1 or len(set(ids)) != len(ids):
             raise ValueError('proposal ids must be distinct and all <your task id>.<n> (e.g. M0.0, M0.1)')
         task_id = parents.pop()
         slot, instruction, status = self.escalation_item(task_id, state)
@@ -3774,17 +3776,17 @@ class Fleet:
                     self.queue(slot, self.request_message(rid, json.loads(req['spec']), text, slot=slot))
                 else:  # timed out / settled meanwhile: nothing to send back
                     self.log('split.stale', task=task_id, request_id=rid, status=req.get('status', ''))
-                self.log('escalate.' + answer['decision'] + 'd', task=task_id, note=note, request_id=rid)
+                self.log('escalate.' + DECIDED[answer['decision']], task=task_id, note=note, request_id=rid)
                 self.save_escalations(esc)
                 return
             text = '[Supervisor instruction ' + t.get('id', '') + '] [' + task_id + '] ' + text + \
                 '\nReply in the AGENTS.md format (Done / Evidence / Not done / Blocked) when done.'
             if row is not None:
-                row.update(status='running', reason=answer['decision'] + 'd split')
+                row.update(status='running', reason=DECIDED[answer['decision']] + ' split')
                 self.contract_queue(state, slot, text, task_id)
             else:
                 self.queue(slot, text)
-            self.log('escalate.' + answer['decision'] + 'd', task=task_id, note=note)
+            self.log('escalate.' + DECIDED[answer['decision']], task=task_id, note=note)
         self.save_escalations(esc)
 
     def split_hold(self, slot, task_id):
@@ -9332,7 +9334,7 @@ def cli():
     s.add_argument('--redis-runtime-dir', default=str(redis_runtime.DEFAULT_ROOT),
                    help='private Redis runtime root (default: project .runtime/redis; no /tmp fallback)')
     s.add_argument('--fleet-home', help='fleet home (latest.json, default runs/codex-home); pinned in config.json'
-                   ' (default: $FLEETMUX_HOME or ~/.fleetmux; legacy ~/.cmux-fleet until `home migrate`)')
+                   ' (default: $FLEETMUX_HOME or ~/.fleetmux)')
     s.add_argument('--backend', choices=('cmux', 'wezterm', 'fleetmux'),
                    help='terminal backend of this run, written into config.json and followed by --resume and '
                         'sub-fleets (default: cmux on macOS when cmux is usable, otherwise wezterm)')
@@ -9345,8 +9347,7 @@ def cli():
     s.add_argument('--cmux-bin', help='cmux binary; pinned in config.json (default: $CMUX_BIN or the app bundle)')
     s.add_argument('--runs-dir', help='where run directories are created (default: <fleet home>/runs)')
     s.add_argument('--cmux-state-dir', help='cmux registry directory; pinned in config.json'
-                   ' (default: $FLEETMUX_STATE or ~/.fleetmux/state;'
-                   ' legacy ~/.local/state/cmux-fleet until `home migrate`)')
+                   ' (default: $FLEETMUX_STATE or ~/.fleetmux/state)')
     s.add_argument('--codex-home', help='isolated CODEX_HOME for the agents (login + profile symlinked from yours;'
                    ' no hooks/MCP; default: <fleet home>/codex-home)')
     s.add_argument('--handoff-ratio', type=float, default=DEFAULTS['handoff_ratio'],
@@ -9394,7 +9395,7 @@ def cli():
     s.add_argument('--dsh', help='dsh binary (== ' + dsh_adapter.VERSION + '; default: first on PATH)')
     s.add_argument('--dsh-home',
                    help='dsh workers: the shared DSH_HOME with the dsh-tui profile installed (dsh-tui == '
-                   + dsh_adapter.TUI_VERSION + '; default: ~/.fleetmux/dsh-home, legacy ~/.cmux-fleet/dsh-home until `home migrate`;'
+                   + dsh_adapter.TUI_VERSION + '; default: ~/.fleetmux/dsh-home;'
                    ' never installed per run)')
     s.add_argument('--dsh-model', default=None,
                    help='dsh workers: provider/model of a pi models.json entry, e.g. flashnext/<model id> (the same '
@@ -9532,8 +9533,9 @@ def cli():
     su.add_argument('--json', action='store_true', help='print the cached result as JSON instead of the table')
     hm = sub.add_parser('home', help='per-user data directories (docs/design.md §50.1)')
     hm_sub = hm.add_subparsers(dest='home_cmd', required=True)
-    hmm = hm_sub.add_parser('migrate', help='move legacy ~/.cmux-fleet, ~/.local/state/cmux-fleet, ~/.config/fleetmux '
-                                            'under ~/.fleetmux and leave a symlink at each old path (no fleet may run)')
+    hmm = hm_sub.add_parser('migrate', help='move data kept under the names used before fleetmux (per-user and '
+                                            'per-fleet homes, state, config) under ~/.fleetmux, leave a symlink at '
+                                            'each old path and update run records (no fleet may run)')
     hmm.add_argument('--dry-run', action='store_true', help='print the plan, change nothing')
     sp.add_argument('--raise', dest='raise_', action='append', metavar='LIMIT=VALUE',
                     help='after a budget pause: raise a budget line (e.g. max_calls=400); repeatable')
@@ -9610,16 +9612,20 @@ def cli():
     return p
 
 
-HUMAN_COMMANDS = ('start', 'setup', 'gui', 'status', 'stop', 'resume')  # §50.1: these warn about legacy data dirs
+# §50.1: these check for data and settings under the old names; the first four stop on them, status / stop only
+# print the line (a fleet started from an older release must still be stoppable before `home migrate`).
+HUMAN_COMMANDS = ('start', 'setup', 'gui', 'resume', 'status', 'stop')
 
 
 def main(argv=None):
     p = cli()
     args = p.parse_args(argv)
     if args.cmd == 'home':  # §50.1
-        sys.exit(paths.migrate(dry_run=args.dry_run))
-    if args.cmd in HUMAN_COMMANDS:
-        paths.warn_legacy()  # §50.1: one line per legacy data dir; internal entry points stay quiet
+        from fleetmux import home_migrate
+        sys.exit(home_migrate.migrate(dry_run=args.dry_run))
+    if args.cmd in HUMAN_COMMANDS:  # internal entry points (hooks, actors, the daemon) stay quiet
+        from fleetmux import home_migrate
+        home_migrate.check(fatal=args.cmd not in ('status', 'stop'))
     if args.cmd == 'start':
         pin_paths({'fleet_home': args.fleet_home and str(Path(args.fleet_home).expanduser().resolve()),
                    'cmux_bin': args.cmux_bin and str(Path(args.cmux_bin).expanduser().resolve())})

@@ -497,7 +497,7 @@ pub fn sidebar_json(current: &str, cards: &[(&str, &str, &str, Option<&str>)]) -
         .iter()
         .map(|(id, title, state, page)| {
             let mut c = json!({"id": id, "title": title, "state": state,
-                "line1": "运行中 · 监工+1 worker（0忙）", "line2": "~/.cmux-fleet-m4"});
+                "line1": "运行中 · 监工+1 worker（0忙）", "line2": "~/.fleetmux/fleets/m4"});
             if let Some(p) = page {
                 c["page"] = json!(p);
             }

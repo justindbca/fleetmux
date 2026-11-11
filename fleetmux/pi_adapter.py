@@ -2,8 +2,6 @@
 import json
 from pathlib import Path
 
-from fleetmux import env_names
-
 
 UNSANDBOXED_SCOPE = ('You run without an OS sandbox. The directory restrictions above are instructions, '
                      'not an isolation boundary. Do not drive the user\'s browser directly; use only '
@@ -117,12 +115,12 @@ def environment(cfg_path, cfg, name, generation):
                'FLEETMUX_PI_SLOT': name, 'FLEETMUX_PI_MODE': cfg.get('mode', 'task')}
         if name == 'supervisor' and not cfg.get('parent_config'):  # a sub-fleet's daemon is its parent's (§29)
             env['FLEETMUX_DAEMON_WATCH'] = json.dumps(daemon_watch())
-        return env_names.with_legacy(env)  # an installed older session-board extension reads the legacy names
-    return env_names.with_legacy({'PI_CODING_AGENT_DIR': str(cfg['pi_home']),
+        return env
+    return {'PI_CODING_AGENT_DIR': str(cfg['pi_home']),
             'FLEETMUX_PI_CALLBACK': json.dumps([
                 cfg['python'], str(Path(__file__).with_name('fleet.py')),
                 'pi-event', str(cfg_path), name, str(generation)]),
-            'PI_SKIP_VERSION_CHECK': '1'})
+            'PI_SKIP_VERSION_CHECK': '1'}
 
 
 def event(cfg, name, generation, data):

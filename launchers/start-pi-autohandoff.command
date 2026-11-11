@@ -1,5 +1,5 @@
 #!/bin/bash
-# start-pi-autohandoff.command — pi 自动接力窗口启动器（cmux-fleet-pi）
+# start-pi-autohandoff.command — pi 自动接力窗口启动器（fleetmux）
 #
 # 用法: start-pi-autohandoff.command <交接单文件>
 # 作用: 在 cmux 开新 workspace 跑接力会话。首条 prompt 由 auto-handoff 扩展在 session_start
@@ -21,14 +21,14 @@ esac
 
 CMUX_BIN="${CMUX_BIN:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 # fleet 仓根目录（可选）；没设就跳过这一候选。
-FLEET_DIR="${FLEETMUX_PI_DIR:-${CMUX_FLEET_PI_DIR:-}}"  # CMUX_FLEET_PI_DIR: legacy name, kept for compatibility
+FLEET_DIR="${FLEETMUX_PI_DIR:-}"
 PI_WORKDIR="${PI_WORKDIR:-$PWD}"
 TASK="${PI_HANDOFF_TASK:-$(basename "$PI_WORKDIR")}"
 HOP="${PI_HANDOFF_HOP:-1}"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 CANON=""
-for c in "${PI_CANONICAL_LAUNCHER:-}" "$SELF_DIR/start-codex-flashnext.command" "${FLEET_DIR:+$FLEET_DIR/launchers/start-codex-flashnext.command}" "$HOME/cmux-fleet/launchers/start-codex-flashnext.command"; do
+for c in "${PI_CANONICAL_LAUNCHER:-}" "$SELF_DIR/start-codex-flashnext.command" "${FLEET_DIR:+$FLEET_DIR/launchers/start-codex-flashnext.command}"; do
   if [ -n "$c" ] && [ -x "$c" ]; then CANON="$c"; break; fi
 done
 
@@ -48,7 +48,7 @@ else
   # Studio 型 canonical：不认 PI_WORKDIR / --terminal；直接调 pi，cwd 用 PI_WORKDIR。
   PIBIN="${PI_BIN:-}"
   if [ -z "$PIBIN" ]; then
-    for c in "$HOME/cmux-fleet/npm/bin/pi" "$(command -v pi 2>/dev/null || true)"; do
+    for c in "$(command -v pi 2>/dev/null || true)"; do
       if [ -n "$c" ] && [ -x "$c" ]; then PIBIN="$c"; break; fi
     done
   fi

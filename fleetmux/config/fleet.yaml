@@ -1,10 +1,10 @@
 # fleetmux configuration: one file, one block per table.
 #
 # This file ships the defaults. The operator's private file has the same format:
-#   $FLEETMUX_CONFIG, else ~/.fleetmux/fleet.yaml   (legacy ~/.cmux-fleet/fleet.yaml until
-#   `fleetmux home migrate`; never part of this repository)
+#   $FLEETMUX_CONFIG, else ~/.fleetmux/fleet.yaml   (never part of this repository)
 # A top-level block there replaces the shipped block as a whole (no deep merge). Only these blocks may
-# be overridden there: accounts, tools, walls, lifecycle_modes. cli_pairs (the real-smoke gate),
+# be overridden there: accounts, tools, walls, lifecycle_modes, pi_context, daemon_watch, fresh_dispatch,
+# discovery (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
 # watchdog_prompts (the dialog whitelist), models, profiles and capability_matrix change only here,
 # through a reviewed commit.
 #

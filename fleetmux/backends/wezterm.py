@@ -151,7 +151,9 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _exe(comm: str) -> str:
-    return os.path.basename(comm.strip())
+    """Executable basename without ``.exe`` (the native Claude installer runs ``.../bin/claude.exe``)."""
+    name = os.path.basename(comm.strip())
+    return name[:-4] if name.endswith('.exe') else name
 
 
 def _node_runs(args: str, names: Tuple[str, ...]) -> bool:
@@ -170,7 +172,7 @@ class WezTermSessionManager:
     def available(cls) -> bool:
         return availability_problem() is None
 
-    def __init__(self, session_name: str = 'cmux-fleet', agents_title: str = 'Fleet agents',
+    def __init__(self, session_name: str = 'fleetmux', agents_title: str = 'Fleet agents',
                  control_title: str = 'Fleet daemon', state_dir: Optional[Path] = None):
         self.session_name = session_name
         self.agents_title = agents_title

@@ -25,7 +25,7 @@ def run():
     results = []
     with tempfile.TemporaryDirectory(prefix='fleet-parent-v2-') as directory:
         root = Path(directory)
-        sock = '/tmp/cmux-fleet-parent-' + uuid.uuid4().hex[:10] + '.sock'
+        sock = '/tmp/fleetmux-parent-' + uuid.uuid4().hex[:10] + '.sock'
         proc = subprocess.Popen(['redis-server', '--port', '0', '--unixsocket', sock,
             '--unixsocketperm', '700', '--dir', directory, '--save', '', '--appendonly', 'no'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

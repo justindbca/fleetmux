@@ -176,8 +176,8 @@ CONFIG_ENV = 'FLEETMUX_CONFIG_DIR'  # tests point this at a temp dir; never the 
 
 
 def config_dir():
-    """``$FLEETMUX_CONFIG_DIR`` else ``~/.fleetmux/config`` (legacy ``~/.config/fleetmux`` until migrated,
-    fleetmux/paths.py): credentials, whitelists, leases, cursor mirrors."""
+    """``$FLEETMUX_CONFIG_DIR`` else ``~/.fleetmux/config`` (fleetmux/paths.py): credentials, whitelists, leases,
+    cursor mirrors."""
     return Path(os.environ.get(CONFIG_ENV) or paths.config_dir()).expanduser()
 
 

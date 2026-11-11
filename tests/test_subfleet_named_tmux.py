@@ -141,11 +141,11 @@ def test_service_up_request_and_down_show_one_session_in_both_workspaces_without
     assert rec['view'] == 1 and rec['placeholder'] == ''
     assert not [w for w, _ in getattr(f.mgr, 'windows', []) if w.startswith('placeholder-')]
     info = f.agent('worker-1')
-    assert info['state'] == 'delegated' and info['pane'] == sid and t.world.owner[sid] == 'cmux-fleet'
-    assert sid not in json.loads(Path(t.world.mgrs['cmux-fleet:ops'].meta_path).read_text()).get('surfaces', {})
+    assert info['state'] == 'delegated' and info['pane'] == sid and t.world.owner[sid] == 'fleetmux'
+    assert sid not in json.loads(Path(t.world.mgrs['fleetmux:ops'].meta_path).read_text()).get('surfaces', {})
     rec, cf, view = adopt_view_child(t)
     assert view != sid and t.world.views[view]['tmux_session'] == 'worker-1-g0'
-    assert t.world.owner[view] == 'cmux-fleet:ops' and t.world.owner[sid] == 'cmux-fleet'  # two clients
+    assert t.world.owner[view] == 'fleetmux:ops' and t.world.owner[sid] == 'fleetmux'  # two clients
     subfleet.tick(f)
     res = result(f, rid)
     child_cfg = fleet.load(Path(rec['run']) / 'config.json')
@@ -192,7 +192,7 @@ def test_autostart_crash_revive_and_crashloop_leave_the_parent_tab_in_place(tmp_
         subfleet.tick(f)  # declared + idle READY: delegated at once
         rec, cf, view = adopt_view_child(t)
         child_cfg = fleet.load(Path(rec['run']) / 'config.json')
-        mgr = t.world.mgrs['cmux-fleet:ops']
+        mgr = t.world.mgrs['fleetmux:ops']
         import time
         for crash in range(1, 4):
             die(cf)
@@ -214,7 +214,7 @@ def test_autostart_crash_revive_and_crashloop_leave_the_parent_tab_in_place(tmp_
         # crashloop: collected; the client tab the dead child left is detached, the session stays
         assert rec['state'] == 'failed' and rec['outcome'] == 'crashloop'
         assert t.world.detached == [view] and view not in t.world.alive
-        assert f.agent('worker-1')['pane'] == sid and sid in t.world.alive and t.world.owner[sid] == 'cmux-fleet'
+        assert f.agent('worker-1')['pane'] == sid and sid in t.world.alive and t.world.owner[sid] == 'fleetmux'
         assert named_subfleet.state(f, 'ops')['crashloop'] == '1' and moved(t, sid) == []
     finally:
         for _ in t.gen:
@@ -289,7 +289,7 @@ def test_hot_declared_plain_slot_falls_back_once_then_its_next_generation_runs_i
         approve_up(t)
         rec = subfleet.record(f.run_dir / 'sub' / 'ops')
         assert rec['view'] == 0 and rec['placeholder']  # chosen behaviour: this delegation is a move-surface
-        assert ('release', 'cmux-fleet', sid) in t.world.moves
+        assert ('release', 'fleetmux', sid) in t.world.moves
         audit = [x[1] for x in f.r.xrange(f.v2.bus.audit_key) if x[1].get('event') == 'subfleet.view_fallback']
         assert len(audit) == 1 and audit[0]['slot'] == 'worker-1'
         f.setf('worker-1', generation=1)

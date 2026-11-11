@@ -28,9 +28,9 @@ def main():
     args = parser.parse_args()
     if not args.pi or not args.redis_server:
         parser.error('pi and redis-server must be installed')
-    with tempfile.TemporaryDirectory(prefix='cmux-fleet-pi-smoke-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='fleetmux-pi-smoke-') as tmp:
         root = Path(tmp)
-        sock = '/tmp/cmux-fleet-smoke-' + uuid.uuid4().hex[:12] + '.sock'
+        sock = '/tmp/fleetmux-smoke-' + uuid.uuid4().hex[:12] + '.sock'
         cfg = dict(run=str(root), python=sys.executable, redis_socket=sock, workers=['worker-1'],
                    mode='service', supervisor_cli='pi', worker_cli='pi', pi=args.pi,
                    pi_model=args.model, pi_thinking='off', allow_unsandboxed_pi=True,

@@ -1,7 +1,7 @@
 """Watchdog dialog recognition on real saved screens (docs/design.md §24, 2026-11-09 fix).
 
 tests/fixtures/watchdog_screens/ holds every prompt screen the watchdog saved on this machine up to 2026-11-09
-(`~/.cmux-fleet-*/runs/*/watchdog/*prompt*.txt`, copied verbatim except the user name in home paths -> USER), named <source>-<slot>-<g>-<ms>-<real|false>:
+(`~/.fleetmux-*/runs/*/watchdog/*prompt*.txt`, copied verbatim except the user name in home paths -> USER), named <source>-<slot>-<g>-<ms>-<real|false>:
 `real` = a dialog really was up, `false` = the marker was the agent's own text above the CLI's input box.
 Plus `live-claude-2.1.316-trust-real` (captured 2026-11-09 in a private tmux) and two `synthetic-*` screens
 built from real ones (see test_synthetic_* below).

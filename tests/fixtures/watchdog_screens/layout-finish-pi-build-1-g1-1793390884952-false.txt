@@ -18,7 +18,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && sed -n 72,100p scripts/acceptance42/setup_fixture.py;
  echo "=== add_claude_input:"; sed -n 1,80p
  scripts/acceptance42/add_claude_input.py; echo "===
@@ -195,6 +195,6 @@
 ── ⠧ Working ────────────────────────────────────────────────
 
 ─────────────────────────────────────────────────────────────
-~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+~/.fleetmux/fleets/layout-finish/runs/fleet-20261030-140716-21e...
 ↑211k ↓101k R9.7M CH98.9% 43.5%/400k (auto)  workbuddy-ai/dee
 执行派工任务

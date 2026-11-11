@@ -55,6 +55,24 @@ fn attach_prefix_d_detaches_and_agent_keeps_running() {
 }
 
 #[test]
+fn attach_killed_by_sigterm_restores_the_terminal() {
+    let srv = Server::start();
+    let id = sh(&srv, "fx-worker-1", "worker", "echo AGENT-UP; exec sleep 1000");
+    srv.wait_text(&id, "AGENT-UP", T);
+
+    let rt = srv.runtime.to_str().expect("utf-8 runtime path");
+    let mut p = PtyProc::spawn(&[BIN, "attach", "--runtime", rt], 200, 50, &[]);
+    p.wait_screen("AGENT-UP", 200, 50, T);
+    // SAFETY: kill on the pid of a child this test owns.
+    assert_eq!(unsafe { libc::kill(p.pid(), libc::SIGTERM) }, 0);
+    p.wait_exit(Duration::from_secs(5))
+        .unwrap_or_else(|| panic!("attach did not exit on SIGTERM"));
+    // leaving the alternate screen is the last thing the terminal guard writes
+    p.wait_output("\x1b[?1049l", Duration::from_secs(2));
+    assert!(srv.listed(&id), "the pane went away with the viewer");
+}
+
+#[test]
 #[ignore = "M1: views-multi"]
 fn attach_prefix_o_receives_open_frame_with_history_url() {
     let srv = Server::start();

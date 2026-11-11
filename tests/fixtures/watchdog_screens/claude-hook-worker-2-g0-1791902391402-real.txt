@@ -4,7 +4,7 @@
   first, since it takes the longest.
 
 ⏺ Starting interactive long-idle session L
-  ⎿  $ cd /Users/USER/.cmux-fleet-claude-hook/runs/fleet-20261013-220323-bb80d7f4/workspace/worke
+  ⎿  $ cd /Users/USER/.fleetmux/fleets/claude-hook/runs/fleet-20261013-220323-bb80d7f4/workspace/worke
      r-2/lab && python3 -c "
      import json
      s=json.load(open('s_big.json')); s['env']={'CLAUDE_CODE_STOP_HOOK_BLOCK_CAP':'0'}; 
@@ -13,7 +13,7 @@
 ───────────────────────────────────────────────────────────────────────────────────────────────────
  Bash command
  
-   │ cd /Users/USER/.cmux-fleet-claude-hook/runs/fleet-20261013-220323-bb80d7f4/workspace/work
+   │ cd /Users/USER/.fleetmux/fleets/claude-hook/runs/fleet-20261013-220323-bb80d7f4/workspace/work
    │ er-2/lab && python3 -c "
    │ import json
    │ s=json.load(open('s_big.json')); s['env']={'CLAUDE_CODE_STOP_HOOK_BLOCK_CAP':'0'};
@@ -25,7 +25,7 @@
    │ START-L hook.log
    Start interactive long-idle session L
 
- │ Dangerous rm operation on statically-unresolvable target: /Users/USER/.cmux-fleet-claude-hook
+ │ Dangerous rm operation on statically-unresolvable target: /Users/USER/.fleetmux/fleets/claude-hook
  │ /runs/fleet-20261013-220323-bb80d7f4/workspace/worker-2/qL/*
 
  Do you want to proceed?

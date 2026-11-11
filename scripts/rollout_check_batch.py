@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""上线验收（只读，沙盒内，cwd = ~/cmux-fleet）：cmux-fleet 批次集成版已到位。
+"""上线验收（只读，沙盒内，cwd = fleetmux 发版根）：fleetmux 批次集成版已到位。
 协议：最后一行 JSON {"result": "pass|fail|defer", "reason": ...}，退出码 0/1/2 与之一致；只读目标根内文件。"""
 import json
 import sys

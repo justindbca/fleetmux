@@ -48,11 +48,11 @@ KIT_FILES = ('mayfly_roster.yaml', 'memx_roster.yaml', 'roles/mayfly-exit.md', '
              'roles/mayfly-supervisor.md', 'roles/mem-extract.md', 'roles/memx-supervisor.md',
              'roles/ops-supervisor.md', 'roles/ops-worker.md', 'roles/tgog-supervisor.md', 'roles/tgog-worker.md',
              'roster.yaml', 'tgog_roster.yaml')
-MEMX_TAB_ORIGINAL = ('/opt/homebrew/bin/python3.14 /Users/j/.cmux-fleet-evermem/bin/evermem_fleet_shell.py '
-                     '--fleet-home /Users/j/.cmux-fleet-ops --subfleet memx --workers mem-1,mem-2,mem-3 '
+MEMX_TAB_ORIGINAL = ('/opt/homebrew/bin/python3.14 /Users/j/.fleetmux/fleets/evermem/bin/evermem_fleet_shell.py '
+                     '--fleet-home /Users/j/.fleetmux/fleets/ops --subfleet memx --workers mem-1,mem-2,mem-3 '
                      '--port 8895 --log /Users/j/.futures/logs/services/evermem-fleet-shell.jsonl')
-MEMX_WRAPPER = '.cmux-fleet-evermem/bin/claude-haiku-lite.sh'  # roster.yaml memx `claude:` under the fake HOME
-TAB_CWD = '.cmux-fleet-evermem'  # memx_roster.yaml tabs[0].cwd under the fake HOME
+MEMX_WRAPPER = '.fleetmux/fleets/evermem/bin/claude-haiku-lite.sh'  # roster.yaml memx `claude:` under the fake HOME
+TAB_CWD = '.fleetmux/fleets/evermem'  # memx_roster.yaml tabs[0].cwd under the fake HOME
 CODEX_PROFILE = 'fleet'  # fleet.DEFAULTS['profile']: the Codex supervisor's profile file must exist
 SOCKET_MAX = 103  # macOS sockaddr_un
 DOMAINS = """domains:
@@ -283,7 +283,7 @@ class World:
 
     def socket_budget(self, problems):
         run = self.runs / ('fleet-' + time.strftime('%Y%m%d-%H%M%S-') + 'x' * 8)
-        paths = {'ctl.sock': self.s / 'fleetmux' / 'cmux-fleet' / 'ctl.sock',
+        paths = {'ctl.sock': self.s / 'fleetmux' / 'fleetmux' / 'ctl.sock',
                  'redis.sock': self.r / ('x' * 32) / 'redis.sock',
                  'tmux.sock': run / 'tmux.sock',
                  'child tmux.sock': run / 'sub' / 'mayfly' / 'tmux.sock'}

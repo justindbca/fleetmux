@@ -799,20 +799,6 @@ impl PaneStore {
         result
     }
 
-    /// The pane got output while not displayed (the tab's `•`, `PaneInfo.unseen`).
-    pub fn mark_unseen(&mut self, pane: &str) {
-        if let Some(p) = self.panes.get_mut(pane) {
-            p.info.unseen = true;
-        }
-    }
-
-    /// The pane is displayed again.
-    pub fn clear_unseen(&mut self, pane: &str) {
-        if let Some(p) = self.panes.get_mut(pane) {
-            p.info.unseen = false;
-        }
-    }
-
     /// Mirror the layout into every pane record (B5 seam, resume.md §5.3): `group`, `index`, `focused` (selected
     /// tab of the focused group) and `displayed` (selected tab of its group and not hidden by another pane's
     /// zoom). A displayed pane's `unseen` is cleared. Call after every layout change; `list` / `info` /

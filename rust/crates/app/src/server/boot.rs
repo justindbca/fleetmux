@@ -636,7 +636,11 @@ async fn serve_until_shutdown(
         .and_then(|()| tokio::net::UnixListener::from_std(listener))
     {
         Ok(l) => l,
-        Err(e) => return fail(1, &format!("listen {}: {e}", sock.display())),
+        Err(e) => {
+            let _ = std::fs::remove_file(&sock);
+            let _ = std::fs::remove_file(runtime.join("server.json"));
+            return fail(1, &format!("listen {}: {e}", sock.display()));
+        }
     };
     log(
         "INFO",
@@ -742,7 +746,7 @@ fn content_mirror() -> bool {
 /// file is a `WARN` (from `load_ratios`), never fatal.
 ///
 /// Ordering and native chrome are re-derived on boot, never read from layout.json.
-/// `server.json` (PROTOCOL.md §8.1): `daemonize::write_server_json`'s keys plus M4's capability `"pages": 1`
+/// `server.json` (PROTOCOL.md §8.1): `{pid, start_time, version, protocol, epoch}` plus M4's capability `"pages": 1`
 /// (design m4 §4.2 `server.json` row), written the same atomic way.
 fn write_server_json(runtime: &Path, pid: u32, start_time: u64, epoch: &str) -> std::io::Result<()> {
     let body = serde_json::json!({

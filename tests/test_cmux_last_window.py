@@ -91,7 +91,7 @@ class FakeCmux:
 def manager(tmp_path, monkeypatch, fake, meta=None):
     monkeypatch.setattr(cm, '_run', fake.run)
     monkeypatch.setattr(cm, '_wait_until', lambda check, timeout=3.0: check())
-    mgr = cm.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    mgr = cm.CmuxSessionManager('fleetmux', state_dir=tmp_path)
     monkeypatch.setattr(mgr, '_surfaces', fake.surfaces)
     if meta:
         mgr._save_meta(meta)
@@ -195,7 +195,7 @@ def test_unreadable_topology_keeps_the_old_behaviour(tmp_path, monkeypatch, answ
         return SimpleNamespace(returncode=0, stdout=answer, stderr='')
     monkeypatch.setattr(cm, '_run', run)
     monkeypatch.setattr(cm, '_wait_until', lambda check, timeout=3.0: check())
-    mgr = cm.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    mgr = cm.CmuxSessionManager('fleetmux', state_dir=tmp_path)
     monkeypatch.setattr(mgr, '_surfaces', lambda ws: {s: {'tty': None} for s in live.get(ws, {})})
     monkeypatch.setattr(mgr, 'kill_pane', lambda sid: True)
     mgr._save_meta({'workspace': 'ws', 'control_workspace': 'ws', 'surfaces': {'sup': {}, 'hist': {}}})

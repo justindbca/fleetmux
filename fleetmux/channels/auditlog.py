@@ -30,7 +30,6 @@ from fleetmux import channels
 from fleetmux.channels import security
 from fleetmux.message_bus import P as _BUS_PREFIX
 
-_STUB = 'P8g: not implemented (A2\' stub)'
 FILE_PREFIX = 'chain-'
 LOCK_NAME = '.writer.lock'
 

@@ -1137,6 +1137,10 @@ impl PtyProc {
         }
     }
 
+    pub fn pid(&self) -> i32 {
+        self.child.process_id().expect("pty child pid") as i32
+    }
+
     pub fn write(&mut self, bytes: &[u8]) {
         self.writer.write_all(bytes).expect("write to pty");
         let _ = self.writer.flush();

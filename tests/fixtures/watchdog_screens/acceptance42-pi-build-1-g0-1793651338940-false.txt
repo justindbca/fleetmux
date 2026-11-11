@@ -14,7 +14,7 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && grep -rn                      
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42 && grep -rn                      
  "pane.select\|pane.focus\|\"focus\"\|'focus'" fleetmux/src/*.rs fleetmux/src/**/*.rs 2>/dev/null  
  | grep -i "method\|match\|\"" | head -20                                                          
                                                                                                    
@@ -24,7 +24,7 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && ls; grep -rn         
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42/fleetmux && ls; grep -rn         
  "pane.select\|select" --include=*.rs -l . | head                                                  
                                                                                                    
  ... (17 earlier lines, ctrl+o to expand)                                                          
@@ -38,7 +38,7 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && grep -n              
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42/fleetmux && grep -n              
  "'select'\|pane.select\|\"select\"\|zoom" protocol/*.md 2>/dev/null | head -20; echo ===; grep    
  -rn "pane.select\|pane.zoom\|\"zoom\"" --include=*.rs crates/ | head -10                          
                                                                                                    
@@ -77,8 +77,8 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && grep -n "def _call" -A 30     
- cmux_fleet/backends/fleetmux.py | head -40                                                        
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42 && grep -n "def _call" -A 30     
+ fleetmux/backends/fleetmux.py | head -40                                                        
                                                                                                    
  ... (32 earlier lines, ctrl+o to expand)                                                          
  exc                                                                                               
@@ -94,11 +94,11 @@
  claude-input pane.                                                                                
 
                                                                                                    
- $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current          
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
  import sys, json                                                                                  
- sys.path.insert(0,"/home/USER/cmux-fleet-current")                                              
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ sys.path.insert(0,"/home/USER/fleetmux-current")                                              
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
  print(m._call("layout.set", focus="workers", selected={"workers":"emf5-6"}))                      
  PY' 2>&1 | head -10; sleep 2; ssh -T utm-linux 'cat                                               
@@ -117,7 +117,7 @@
  Selection field name differs. Let me check layout.set params in the protocol.                     
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && grep -rn             
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42/fleetmux && grep -rn             
  "layout.set" --include=*.md --include=*.rs . | grep -v "tests/" | head -10                        
                                                                                                    
  ... (10 earlier lines, ctrl+o to expand)                                                          
@@ -131,9 +131,9 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42/fleetmux && sed -n 170,200p      
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42/fleetmux && sed -n 170,200p      
  crates/app/src/server/handlers.rs; grep -n "select" PROTOCOL.md | head -20; grep -rn "def         
- _tag\|def _set_layout\|layout_set" cmux_fleet 2>/dev/null | head -3; sed -n 100,120p              
+ _tag\|def _set_layout\|layout_set" fleetmux 2>/dev/null | head -3; sed -n 100,120p              
  crates/app/src/server/views.rs                                                                    
                                                                                                    
  ... (97 earlier lines, ctrl+o to expand)                                                          
@@ -149,11 +149,11 @@
  pane.focus is the right command. Using it on the claude-input pane.                               
 
                                                                                                    
- $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current          
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
  import sys                                                                                        
- sys.path.insert(0,"/home/USER/cmux-fleet-current")                                              
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ sys.path.insert(0,"/home/USER/fleetmux-current")                                              
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
  print("focus:", m._call("pane.focus", pane="emf5-6"))                                             
  print("layout:", m._call("layout.get"))                                                           
@@ -170,13 +170,13 @@
  Pane emf5-6 is now the selected/focused tab. Taking a screenshot and re-reading the pane text.    
 
                                                                                                    
- $ cd /Users/USER/.cmux-fleet-acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 
+ $ cd /Users/USER/.fleetmux/fleets/acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 
  && /Users/USER/Documents/projects/host-project/scripts/utm/vm_gui.sh shot                    
  ./m3-vm-claude-input-focused.png && ls -la m3-vm-claude-input-focused.png; ssh -T utm-linux 'cd   
- /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current                                 
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 -c "                              
- import sys;sys.path.insert(0,\"/home/USER/cmux-fleet-current\")                                 
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current                                 
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 -c "                              
+ import sys;sys.path.insert(0,\"/home/USER/fleetmux-current\")                                 
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager(\"a42-linux-639062c8\", state_dir=\"/home/USER/a42/v2/state\")         
  t=m.capture_output(\"emf5-6\", lines=80) or \"\"                                                  
  print(\"\n\".join([l for l in t.splitlines() if l.strip()][-18:]))                                
@@ -195,6 +195,6 @@
 ── ⠋ Working ──────────────────────────────────────────────────────────────────────────────────────
                                                                                                    
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-~/.cmux-fleet-acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 • build-1
+~/.fleetmux/fleets/acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 • build-1
 ↑33k ↓6.9k R1.0M CH99.6% 9.4%/400k (auto)           workbuddy-ai/deepseek-v4.1-flash • thinking off
 执行派工任务

@@ -2,7 +2,7 @@
 //! (brief-m03 §3.3); bodies from B6 (server-ctl).
 
 use std::ffi::CString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -115,49 +115,6 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-/// Atomically write `<runtime>/server.json` = `{pid, start_time, version, protocol, epoch}` (PROTOCOL.md §8.1),
-/// mode 0600, via `server.json.tmp` + `fsync` + `rename`.
-pub fn write_server_json(runtime: &Path, pid: u32, start_time: u64, epoch: &str) -> io::Result<()> {
-    let body = serde_json::json!({
-        "pid": pid,
-        "start_time": start_time,
-        "version": env!("CARGO_PKG_VERSION"),
-        "protocol": fleetmux_proto::PROTOCOL,
-        "epoch": epoch,
-    });
-    write_atomic(&runtime.join("server.json"), body.to_string().as_bytes())
-}
-
-/// Run `f` while holding `flock(LOCK_EX)` on `<runtime>/start.lock` (created if missing, never deleted).
-///
-/// This is the starter's side of PROTOCOL.md §8.4 (design.md §2.3: lock → `hello` again → clear a dead socket →
-/// start → wait for `hello`). `fleetmux server` itself never takes the lock (fix-m0-2): a starter holds it while
-/// it waits for the server's `hello`, so a server that waited for it would deadlock. The server keeps a single
-/// instance through [`super::socket::bind`] instead.
-pub fn with_start_lock<T>(runtime: &Path, f: impl FnOnce() -> T) -> io::Result<T> {
-    let path = runtime.join("start.lock");
-    let lock: File = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(&path)?;
-    loop {
-        // SAFETY: flock on a file descriptor we own for the whole call.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0 {
-            break;
-        }
-        let e = io::Error::last_os_error();
-        if e.kind() != io::ErrorKind::Interrupted {
-            return Err(e);
-        }
-    }
-    let out = f();
-    // Closing the descriptor releases the lock; the file itself stays (PROTOCOL.md §8.4).
-    drop(lock);
-    Ok(out)
-}
 
 /// Create `<runtime>/start.lock` if it is missing (mode 0600; content meaningless, never deleted — PROTOCOL.md
 /// §8.4). Opening never contends with a starter's `flock`; the server does not lock it.

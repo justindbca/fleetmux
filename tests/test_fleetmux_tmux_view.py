@@ -5,7 +5,7 @@ A tmux slot's fleetmux pane only runs a ``tmux attach`` client; its CLI runs und
 ``has_cli_process`` only looks at the pane's tty (always False for such a pane, F8) and ``kill_pane`` only ends the
 client (the session and its CLI run on). cmux has both tmux branches (``tests/test_tmux_view.py`` pins them).
 
-These tests do not use pages: the child manager is an unbound ``cmux-fleet:ops`` manager, so they are red for the tmux
+These tests do not use pages: the child manager is an unbound ``fleetmux:ops`` manager, so they are red for the tmux
 reason only. Fixture ``fm_tmux_world`` borrows ``tests/test_tmux_view.py``'s isolation (fake HOME, ``TMUX_TMPDIR``,
 ``SHELL=/bin/sh``, a marked ``~/.tmux.conf``, ``claude -> /bin/sleep``) but not its clean-up: no ``tmp_path``, no
 ``pkill -f``, no ``rmtree``. The root ``~/.m4e/fm4-py/tv-*`` is kept; the fake CLI, tmux server and fleetmux servers

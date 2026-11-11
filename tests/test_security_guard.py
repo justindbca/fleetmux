@@ -196,7 +196,7 @@ def test_classify_send_out_install_config_secret_read_samples(tmp_path, monkeypa
     classify = getattr(guard, 'classify')
     run = tmp_path / 'run'
     (run / 'sub' / 'M0').mkdir(parents=True)
-    cfg = {'run': str(run), 'roster': str(tmp_path / 'roster.yaml'), 'redis_socket': '/tmp/cmux-fleet-abc.sock'}
+    cfg = {'run': str(run), 'roster': str(tmp_path / 'roster.yaml'), 'redis_socket': '/tmp/fleetmux-abc.sock'}
     pol = policy()
     home = str(Path.home())
 
@@ -227,7 +227,7 @@ def test_classify_send_out_install_config_secret_read_samples(tmp_path, monkeypa
         for tool, tool_input in neg:
             assert cls(tool, tool_input) is None, (want, tool_input)
     # U4 (limited mitigation, not protection against same-user forgery)
-    for cmd in ('redis-cli -s /tmp/cmux-fleet-abc.sock keys "*"', 'python3 -c "print(\'fx:guard:ticket:x\')"'):
+    for cmd in ('redis-cli -s /tmp/fleetmux-abc.sock keys "*"', 'python3 -c "print(\'fx:guard:ticket:x\')"'):
         assert cls('Bash', {'command': cmd}) == 'config', cmd
     # U3: strictest configured tier first, then real_money > delete > secret_read > config > install > send_out
     hi = policy(confirm__patterns={'real_money': ['placeOrder']})
@@ -288,7 +288,7 @@ def test_pretool_without_policy_exits_0_silent(private_redis_v2, tmp_path):  # [
     assert rc == 0 and out == '', err
     assert not list(r.scan_iter('fx:guard:*'))
     # no Redis needed at all: the pinned config says "no policy" before any connection
-    fleet.save(path, dict(cfg, redis_socket='/tmp/cmux-fleet-does-not-exist-' + uuid.uuid4().hex[:6] + '.sock'))
+    fleet.save(path, dict(cfg, redis_socket='/tmp/fleetmux-does-not-exist-' + uuid.uuid4().hex[:6] + '.sock'))
     rc, out, err, _ = pretool(path, 'worker-1', 'Edit', {'file_path': '/tmp/x', 'old_string': 'a', 'new_string': 'b'})
     assert rc == 0 and out == '', err
     # §8.1 E2: a delegated slot under a no-policy root is not routed (no Redis read)
@@ -544,7 +544,7 @@ def test_claude_argv_registers_pretool_hook_with_matcher_timeout_onfailure_block
         run = tmp_path / ('run-' + uuid.uuid4().hex[:6])
         cfg = dict(run=str(run), python=sys.executable, workers=['worker-1'], mode='service', supervisor_cli='claude',
                    worker_cli='claude', claude='/bin/false', transport_version=2, allow_development_v2=True,
-                   redis_socket='/tmp/cmux-fleet-x.sock', v2_lease_ms=300000)
+                   redis_socket='/tmp/fleetmux-x.sock', v2_lease_ms=300000)
         cfg.update(over)
         cwd = fleet.agent_cwd(cfg, name)
         cwd.mkdir(parents=True, exist_ok=True)
@@ -589,7 +589,7 @@ def test_claude_argv_without_policy_has_no_pretool_hook(tmp_path):  # [baseline]
         run = tmp_path / kind
         cfg = dict(run=str(run), python=sys.executable, workers=['worker-1'], mode='service', supervisor_cli='claude',
                    worker_cli='claude', claude='/bin/false', transport_version=2, allow_development_v2=True,
-                   redis_socket='/tmp/cmux-fleet-x.sock', v2_lease_ms=300000, **over)
+                   redis_socket='/tmp/fleetmux-x.sock', v2_lease_ms=300000, **over)
         cwd = fleet.agent_cwd(cfg, name)
         cwd.mkdir(parents=True, exist_ok=True)
         fleet.claude_argv(run / 'config.json', cfg, name, 0, 'p')
@@ -615,7 +615,7 @@ def test_pretool_never_raises_on_redis_down_outputs_deny(private_redis_v2, tmp_p
     check(rc, out, err, 'epoch')
     assert 'epoch_malformed' in decision(out)['permissionDecisionReason']
     r.hdel('fx:service', 'stop_epoch')
-    fleet.save(path, dict(cfg, redis_socket='/tmp/cmux-fleet-gone-' + uuid.uuid4().hex[:6] + '.sock'))
+    fleet.save(path, dict(cfg, redis_socket='/tmp/fleetmux-gone-' + uuid.uuid4().hex[:6] + '.sock'))
     rc, out, err, _ = pretool(path, 'worker-1', 'Bash', {'command': 'ls'})
     check(rc, out, err, 'redis down')
     fleet.save(path, cfg)

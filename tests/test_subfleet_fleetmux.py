@@ -339,7 +339,7 @@ def test_start_roster_with_subfleets_on_fleetmux_is_accepted(request, monkeypatc
     from test_pi import mock_start
     root = W.new_root('st', request, 'mock start')
     args, ran = mock_start(root, monkeypatch)
-    mgr = SimpleNamespace(meta_path=root / 'state' / 'cmux-fleet.json', session_exists=lambda: False,
+    mgr = SimpleNamespace(meta_path=root / 'state' / 'fleetmux.json', session_exists=lambda: False,
                           runtime_root=root / 'state' / 'fleetmux' / RS,
                           spawn_window=lambda *a, **kw: SimpleNamespace(success=True, pane_id='p-1', error=None))
     monkeypatch.setattr(fleet, 'resolve_backend', lambda requested=None, platform=None: ('fleetmux', None))

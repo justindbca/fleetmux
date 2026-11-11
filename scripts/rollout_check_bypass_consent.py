@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""上线验收（只读，沙盒内，cwd = ~/cmux-fleet）：Claude worker 的 --settings 文件带 bypass 同意。
+"""上线验收（只读，沙盒内，cwd = fleetmux 发版根）：Claude worker 的 --settings 文件带 bypass 同意。
 
 macmini 板块轮动 2026-10-30..11-06：开 advisor 的 Claude worker 带 --setting-sources project 起，读不到
 ~/.claude/settings.json 里的 skipDangerousModePermissionPrompt，停在 Bypass Permissions 确认框直到启动超时。

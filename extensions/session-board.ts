@@ -41,8 +41,7 @@ function scriptPath(): string {
 		const sibling = join(dirname(fileURLToPath(import.meta.url)), "session_board.py");
 		if (existsSync(sibling)) return sibling;
 	} catch {}
-	// CMUX_FLEET_PI_DIR: legacy name, kept for compatibility.
-	return join(process.env.FLEETMUX_PI_DIR || process.env.CMUX_FLEET_PI_DIR || "", "fleetmux", "session_board.py");
+	return join(process.env.FLEETMUX_PI_DIR || "", "fleetmux", "session_board.py");
 }
 
 export default function (pi: ExtensionAPI) {

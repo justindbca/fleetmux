@@ -7,7 +7,7 @@ kv ``sidebar`` value (compact JSON, ``ensure_ascii=False``)::
 
     {"v":1,"current":"fleet-20261029-231820-ab12cd34",
      "fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running",
-                "line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"}]}
+                "line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"}]}
 
 ``current`` is this daemon's run; ``fleets`` is that run plus every sub-fleet and sub-sub-fleet in
 pre-order (flat, not nested), at most 16 entries. The server parses the value and draws the sidebar

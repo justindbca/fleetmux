@@ -344,7 +344,7 @@ def step3_autostart(ctx):
         assert h.get('up_at') and not h.get('crashloop') and pings(h['redis_socket']), h
         child, cr = tree.child(name)
         assert child.get('parent_config') and child.get('fleetmux_page') == name, child  # design §0 item 2
-        assert child.get('fleetmux_root_session') == 'cmux-fleet', child
+        assert child.get('fleetmux_root_session') == 'fleetmux', child
         for k in CHILD_KEYS:
             if k in entries[name]:
                 assert child.get(k) == entries[name][k], (name, k, child.get(k), entries[name][k])

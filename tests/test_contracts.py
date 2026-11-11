@@ -187,7 +187,7 @@ THREADS = {n: str(i) * 8 + '-1111-1111-1111-111111111111' for i, n in enumerate(
 def cf(tmp_path):
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': list(WORKERS), 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
            'codex_home': str(tmp_path / 'codex-home')}
     (run / 'config.json').write_text(json.dumps(cfg))

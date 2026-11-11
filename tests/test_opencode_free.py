@@ -188,7 +188,7 @@ def test_project_root_compat_wrapper(launcher, tmp_path, terminal):
     project.mkdir()
     wrapper = project / LAUNCHER.name
     shutil.copyfile(ROOT / 'launchers/compat' / LAUNCHER.name, wrapper)
-    (tmp_path / 'cmux-fleet-pi').symlink_to(launcher[0].parent.parent, target_is_directory=True)
+    (tmp_path / 'fleetmux').symlink_to(launcher[0].parent.parent, target_is_directory=True)
     args = ['--terminal', '--continue', 'prompt with spaces'] if terminal else ['--continue']
     result = run_launcher((wrapper, launcher[1]), *args)
     assert result.returncode == 0, result.stderr
@@ -200,7 +200,7 @@ def test_project_root_compat_wrapper(launcher, tmp_path, terminal):
         argv = output['cmux_argv']
         assert argv[argv.index('--cwd') + 1] == str(project.resolve())
         command = argv[argv.index('--command') + 1]
-        assert '/cmux-fleet-pi/launchers/' in command
+        assert '/fleetmux/launchers/' in command
     # Caller can explicitly choose a different project without editing the wrapper.
     result = run_launcher((wrapper, launcher[1]), '--terminal', PI_WORKDIR=str(tmp_path))
     assert result.returncode == 0, result.stderr

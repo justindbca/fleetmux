@@ -206,7 +206,7 @@ def test_tick_skips_other_backends_without_touching_mgr(tmp_path, monkeypatch):
 
 
 def test_kv_get_returns_value_or_none(tmp_path, monkeypatch):
-    mgr = fm.FleetmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    mgr = fm.FleetmuxSessionManager('fleetmux', state_dir=tmp_path)
     seen = []
 
     def ok(cmd, **args):

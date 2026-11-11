@@ -118,7 +118,7 @@ planifié, le service résident et le développement de fonctionnalités tournen
   superviseur ; les déclenchements simultanés font la queue sous `--max-busy` ; le daemon contrôle les champs de la réponse
   avant que votre programme ne la lise (`fleetmux results --drain`). Les requêtes n'ont pas d'échéance globale : une requête
   qui expire n'immobilise que son propre emplacement, et un worker Claude Code figé reprend sa propre session et reçoit de
-  nouveau la même requête. `--clear-after-result` fait démarrer chaque revue dans un contexte vierge. La flotte ne passe aucun
+  nouveau la même requête. La flotte ne passe aucun
   ordre et ne connaît aucun calendrier : votre programme décide quoi faire du verdict, fait passer tout ordre par ses propres
   contrôles et met la flotte en `pause` / `resume` autour des heures de marché.
 - **Un modèle de puissance moyenne à la tête d'une foule de modèles gratuits plus faibles, pour le travail courant.**
@@ -143,8 +143,7 @@ planifié, le service résident et le développement de fonctionnalités tournen
 - **Service de jugement résident** (`service`). Un autre programme envoie des requêtes JSON avec `fleetmux request` ; une
   requête qui indique `to` va directement au worker de ce rôle (`--worker-names exit-1,reentry-1,...`, un prompt par rôle via
   `--roles`). Le daemon contrôle chaque réponse au regard de `reply.required` / `reply.allowed`, et l'appelant suspend la
-  flotte en dehors de ses heures de travail avec `pause` / `resume`. Pour un travail ponctuel sans état (par exemple extraire
-  des souvenirs de transcriptions avec un petit modèle), `--clear-after-result` vide le contexte après chaque réponse. Voir
+  flotte en dehors de ses heures de travail avec `pause` / `resume`. Voir
   [Service mode](README.md#service-mode-resident-fleet) dans le README en anglais.
 - **Développement de fonctionnalités avec revue indépendante** (`dev_task`). Le superviseur découpe la fonctionnalité, des
   workers la construisent et des workers relecteurs distincts la jugent ; la revue est limitée à trois tours et les P0 / P1
@@ -172,16 +171,16 @@ planifié, le service résident et le développement de fonctionnalités tournen
   `ssh -t`) ou `fleetmux gui` affiche la page en direct depuis un autre terminal, y compris une application de terminal sur
   téléphone.
 
-Prévu, pas encore fusionné : des canaux de discussion (Telegram, Feishu, WeChat, e-mail) comme second clavier du
-superviseur, avec les résultats et les « en attente d'un humain » renvoyés dans la même conversation.
+Des canaux de discussion (Telegram, Feishu, WeChat, e-mail, Slack) servent de second clavier au superviseur, avec les
+résultats et les « en attente d'un humain » renvoyés dans la même conversation : `fleetmux channel`,
+[contracts §8](docs/contracts.md).
 
 ## Installation
 
 Une seule commande : `fleetmux <subcommand>` (par exemple `fleetmux start`, `fleetmux status`, `fleetmux channel`). Le binaire
 exécute lui-même ses sous-commandes de terminal (`server`, `attach`, `reap`, `web`, `gui --runtime D`) et transmet toutes les
-sous-commandes de flotte au CLI Python de la même version (docs/design.md §50). Les installations faites sous l'ancien
-nom du projet continuent de fonctionner : sa commande, ses variables d'environnement et ses répertoires de versions
-restent acceptés comme alias (docs/design.md §50).
+sous-commandes de flotte au CLI Python de la même version (docs/design.md §50). Une machine installée sous l'ancien
+nom du projet déplace ses données une fois avec `fleetmux home migrate` (docs/design.md §50.1).
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux

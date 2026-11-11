@@ -38,7 +38,7 @@ Not for:
 From the project root:
 
 ```bash
-rg -n "<user task keywords>|fleet|cmux-fleet|subagent|Task" memory/ references/ .claude/skills .agents/skills 2>/dev/null || true
+rg -n "<user task keywords>|fleet|fleetmux|subagent|Task" memory/ references/ .claude/skills .agents/skills 2>/dev/null || true
 ```
 
 If the environment has the EverMemOS MCP, search it first as the project rules say:
@@ -52,12 +52,10 @@ search_memory(query="<English keywords>", user_id="claude-code", retrieve_method
 
 ```bash
 FLEET_BIN=""
-if command -v cmux-fleet >/dev/null 2>&1; then
-  FLEET_BIN="cmux-fleet"
-elif [ -x "$HOME/cmux-fleet/.venv/bin/cmux-fleet" ]; then
-  FLEET_BIN="$HOME/cmux-fleet/.venv/bin/cmux-fleet"
-elif [ -f "$HOME/Documents/projects/cmux-fleet-pi/cmux_fleet/fleet.py" ]; then
-  FLEET_BIN="python3 $HOME/Documents/projects/cmux-fleet-pi/cmux_fleet/fleet.py"
+if command -v fleetmux >/dev/null 2>&1; then
+  FLEET_BIN="fleetmux"
+elif [ -x "$HOME/fleetmux-current/.venv/bin/fleetmux-py" ]; then
+  FLEET_BIN="$HOME/fleetmux-current/.venv/bin/fleetmux-py"
 fi
 printf '%s\n' "$FLEET_BIN"
 ```
@@ -225,8 +223,8 @@ Find the run directory:
 
 ```bash
 python3 - <<'PY'
-import json, os
-for p in [os.path.expanduser('~/.fleetmux/latest.json'), os.path.expanduser('~/.cmux-fleet/latest.json'), os.path.expanduser('~/.cmux-fleet-pi-validation/latest.json')]:
+import glob, json, os
+for p in [os.path.expanduser('~/.fleetmux/latest.json')] + sorted(glob.glob(os.path.expanduser('~/.fleetmux/fleets/*/latest.json'))):
     if os.path.exists(p):
         d=json.load(open(p)); print(d.get('run') or d.get('run_dir') or d)
 PY

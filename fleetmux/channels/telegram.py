@@ -154,6 +154,11 @@ class TelegramChannel(base.Channel):
         if offset:
             params['offset'] = int(offset)
         result = self._call('getUpdates', params, timeout=wait + HTTP_SLACK_S)
+        # the long poll is the connection: an answer ends what a network error or a 429 set (needs_login and
+        # conflict stay until the account is fixed), as the email and WeChat channels do after their own fetch
+        if getattr(self, '_state', '') in ('reconnecting', 'rate_limited'):
+            self._state = ''
+            self.last_error = ''
         return list(result or [])
 
     def _ack(self, raw):

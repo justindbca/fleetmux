@@ -13,6 +13,7 @@ every test. A real hook blocks waiting for the next delivery, which an in-proces
 so tests/hook_sim.py stands in for that wait only (see its docstring). A module that runs the real
 hook command in subprocesses sets ``HOOK_CHANNEL = True`` and gets no stand-in.
 """
+import os
 import uuid
 
 import pytest
@@ -20,7 +21,7 @@ import pytest
 import test_fleet  # first: puts the checkout on sys.path
 import hook_sim  # noqa: E402
 from fleetmux import cmux_manager, codex_queue, fleet  # noqa: E402
-from fleetmux import env_names, fleet_config  # noqa: E402
+from fleetmux import fleet_config, home_migrate  # noqa: E402
 
 
 def pytest_configure(config):
@@ -54,6 +55,15 @@ def _no_real_uappend(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_old_data_guard(tmp_path):
+    """The start-up guard never sees the operator's own pre-fleetmux data (tests/test_home_migrate.py points it at a
+    temp HOME). Its own MonkeyPatch, so a test's ``monkeypatch.undo()`` does not bring the real HOME back."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(home_migrate, '_home', lambda: tmp_path / 'no-old-data')
+        yield
+
+
+@pytest.fixture(autouse=True)
 def isolated_fleet_namespace(monkeypatch, tmp_path):
     """No test may inherit the operator's live fleet namespace.
 
@@ -61,7 +71,7 @@ def isolated_fleet_namespace(monkeypatch, tmp_path):
     HOME / LATEST (and cmux_manager binds STATE_DIR / CMUX) at import time.  A test that reaches a `save(LATEST, …)`
     — e.g. `start --resume`, which re-pins LATEST from the run's config — then writes the live
     `<live home>/latest.json` and points the operator's next `start --resume` at a temporary redis socket
-    (operator report: pytest-8260/test_resume_keeps_the_hot_edit0 wrote ~/.cmux-fleet-layout-finish/latest.json).
+    (operator report: pytest-8260/test_resume_keeps_the_hot_edit0 wrote the latest.json of a live fleet home).
     Every test therefore runs against a per-test fleet home / state dir, both in the environment and in the
     already-imported module globals.  A test that wants a different namespace still calls monkeypatch.setenv /
     setattr itself and wins; teardown restores the previous values.
@@ -69,8 +79,8 @@ def isolated_fleet_namespace(monkeypatch, tmp_path):
     home = tmp_path / 'fleet-home'
     state = tmp_path / 'cmux-state'
     monkeypatch.delenv('FLEETMUX_CONFIG', raising=False)
-    for _new, legacy in env_names.PAIRS:  # a legacy name (copied to its new name at import) must not differ from
-        monkeypatch.delenv(legacy, raising=False)  # the new one in any subprocess a test starts
+    for name in [k for k in os.environ if k.startswith(home_migrate.OLD_ENV)]:  # set by an older release's
+        monkeypatch.delenv(name)  # pane: the start-up guard would stop every human command
     monkeypatch.setenv('FLEETMUX_HOME', str(home))
     monkeypatch.setenv('FLEETMUX_STATE', str(state))
     monkeypatch.setattr(fleet, 'HOME', home)
@@ -87,7 +97,7 @@ def no_first_run_discovery(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_private_config(monkeypatch, tmp_path_factory):
-    """The operator's ~/.cmux-fleet/fleet.yaml never leaks into a test; a test sets its own."""
+    """The operator's ~/.fleetmux/fleet.yaml never leaks into a test; a test sets its own."""
     monkeypatch.setenv(fleet_config.USER_ENV, str(tmp_path_factory.getbasetemp() / 'no-private-fleet.yaml'))
     monkeypatch.setattr(fleet_config, '_pinned', None)  # nor a run's pin (start / pin_paths) from an earlier test
 

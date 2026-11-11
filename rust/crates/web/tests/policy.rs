@@ -3,7 +3,7 @@ use std::path::Path;
 
 use fleetmux_web::policy::{Decision, allow, is_fleet_jump};
 
-const RUN: &str = "/r/u/.cmux-fleet/runs/fleet-1"; // never touched: the allow-list is lexical
+const RUN: &str = "/r/u/.fleetmux/runs/fleet-1"; // never touched: the allow-list is lexical
 const PAGE: &str = "/tmp/fleetmux-web/abc-42/page";
 
 fn decide(url: &str) -> Decision {

@@ -22,7 +22,7 @@ def make_fleet(tmp_path, monkeypatch, worker_cli='pi'):
     cfg = dict(run=str(run), python=sys.executable, workers=['worker-1'], mode='service',
                supervisor_cli='pi', worker_cli=worker_cli, pi='/bin/pi', pi_model='local/test',
                pi_home=str(run / 'pi-home'), allow_unsandboxed_pi=True,
-               redis_socket='/tmp/cmux-fleet-pi-test.sock', codex_home=str(tmp_path / 'codex-home'))
+               redis_socket='/tmp/fleetmux-pi-test.sock', codex_home=str(tmp_path / 'codex-home'))
     path = run / 'config.json'
     fleet.save(path, cfg)
     f = fleet.Fleet(path, FakeRedis(), FakeMgr())
@@ -317,7 +317,7 @@ def temp_redis_root(monkeypatch):
 def mock_start(tmp_path, monkeypatch):
     from fleetmux import cmux_manager
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
-    mgr = SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json',
+    mgr = SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'fleetmux.json',
                           session_exists=lambda: False,
                           spawn_window=lambda *a, **kw: SimpleNamespace(success=True))
     monkeypatch.setattr(cmux_manager, 'CmuxSessionManager', lambda name: mgr)

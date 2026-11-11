@@ -177,7 +177,7 @@ CONTRACT = {
 
 @pytest.fixture(autouse=True)
 def config_dir(monkeypatch, tmp_path):
-    """Never the operator's ~/.config/fleetmux."""
+    """Never the operator's ~/.fleetmux/config."""
     d = tmp_path / 'fleetmux-config'
     monkeypatch.setenv(channels.CONFIG_ENV, str(d))
     return d

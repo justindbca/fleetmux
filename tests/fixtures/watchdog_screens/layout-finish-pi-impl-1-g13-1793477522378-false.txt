@@ -19,7 +19,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && bash -n scripts/install_release.sh && echo "BASH SYNTAX
  OK" && git status --porcelain && git diff --stat
 
@@ -35,7 +35,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && git add README.md scripts/install_release.sh
  tests/test_install_release.py && git commit -q -F - <<'EOF'
  fix(scripts): keep the install log, own only the created
@@ -60,8 +60,8 @@
  - P1-03: nothing printed or recorded <release>/bin on PATH,
  so a normal shell ran the stale ~/.local/bin
    build. Success now prints `PATH=<release>/bin:$PATH
- <release>/.venv/bin/cmux-fleet --help` (console
-   script first, `python -m cmux_fleet.fleet` fallback) and
+ <release>/.venv/bin/fleetmux-py --help` (console
+   script first, `python -m fleetmux.fleet` fallback) and
  records it as `start_command`.
 
  Also the recorded items: manifest.json is parsed with
@@ -153,7 +153,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && grep -rn "fixture daemon" --include=* . | head; echo
  "=== tests for setup_fixture ==="; grep -rln
  "setup_fixture" tests/ scripts/ docs/ 2>/dev/null | head
@@ -170,7 +170,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && grep -n "setup_fixture\|spawn_panes\|daemon"
  tests/test_acceptance42_fixture_readiness.py | head -20;
  echo "=== head of test file ==="; sed -n 1,30p
@@ -188,13 +188,13 @@
 
 ? notice：impl-1.13 停在确认框（非删除类），等监工裁定；屏幕
 见
-/Users/USER/.cmux-fleet-layout-finish/runs/fleet-20261030-1
+/Users/USER/.fleetmux/fleets/layout-finish/runs/fleet-20261030-1
 40716-21e27b5e/watchdog/impl-1-g13-1793477517335-prompt-unkno
 wn.txt。
 
 ── ⠏ Working ────────────────────────────────────────────────
 
 ─────────────────────────────────────────────────────────────
-~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+~/.fleetmux/fleets/layout-finish/runs/fleet-20261030-140716-21e...
 ↑58k ↓38k R2.0M CH99.5% 23.2%/400k (auto)  workbuddy-ai/deeps
 执行派工任务

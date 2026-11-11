@@ -58,8 +58,7 @@ def _same_runtime(cfg, state_dir):
     if (cfg.get('session') or fleet.SESSION) != fleet.SESSION:
         return False
     have, want = str(cfg.get('cmux_state_dir') or ''), str(state_dir or '')
-    # by real path: a run pinned to the legacy ~/.local/state/cmux-fleet is the same runtime once that path is
-    # the symlink `home migrate` left to ~/.fleetmux/state (§50.1)
+    # by real path: a run may pin the state dir through a symlink (§50.1)
     return have == want or bool(have and want and os.path.realpath(have) == os.path.realpath(want))
 
 

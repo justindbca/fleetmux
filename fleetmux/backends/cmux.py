@@ -4,7 +4,7 @@ cmux only accepts commands from processes started inside a cmux window, so the d
 must run in a cmux surface. Every call is scoped by workspace UUID (refs such as
 ``surface:N`` renumber), and every destructive or typing call first checks that the
 surface is one this manager spawned. Ownership is kept in
-``~/.fleetmux/state/<session>.json`` (legacy ``~/.local/state/cmux-fleet``, fleetmux/paths.py).
+``~/.fleetmux/state/<session>.json`` (fleetmux/paths.py).
 
 Hard-won cmux facts (all measured, not documented):
 
@@ -50,7 +50,7 @@ from typing import Dict, List, Optional, Tuple
 from fleetmux import paths
 
 CMUX = os.environ.get('CMUX_BIN') or '/Applications/cmux.app/Contents/Resources/bin/cmux'
-STATE_DIR = paths.state_dir()  # $FLEETMUX_STATE, else ~/.fleetmux/state (legacy ~/.local/state/cmux-fleet)
+STATE_DIR = paths.state_dir()  # $FLEETMUX_STATE, else ~/.fleetmux/state
 TMUX = os.environ.get('FLEETMUX_TMUX') or shutil.which('tmux') or '/opt/homebrew/bin/tmux'
 # A tmux server exits by itself when its last session ends; a client landing mid-shutdown reads
 # 'server exited unexpectedly'. tmux_session_alive asks again this many times, 0.1 s apart.
@@ -296,7 +296,7 @@ class CmuxSessionManager:
     # module-level function it stands for; ``mgr.available()`` reads the class attribute, not the function.
     available = staticmethod(cmux_available)
 
-    def __init__(self, session_name: str = 'cmux-fleet', agents_title: str = 'Fleet agents',
+    def __init__(self, session_name: str = 'fleetmux', agents_title: str = 'Fleet agents',
                  control_title: str = 'Fleet daemon', state_dir: Optional[Path] = None):
         self.session_name = session_name
         self.agents_title = agents_title

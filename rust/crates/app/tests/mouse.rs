@@ -313,7 +313,7 @@ fn tab_clicks_hit_blocks_not_gaps_or_bar_tail() {
 // -------------------------------- fleet sidebar input (S1-④, plan §4.4) -----------------------------
 
 /// The kv `sidebar` value the fleet daemon pushes (plan §4.5): one fleet, the current one.
-const SIDEBAR_ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+const SIDEBAR_ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 
 /// Publish the sidebar card through kv (the daemon's own channel, plan §4.3.3).
 fn set_sidebar(srv: &Server) {
@@ -345,7 +345,7 @@ fn prefix_s_hides_and_shows_the_sidebar() {
     v.wait_text("fleetmux-demo", T);
 
     v.input(&prefixed(b"s"));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let rail = v.cell(0, 1);
     assert_eq!(
         rail.ch, '◫',
@@ -365,7 +365,7 @@ fn prefix_s_hides_and_shows_the_sidebar() {
     );
 
     v.input(&prefixed(b"s"));
-    let screen = v.wait_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_text("~/.fleetmux/fleets/fmx-demo", T);
     let left = v.cell(2, 34);
     assert!(
         is_box(left.ch),
@@ -408,7 +408,7 @@ fn clicking_the_chevrons_toggles_the_sidebar() {
     v.wait_text("fleetmux-demo", T);
 
     v.input(&sgr_click(1, 0, 0));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let rail = v.cell(0, 1);
     assert_eq!(
         rail.ch, '◫',
@@ -416,9 +416,9 @@ fn clicking_the_chevrons_toggles_the_sidebar() {
     );
 
     v.input(&sgr_click(1, 0, 0));
-    let screen = v.wait_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_text("~/.fleetmux/fleets/fmx-demo", T);
     assert!(
-        screen.contains("~/.cmux-fleet-fmx-demo"),
+        screen.contains("~/.fleetmux/fleets/fmx-demo"),
         "clicking the hidden toolbar's ◫ at (1,0) did not show the sidebar:\n{screen}"
     );
 }
@@ -566,7 +566,7 @@ fn grey_arrows_do_nothing() {
 // ------------------------------ fleet sidebar close box (S1b-④, plan §2.5 / §11.1) -------------------------
 
 /// Three cards, `current` the middle one: both arrows have a neighbour (plan §11.1).
-const SIDEBAR_THREE: &str = r#"{"v":1,"current":"f2","fleets":[{"id":"f1","title":"root-fleet","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"},{"id":"f2","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+1 worker（0忙）","line2":"由 worker-1 委派"},{"id":"f3","title":"child-fleet","state":"reclaimed","line1":"已收回 · 监工+0 worker（0忙）","line2":"只读，可看记录"}]}"#;
+const SIDEBAR_THREE: &str = r#"{"v":1,"current":"f2","fleets":[{"id":"f1","title":"root-fleet","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"},{"id":"f2","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+1 worker（0忙）","line2":"由 worker-1 委派"},{"id":"f3","title":"child-fleet","state":"reclaimed","line1":"已收回 · 监工+0 worker（0忙）","line2":"只读，可看记录"}]}"#;
 
 /// The `stop_request` value the server holds; `None` while nothing was requested.
 fn kv_stop(srv: &Server) -> Option<String> {
@@ -894,7 +894,7 @@ fn hide_then_show_keeps_the_dragged_width() {
     v.wait_cell(0, 44, T, |c| is_box(c.ch));
 
     v.input(&prefixed(b"s"));
-    let hidden = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let hidden = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     assert_eq!(
         v.cell(0, 1).ch,
         '◫',
@@ -1062,7 +1062,7 @@ fn a_gui_viewer_with_inset_shifts_everyones_toolbar() {
 fn edge_drag_does_nothing_while_hidden() {
     let (srv, _sup, _w1, mut v) = sidebar_shown();
     v.input(&prefixed(b"s"));
-    let hidden = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let hidden = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let toggle = v.cell(0, 1);
     assert_eq!(
         toggle.ch, '◫',
@@ -1080,7 +1080,7 @@ fn edge_drag_does_nothing_while_hidden() {
     );
     let screen = v.text();
     assert!(
-        !screen.contains("~/.cmux-fleet-fmx-demo"),
+        !screen.contains("~/.fleetmux/fleets/fmx-demo"),
         "dragging the hidden sidebar's edge showed it:\n{screen}"
     );
 
@@ -1117,7 +1117,7 @@ fn clicking_reopen_without_a_closed_fleet_says_so() {
         "the next key press did not clear the reopen notice: {cleared:?}"
     );
     // Hidden: the toolbar keeps its columns, so the same click still hits ↺.
-    let hidden = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let hidden = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let toggle = v.cell(0, 1);
     assert_eq!(
         toggle.ch, '◫',
@@ -1166,7 +1166,7 @@ fn dragging_the_topbar_divider_resizes_the_sidebar() {
 fn hidden_topbar_divider_drag_does_nothing() {
     let (srv, _sup, _w1, mut v) = sidebar_shown();
     v.input(&prefixed(b"s"));
-    let hidden = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let hidden = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let toggle = v.cell(0, 1);
     assert_eq!(
         toggle.ch, '◫',
@@ -1182,7 +1182,7 @@ fn hidden_topbar_divider_drag_does_nothing() {
     );
     let screen = v.text();
     assert!(
-        !screen.contains("~/.cmux-fleet-fmx-demo"),
+        !screen.contains("~/.fleetmux/fleets/fmx-demo"),
         "dragging the hidden topbar's (15,0) showed the sidebar:\n{screen}"
     );
 }
@@ -1209,7 +1209,7 @@ fn hsep_drag_with_the_topbar_keeps_the_ratio() {
 
 // ------------------------------ S2b: the topbar ↺ restores (plan §13.6-2 / §13.6-9) ------------------------------
 
-const CLOSED_SIDEBAR: &str = r#"{"v":1,"current":"fleet-20261030-010101-ab12cd34","fleets":[{"id":"fleet-20261030-010101-ab12cd34","title":"fleetmux-demo","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+const CLOSED_SIDEBAR: &str = r#"{"v":1,"current":"fleet-20261030-010101-ab12cd34","fleets":[{"id":"fleet-20261030-010101-ab12cd34","title":"fleetmux-demo","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 
 /// Clicking the topbar's `↺` restores the newest closed fleet: the registered command runs in a `resume` pane of
 /// this server (plan §13.6-2 / §13.6-9).
@@ -1340,7 +1340,7 @@ fn a_window_sidebar_floor_widens_the_band_without_overwriting_the_request() {
         v.text()
     );
     v.input(&prefixed(b"s"));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     assert_eq!(
         v.cell(0, 1).ch,
         '◫',
@@ -1377,7 +1377,7 @@ fn a_window_sidebar_floor_widens_the_band_without_overwriting_the_request() {
         "the floor above the widest drag width overwrote the request"
     );
     gui.send_line(json!({ "inset": 0, "sidebar_min": 200 }));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     assert_eq!(
         v.cell(0, 1).ch,
         '◫',
@@ -1389,7 +1389,7 @@ fn a_window_sidebar_floor_widens_the_band_without_overwriting_the_request() {
     // (`65535 + SIDEBAR_MIN_CONTENT` does not fit a `u16`): a debug server must not panic and a release one must
     // not wrap into showing a band wider than the viewer. Dropping the floor gives the request back.
     gui.send_line(json!({ "inset": 0, "sidebar_min": u16::MAX }));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     assert_eq!(
         v.cell(0, 1).ch,
         '◫',
@@ -1653,7 +1653,7 @@ fn clicking_plus_while_hidden_opens_a_bash_page() {
     v.wait_text("fleetmux-demo", T);
 
     v.input(&prefixed(b"s"));
-    v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     v.input(&sgr_click(4, 0, 0));
     let id = wait_shell_pane(&srv);
     in_root_workers(&srv, &id);
@@ -1723,9 +1723,9 @@ fn linux_default_sidebar_drag_and_header_key_keep_the_pane_order() {
     v.wait_quiet(Duration::from_millis(100), T);
     assert!(v.text().contains("fleetmux-demo"), "blank header row is not a toggle");
     v.input(b"\x02s");
-    v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     v.input(b"\x02s");
-    v.wait_text("~/.cmux-fleet-fmx-demo", T);
+    v.wait_text("~/.fleetmux/fleets/fmx-demo", T);
     assert_eq!(kv_sidebar_width(&srv).as_deref(), Some("44"));
     assert!(v.wait_find("SUP-BODY", T).1 < v.wait_find("W1-BODY", T).1);
 }
@@ -1773,7 +1773,7 @@ fn mirrored_grid_has_no_topbar_row_and_the_headerbar_key_toggles_the_sidebar() {
     std::thread::sleep(Duration::from_millis(300));
     let screen = v.text();
     assert!(
-        screen.contains("~/.cmux-fleet-fmx-demo"),
+        screen.contains("~/.fleetmux/fleets/fmx-demo"),
         "a row-0 click hid the mirrored sidebar: row 0 is content, not the toolbar:\n{screen}"
     );
     assert!(
@@ -1783,9 +1783,9 @@ fn mirrored_grid_has_no_topbar_row_and_the_headerbar_key_toggles_the_sidebar() {
     );
     // The headerbar's `◫` sends the prefix key the row-0 cell used to call.
     v.input(b"\x02s");
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     assert!(
-        !screen.contains("~/.cmux-fleet-fmx-demo"),
+        !screen.contains("~/.fleetmux/fleets/fmx-demo"),
         "^b s (the headerbar's ◫) did not hide the mirrored sidebar:\n{screen}"
     );
     let border = v.cell(20, 0);

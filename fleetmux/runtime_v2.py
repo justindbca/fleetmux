@@ -564,7 +564,6 @@ class RuntimeV2:
         self.rotation_pending = set()
         self.startup_nudges = set()  # slots to re-ask for READY once, typed after the transaction
         self.pending_cursor = '0-0'
-        self.held_events = set()
         self.stopfail_notices = []  # used-up API-error retries: tg / parent notices, sent outside any intent (tick)
         self.renewed = {}
         self.cards_dirty, self.cards_refreshed = False, 0.0
@@ -746,7 +745,6 @@ class RuntimeV2:
                 # Preserve this PEL record for operator inspection but allow control
                 # events to be handled. A poison/ambiguous event never gets ACKed.
                 self.f.pause('ambiguous effect intent held for inspection: ' + identity)
-                self.held_events.add(identity)
                 self.pending_cursor = sid
                 return True
             ev = json.loads(fields['data'])
@@ -797,7 +795,7 @@ class RuntimeV2:
         return False
 
     def handle(self, ev):
-        from fleetmux import fleet as legacy, pi_adapter
+        from fleetmux import fleet as legacy
         kind, slot = ev.get('kind'), ev.get('agent')
         delivery = ev.get('delivery') if isinstance(ev.get('delivery'), dict) else {}
         spec = ev.get('spec') if isinstance(ev.get('spec'), dict) else {}

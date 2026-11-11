@@ -7,7 +7,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-LEGACY="${FLEETMUX_LEGACY_LAUNCHER:-${CMUX_FLEET_LEGACY_LAUNCHER:-}}"  # CMUX_FLEET_*: legacy name, kept for compatibility
+LEGACY="${FLEETMUX_LEGACY_LAUNCHER:-}"
 
 # Existing pair/long-task commands still belong to the Codex orchestrator.
 case "${1:-}" in

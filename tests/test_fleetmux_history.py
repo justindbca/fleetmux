@@ -71,7 +71,7 @@ def test_lists_sidebar_closed_and_timeout_resumable_runs(tmp_path, monkeypatch):
     make_run(tmp_path, 'fleet-live', closed_at=1790000300)
     make_run(tmp_path, 'fleet-other-state', state_dir='state-other')
     make_run(tmp_path, 'fleet-cmux-backend', backend='cmux')
-    make_run(tmp_path, 'fleet-other-session', session='cmux-fleet:child')
+    make_run(tmp_path, 'fleet-other-session', session='fleetmux:child')
     make_run(tmp_path, 'fleet-no-config', result=True)
     (tmp_path / HOME / 'runs' / 'fleet-no-config' / 'config.json').unlink()
     monkeypatch.setattr(fleet, 'daemon_running', lambda run: Path(run).name == 'fleet-live')
@@ -187,7 +187,7 @@ def gui_world(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet, 'has_desktop', lambda: True)
     monkeypatch.setattr(fleet, 'gui_problem', lambda: None)
     monkeypatch.setattr(cmux_manager, 'STATE_DIR', tmp_path / STATE)
-    mgr = GuiMgr(tmp_path / STATE / 'fleetmux' / 'cmux-fleet')
+    mgr = GuiMgr(tmp_path / STATE / 'fleetmux' / 'fleetmux')
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: mgr)
     execs = []
     monkeypatch.setattr(fleet.os, 'execvp', lambda file, argv: execs.append((file, list(argv))))

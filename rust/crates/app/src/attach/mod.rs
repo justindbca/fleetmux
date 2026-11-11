@@ -269,6 +269,11 @@ async fn client(opts: &Opts, sock: &Path, prefix: Option<u8>) -> ExitCode {
         }
     });
     let mut winch = signal(SignalKind::window_change()).ok();
+    // Killed from outside (raw mode turns the keyboard's own ^C into a byte): leave through the same exit as a
+    // detach, so the terminal is restored and the window is told to quit.
+    let mut term = signal(SignalKind::terminate()).ok();
+    let mut hup = signal(SignalKind::hangup()).ok();
+    let mut int = signal(SignalKind::interrupt()).ok();
     let mut scanner = InputScanner::new(prefix);
     let mut buf: Vec<u8> = Vec::with_capacity(256 * 1024);
     let mut out = io::stdout();
@@ -335,6 +340,9 @@ async fn client(opts: &Opts, sock: &Path, prefix: Option<u8>) -> ExitCode {
                     break String::new();
                 }
             },
+            _ = async { match term.as_mut() { Some(s) => { s.recv().await; } None => std::future::pending().await } } => break String::new(),
+            _ = async { match hup.as_mut() { Some(s) => { s.recv().await; } None => std::future::pending().await } } => break String::new(),
+            _ = async { match int.as_mut() { Some(s) => { s.recv().await; } None => std::future::pending().await } } => break String::new(),
             Some(note) = note_rx.recv() => {
                 let (_, rows) = outer_size();
                 if out.write_all(&notice_bytes(&note, rows)).and_then(|_| out.flush()).is_err() {

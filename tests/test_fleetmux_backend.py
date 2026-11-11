@@ -355,7 +355,7 @@ def test_unavailable_reason_names_what_is_missing(impl, monkeypatch):
 # ================================================================ paths
 
 def test_runtime_paths_derive_from_state_dir_and_session_only(impl):
-    session = 'cmux-fleet:run/7 ' + 'x' * 60
+    session = 'fleetmux:run/7 ' + 'x' * 60
     a = fm.FleetmuxSessionManager(session, state_dir=impl.state)
     b = fm.FleetmuxSessionManager(session, agents_title='Other agents', control_title='Other control',
                                   state_dir=impl.state)
@@ -370,7 +370,7 @@ def test_runtime_paths_derive_from_state_dir_and_session_only(impl):
         assert Path(m.server_log) == Path(m.runtime_root) / 'server.log'
     assert a._token() == token(session)
     # literal expectations, so the helper above cannot drift from the Rust rule unnoticed
-    for name, want in (('cmux-fleet:run/7', 'cmux-fleet_run_7'),
+    for name, want in (('fleetmux:run/7', 'fleetmux_run_7'),
                        ('fleet-é工１-a_b', 'fleet-___-a_b'),        # non-ASCII letters / digits are replaced
                        ('ＡＢＣ', '___'),
                        ('a.b c', 'a_b_c'),
@@ -380,7 +380,7 @@ def test_runtime_paths_derive_from_state_dir_and_session_only(impl):
         m = fm.FleetmuxSessionManager(name, state_dir=impl.state)
         assert m._token() == want, name
         assert Path(m.runtime_root).resolve() == impl.state.resolve() / 'fleetmux' / want
-    other = fm.FleetmuxSessionManager('cmux-fleet:run/8', state_dir=impl.state)
+    other = fm.FleetmuxSessionManager('fleetmux:run/8', state_dir=impl.state)
     assert Path(other.runtime_root) != Path(a.runtime_root)
     old = os.umask(0o002)  # Ubuntu's group-writable umask (5fb3e5f3) must not leak into the runtime
     try:

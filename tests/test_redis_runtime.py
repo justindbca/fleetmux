@@ -56,7 +56,7 @@ def test_invalid_instance_is_rejected_before_mkdir(short_root, instance_id):
 
 @pytest.mark.parametrize('field,value', [
     ('redis_socket', 'localhost:6379'),
-    ('redis_socket', '/tmp/cmux-fleet-legacy.sock'),
+    ('redis_socket', '/tmp/fleetmux-legacy.sock'),
     ('redis_socket', '/var/run/redis.sock'),
     ('redis_socket', 'redis.sock'),
     ('redis_runtime_root', None),
@@ -137,8 +137,8 @@ def test_socket_limit_is_utf8_bytes_and_checked_before_creation(short_root, monk
 
 
 @pytest.mark.parametrize('socket', [
-    '/tmp/redis.sock', '/tmp/cmux-fleet-x/../redis.sock',
-    '/tmp/cmux-fleet-x.sock/other', '/tmp/cmux-fleet-.sock', '127.0.0.1:6379',
+    '/tmp/redis.sock', '/tmp/fleetmux-x/../redis.sock',
+    '/tmp/fleetmux-x.sock/other', '/tmp/fleetmux-.sock', '127.0.0.1:6379',
 ])
 def test_unmanaged_external_socket_is_rejected(socket):
     with pytest.raises(ValueError, match='private'):
@@ -146,7 +146,7 @@ def test_unmanaged_external_socket_is_rejected(socket):
 
 
 def test_legacy_config_remains_explicitly_compatible(monkeypatch):
-    socket = '/tmp/cmux-fleet-old-run.sock'
+    socket = '/tmp/fleetmux-old-run.sock'
     calls = []
     client = SimpleNamespace(ping=lambda: calls.append('ping'))
     monkeypatch.setattr(redis, 'Redis', lambda **kwargs: calls.append(kwargs) or client)

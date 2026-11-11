@@ -139,15 +139,10 @@ pub fn write_page(web_dir: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
 pub const WEB_BIN: &str = "fleetmux-web";
 /// The last place PROTOCOL.md §9.4 looks for it.
 pub const WEB_BIN_ENV: &str = "FLEETMUX_WEB_BIN";
-/// Legacy name of [`WEB_BIN_ENV`], kept for compatibility: read when the new name is unset or empty.
-pub const WEB_BIN_ENV_LEGACY: &str = "CMUX_FLEET_FLEETMUX_WEB";
 
-/// `$FLEETMUX_WEB_BIN`, else its legacy name (an empty value counts as unset).
+/// `$FLEETMUX_WEB_BIN` (an empty value counts as unset).
 pub fn web_bin_env() -> Option<std::ffi::OsString> {
-    [WEB_BIN_ENV, WEB_BIN_ENV_LEGACY]
-        .iter()
-        .filter_map(std::env::var_os)
-        .find(|v| !v.is_empty())
+    std::env::var_os(WEB_BIN_ENV).filter(|v| !v.is_empty())
 }
 
 /// `fleetmux-web` in PROTOCOL.md §9.4 order: the directory of the running `fleetmux` (`exe_dir`), then each

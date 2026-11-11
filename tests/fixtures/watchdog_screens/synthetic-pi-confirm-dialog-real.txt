@@ -163,7 +163,7 @@
 
 
  write
- ~/Documents/projects/cmux-fleet-wt-acceptance42/tests/test_
+ ~/Documents/projects/fleetmux-wt-acceptance42/tests/test_
  acceptance42_fixture_readiness.py
 
  """Fixture readiness: a `❯` inside a trust/setup/login
@@ -184,7 +184,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && timeout 300 python3 -m pytest
  tests/test_acceptance42_fixture_readiness.py -q 2>&1 | tail
  -20
@@ -203,6 +203,6 @@
  ↑↓ navigate  enter select  esc cancel
 
 ─────────────────────────────────────────────────────────────
-~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+~/.fleetmux/fleets/layout-finish/runs/fleet-20261030-140716-21e...
 ↑217k ↓108k R11M CH99.9% 45.6%/400k (auto)  workbuddy-ai/deep
 执行派工任务

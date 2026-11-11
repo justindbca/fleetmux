@@ -3,15 +3,15 @@
 //! stderr and the exit code are the Python CLI's own.
 //!
 //! Lookup, first hit wins: `$FLEETMUX_PYTHON_CLI` (an executable, run as is; set but unusable is an error, never a
-//! fallback), the release this binary sits in (`<release>/bin/fleetmux`), `~/fleetmux-current`,
-//! `~/cmux-fleet-current`. A release dir counts when it holds `.venv/bin/python` and `fleetmux/fleet.py` (legacy: `cmux_fleet/fleet.py`).
+//! fallback), the release this binary sits in (`<release>/bin/fleetmux`), `~/fleetmux-current`. A release dir
+//! counts when it holds `.venv/bin/python` and `fleetmux/fleet.py`.
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-/// Optional override: the fleet CLI to exec (e.g. `<release>/.venv/bin/cmux-fleet`).
+/// Optional override: the fleet CLI to exec (e.g. `<release>/.venv/bin/fleetmux-py`).
 pub const CLI_ENV: &str = "FLEETMUX_PYTHON_CLI";
 /// No Python CLI found (the shell's "command not found").
 pub const NOT_FOUND: u8 = 127;
@@ -28,21 +28,13 @@ fn is_exe(p: &Path) -> bool {
 }
 
 /// `<rel>/.venv/bin/python <rel>/fleetmux/fleet.py` when `rel` is a release / checkout with its venv.
-/// `cmux_fleet/fleet.py` is the legacy package path, kept for compatibility with releases made before the
-/// package rename.
 pub fn release_cli(rel: &Path) -> Option<Cli> {
     let python = rel.join(".venv/bin/python");
-    if !is_exe(&python) {
-        return None;
-    }
-    ["fleetmux/fleet.py", "cmux_fleet/fleet.py"]
-        .iter()
-        .map(|p| rel.join(p))
-        .find(|script| script.is_file())
-        .map(|script| Cli {
-            program: python,
-            lead: vec![script],
-        })
+    let script = rel.join("fleetmux/fleet.py");
+    (is_exe(&python) && script.is_file()).then(|| Cli {
+        program: python,
+        lead: vec![script],
+    })
 }
 
 /// The release dirs this binary may sit in: `<exe>/../..`, as invoked and with links resolved.
@@ -77,7 +69,7 @@ pub fn locate(
         } else {
             Err(format!(
                 "fleetmux: ${CLI_ENV}={} is not an executable file; point it at the fleet CLI \
-                 (e.g. <release>/.venv/bin/cmux-fleet) or unset it",
+                 (e.g. <release>/.venv/bin/fleetmux-py) or unset it",
                 p.display()
             ))
         };
@@ -90,20 +82,18 @@ pub fn locate(
         looked.push(rel.display().to_string());
     }
     if let Some(home) = home.filter(|h| !h.is_empty()) {
-        for name in ["fleetmux-current", "cmux-fleet-current"] {
-            let rel = Path::new(&home).join(name);
-            if let Some(cli) = release_cli(&rel) {
-                return Ok(cli);
-            }
-            looked.push(rel.display().to_string());
+        let rel = Path::new(&home).join("fleetmux-current");
+        if let Some(cli) = release_cli(&rel) {
+            return Ok(cli);
         }
+        looked.push(rel.display().to_string());
     } else {
-        looked.push("~/fleetmux-current, ~/cmux-fleet-current ($HOME not set)".into());
+        looked.push("~/fleetmux-current ($HOME not set)".into());
     }
     Err(format!(
         "fleetmux: `{cmd}` is a fleet command, run by the Python fleet CLI, and none was found.\n\
          looked for .venv/bin/python + fleetmux/fleet.py in: {}\n\
-         fix: set {CLI_ENV} to the fleet CLI (e.g. <release>/.venv/bin/cmux-fleet), or install a release \
+         fix: set {CLI_ENV} to the fleet CLI (e.g. <release>/.venv/bin/fleetmux-py), or install a release \
          with scripts/install_release.sh <sha> <tarball> --activate (it maintains ~/fleetmux-current)",
         looked.join(", ")
     ))

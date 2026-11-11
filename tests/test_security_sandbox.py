@@ -98,7 +98,7 @@ def test_no_policy_settings_identical_to_today(tmp_path):  # [baseline]
              'advisor': (fleet.ADVISOR, {}), 'clear': ('worker-1', {'clear_after_result': True})}
     for kind, (name, over) in kinds.items():
         run = tmp_path / kind
-        cfg = cfg_for(run=str(run), python='PYX', claude='/bin/false', redis_socket='/tmp/cmux-fleet-x.sock', **over)
+        cfg = cfg_for(run=str(run), python='PYX', claude='/bin/false', redis_socket='/tmp/fleetmux-x.sock', **over)
         cwd = fleet.agent_cwd(cfg, name)
         cwd.mkdir(parents=True, exist_ok=True)
         fleet.claude_argv(run / 'config.json', cfg, name, 0, 'p')

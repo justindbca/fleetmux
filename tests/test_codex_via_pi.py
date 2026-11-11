@@ -705,7 +705,7 @@ def fake_cmux(monkeypatch, live):
 def test_close_all_closes_a_workspace_left_with_only_its_own_last_surface(monkeypatch, tmp_path):
     live = {'ws': {'sup': {}, 'w1': {}, 'hist': {}}}
     calls = fake_cmux(monkeypatch, live)
-    mgr = cmux_manager.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    mgr = cmux_manager.CmuxSessionManager('fleetmux', state_dir=tmp_path)
     monkeypatch.setattr(mgr, '_surfaces', lambda ws: {s: {'tty': None} for s in live.get(ws, {})})
     mgr._save_meta({'workspace': 'ws', 'control_workspace': 'ws',
                     'surfaces': {'sup': {}, 'w1': {}, 'hist': {'type': 'history'}}})
@@ -718,7 +718,7 @@ def test_close_all_closes_a_workspace_left_with_only_its_own_last_surface(monkey
 def test_close_all_never_closes_a_workspace_holding_a_foreign_surface(monkeypatch, tmp_path):
     live = {'ws': {'hist': {}, 'user-tab': {}}}
     calls = fake_cmux(monkeypatch, live)
-    mgr = cmux_manager.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    mgr = cmux_manager.CmuxSessionManager('fleetmux', state_dir=tmp_path)
     monkeypatch.setattr(mgr, '_surfaces', lambda ws: {s: {'tty': None} for s in live.get(ws, {})})
     mgr._save_meta({'workspace': 'ws', 'control_workspace': None, 'surfaces': {'hist': {'type': 'history'}}})
     # hist closes (not the last one); the user's tab keeps the workspace open and untouched

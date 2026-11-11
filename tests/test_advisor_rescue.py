@@ -367,7 +367,7 @@ def test_contract_row_goes_back_to_running_on_reassign(tmp_path, monkeypatch):
     import sys
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': list(WORKERS), 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
            'codex_home': str(tmp_path / 'codex-home'), 'codex_model': 'gpt-6.1-sol'}
     (run / 'config.json').write_text(json.dumps(cfg))

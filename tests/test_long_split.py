@@ -355,7 +355,7 @@ def test_reopened_split_keeps_the_original_model_and_a_reject_restores_it(cf, ok
 def test_status_shows_the_split_block(tmp_path, monkeypatch):
     from test_control_view_v2 import Reader, Store, seed
     store = Store()
-    cfg = {'run': str(tmp_path / 'run-test'), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'workers': ['worker-1']}
+    cfg = {'run': str(tmp_path / 'run-test'), 'redis_socket': '/tmp/fleetmux-test.sock', 'workers': ['worker-1']}
     monkeypatch.setattr(control_view, '_open_client', lambda cfg, *, blocking=False: Reader(store, blocking))
     prefix = 'fx:v2:run:run-test'
     seed(store, prefix)

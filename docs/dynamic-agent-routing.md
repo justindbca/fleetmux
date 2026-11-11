@@ -133,7 +133,7 @@ Results: **243 passed**; plan maps implementation to `worker-1` / `flashnext-cod
 The following isolated two-worker dev deployment command was attempted:
 
 ```bash
-FLEETMUX_HOME=/tmp/cmux-fleet-phase5-dev FLEETMUX_STATE=/tmp/cmux-fleet-phase5-dev/state python3 -m fleetmux.fleet start --workers 2 --supervisor-cli pi --worker-cli pi --pi-model flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP --allow-unsandboxed-pi --allow-profile-live-switch --runs-dir /tmp/cmux-fleet-phase5-dev/runs --codex-home /tmp/cmux-fleet-phase5-dev/codex-home
+FLEETMUX_HOME=~/.fleetmux/fleets/phase5-dev FLEETMUX_STATE=~/.fleetmux/fleets/phase5-dev/state python3 -m fleetmux.fleet start --workers 2 --supervisor-cli pi --worker-cli pi --pi-model flashnext/Qwen3.8-Flash-Next-Uncensored-oQ4e-100K-MTP --allow-unsandboxed-pi --allow-profile-live-switch --runs-dir ~/.fleetmux/fleets/phase5-dev/runs --codex-home ~/.fleetmux/fleets/phase5-dev/codex-home
 ```
 
 It exited **1**, before provisioning: `run this inside a cmux terminal: cmux only accepts processes started in its windows`. Direct read-only `cmux ping` returned `Failed to connect to socket at ~/.local/state/cmux/cmux.sock (Operation not permitted, errno 1)`. Installed CLI discovery succeeded; Pi reported `1.1.0`.

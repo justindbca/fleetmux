@@ -46,7 +46,7 @@ pi -e ./extensions/opencode-free/index.ts \
 
 **Do not copy the real launcher wholesale into another project root**: it depends on its position relative to `launchers/`, and a copy would treat the wrong parent directory as the framework root.
 
-If the consuming project sits next to `cmux-fleet-pi`, copy the thin wrapper template instead:
+If the consuming project sits next to the fleetmux checkout (or `FLEETMUX_PI_DIR` points at it), copy the thin wrapper template instead:
 
 ```bash
 cp launchers/compat/start-pi-deepseek-free.command ../my-project/start-pi-deepseek-free.command
@@ -54,7 +54,7 @@ chmod +x ../my-project/start-pi-deepseek-free.command
 ../my-project/start-pi-deepseek-free.command --check-only
 ```
 
-The wrapper's default working directory is the project it sits in, and it calls the real launcher in the sibling `cmux-fleet-pi/launchers/`; it still opens in cmux by default, and `PI_WORKDIR` and the arguments are passed through unchanged. The real launcher now checks that its companion scripts / extension exist before opening a window, and `--check-only` also catches a misplaced copy.
+The wrapper's default working directory is the project it sits in, and it calls the real launcher in `$FLEETMUX_PI_DIR/launchers/` (default: the sibling `fleetmux/launchers/`); it still opens in cmux by default, and `PI_WORKDIR` and the arguments are passed through unchanged. The real launcher now checks that its companion scripts / extension exist before opening a window, and `--check-only` also catches a misplaced copy.
 
 ## Actual call chain (since 2026-10-19; the old "hand-written JSON envelope" protocol is retired)
 

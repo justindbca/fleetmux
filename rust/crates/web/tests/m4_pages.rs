@@ -84,7 +84,7 @@ fn fleet_jump_url_in_a_child_run_dir_is_allowed() {
     if !in_m4_gate() {
         return;
     }
-    let run = "/r/u/.cmux-fleet/runs/fleet-1";
+    let run = "/r/u/.fleetmux/runs/fleet-1";
     let page = "/tmp/fleetmux-web/abc-42/page";
     let child = format!(
         "file://{run}/sub/M0/history.html?fleet-jump=k7q2x-ab12&rel=parent&to=file://{run}/history.html"

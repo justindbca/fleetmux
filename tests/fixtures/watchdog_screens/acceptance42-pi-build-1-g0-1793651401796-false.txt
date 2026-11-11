@@ -4,7 +4,7 @@
  sock="/run/user/1000/fleetmux-web/a42-linux-639062c8-6635/web.sock"                               
  r = kd.web_request(sock, "JSON.stringify(fm.snapshot())")                                         
  print(str(r)[:3000])                                                                              
- PY' 2>&1 | head -25; cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && sed -n     
+ PY' 2>&1 | head -25; cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42 && sed -n     
  1030,1050p fleetmux/crates/web/tests/gui.rs                                                       
                                                                                                    
  ... (25 earlier lines, ctrl+o to expand)                                                          
@@ -56,7 +56,7 @@
                                                                                                    
 
                                                                                                    
- $ cd /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42 && grep -rn "trust\|onboarding"  
+ $ cd /Users/USER/Documents/projects/fleetmux-wt-acceptance42 && grep -rn "trust\|onboarding"  
  fleetmux/crates/*/src/*.rs 2>/dev/null | head -5; grep -rn "trust"                                
  /Users/USER/Documents/Codex/2026-10-30/new-chat/work/acceptance42/CURRENT_REQUIREMENTS.json |   
  head -10                                                                                          
@@ -123,10 +123,10 @@
  the dialog rows: let me read the pane's exact line numbers.                                       
 
                                                                                                    
- $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
- import sys;sys.path.insert(0,"/home/USER/cmux-fleet-current")                                   
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current          
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ import sys;sys.path.insert(0,"/home/USER/fleetmux-current")                                   
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
  t=m.capture_output("emf5-6", lines=25) or ""                                                      
  for i,l in enumerate(t.splitlines()): print(i, repr(l[:70]))                                      
@@ -147,10 +147,10 @@
  confirm and verify the screen.                                                                    
 
                                                                                                    
- $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
- import sys,time;sys.path.insert(0,"/home/USER/cmux-fleet-current")                              
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current          
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ import sys,time;sys.path.insert(0,"/home/USER/fleetmux-current")                              
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
  print("down:", m.send_key("emf5-6","Down"))                                                       
  time.sleep(1)                                                                                     
@@ -171,10 +171,10 @@
  Selection is now on "Yes, I trust this folder". Confirming with Enter.                            
 
                                                                                                    
- $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/cmux-fleet-current          
- CMUX_FLEET_FLEETMUX=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
- import sys,time;sys.path.insert(0,"/home/USER/cmux-fleet-current")                              
- from cmux_fleet.backends.fleetmux import FleetmuxSessionManager                                   
+ $ ssh -T utm-linux 'cd /home/USER/a42/v2 && PYTHONPATH=/home/USER/fleetmux-current          
+ FLEETMUX_BIN=/home/USER/a42/v2/driver/fleetmux python3 - <<PY                            
+ import sys,time;sys.path.insert(0,"/home/USER/fleetmux-current")                              
+ from fleetmux.backends.fleetmux import FleetmuxSessionManager                                   
  m=FleetmuxSessionManager("a42-linux-639062c8", state_dir="/home/USER/a42/v2/state")             
  print("enter:", m.send_key("emf5-6","Enter"))                                                     
  time.sleep(6)                                                                                     
@@ -195,6 +195,6 @@
 ── ⠧ Working ──────────────────────────────────────────────────────────────────────────────────────
                                                                                                    
 ───────────────────────────────────────────────────────────────────────────────────────────────────
-~/.cmux-fleet-acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 • build-1
+~/.fleetmux/fleets/acceptance42/runs/fleet-20261103-042146-95c470e4/workspace/build-1 • build-1
 ↑41k ↓11k R2.0M CH99.6% 11.9%/400k (auto)           workbuddy-ai/deepseek-v4.1-flash • thinking off
 执行派工任务

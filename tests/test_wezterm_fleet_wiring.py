@@ -142,7 +142,7 @@ def test_start_with_a_subfleets_roster_is_refused_on_wezterm(tmp_path, monkeypat
     from test_pi import mock_start
     args, ran = mock_start(tmp_path, monkeypatch)
     spawned = []
-    mgr = SimpleNamespace(meta_path=tmp_path / 'state' / 'cmux-fleet.json', session_exists=lambda: False,
+    mgr = SimpleNamespace(meta_path=tmp_path / 'state' / 'fleetmux.json', session_exists=lambda: False,
                           spawn_window=lambda *a, **kw: spawned.append(a) or SimpleNamespace(success=True))
     monkeypatch.setattr(fleet, 'resolve_backend', lambda requested=None, platform=None: ('wezterm', None))
     monkeypatch.setattr(fleet, 'backends_check', lambda name: True)

@@ -35,7 +35,7 @@ Requirements 1 and 2 overturn the first line of `pi_extension_v2.ts` ("agent_set
 | Rotation is decided only in deliver and idle_rotate | True | `fleet.py:3958-3976`; `fleet.py:3789-3809` (requires `state == 'idle'` and an empty mailbox) |
 | v2 handoff is a separate handoff delivery and requires an idle lease | True | `runtime_v2.offer_handoff` (`runtime_v2.py:2035`); the `purpose == 'handoff'` branch of `settle` (`runtime_v2.py:972-976`) |
 | §32 states it does not cover long turns | True | design.md §32 "Known limits" |
-| analyst-1 reached 186,673 in one turn and was compacted by pi | True | `~/.cmux-fleet-feishu/runs/fleet-20261027-213921-248bd82f/pi-sessions/analyst-1/g0/*.jsonl`: assistant usage peak 186,673, 2 `type=compaction` lines; run config `handoff_ratio 0.6` |
+| analyst-1 reached 186,673 in one turn and was compacted by pi | True | `~/.fleetmux/fleets/feishu/runs/fleet-20261027-213921-248bd82f/pi-sessions/analyst-1/g0/*.jsonl`: assistant usage peak 186,673, 2 `type=compaction` lines; run config `handoff_ratio 0.6` |
 | analyst-2 / reviewer exceeded the threshold without rotating | True | analyst-2 g0 peak 140,911; reviewer g0 peak 135,283 before g1 appeared |
 | reviewer stalled the whole task by not submitting `fleet_result` | Mechanism true | a pi task worker with no structured candidate → `settle` rules `exactly one structured candidate is required` → the pi worker goes straight to `finish('blocked')` (`runtime_v2.py:1059-1081`; pi does not get the TUI's two correction attempts) |
 

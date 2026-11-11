@@ -24,10 +24,10 @@ DIALOG_RM_LITERAL = ('Bash command\n  rm -rf build/tmp\n\nDangerous rm on possib
                      'Do you want to proceed?\n❯ 1. Yes\n  2. No')
 TRUST = 'Do you trust the files in this folder?\n\n{}\n\n❯ 1. Yes, proceed\n  2. No, exit'
 DIALOG_TRUST = TRUST.format('/tmp/run/workspace/worker-1')
-# Claude Code 2.1.280 trust dialog, captured verbatim from a live PTY (120x40) on 2026-10-12. The path
-# wraps at the dialog width; "No, exit" is preselected.
-CLAUDE_TRUST_LIVE = "u\n────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /private/tmp/claude-501/-Users-USER--cmux-fleet-dev-runs-fleet-20261013-0252\n 33-a4957e88-workspace-worker-6/24b6f3ae-4cf5-4090-92f6-7f39a32c99d9/scratchpad\n /trust-probe\n\n Quick safety check: Is this a project you created or one you trust? (Like your\n own code, a well-known open source project, or work from your team). If not,\n take a moment to review what's in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n"
-CLAUDE_TRUST_LIVE_CWD = ('/private/tmp/claude-501/-Users-USER--cmux-fleet-dev-runs-fleet-20261013-025233-a4957e88-'
+# Claude Code 2.1.280 trust dialog, captured from a live PTY (120x40) on 2026-10-12 (the fleet home in the path
+# renamed, the path re-wrapped the same way). The path wraps at the dialog width; "No, exit" is preselected.
+CLAUDE_TRUST_LIVE = "u\n────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /private/tmp/claude-501/-Users-USER--fleetmux-dev-runs-fleet-20261013-025233\n -a4957e88-workspace-worker-6/24b6f3ae-4cf5-4090-92f6-7f39a32c99d9/scratchpad/t\n rust-probe\n\n Quick safety check: Is this a project you created or one you trust? (Like your\n own code, a well-known open source project, or work from your team). If not,\n take a moment to review what's in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n"
+CLAUDE_TRUST_LIVE_CWD = ('/private/tmp/claude-501/-Users-USER--fleetmux-dev-runs-fleet-20261013-025233-a4957e88-'
                          'workspace-worker-6/24b6f3ae-4cf5-4090-92f6-7f39a32c99d9/scratchpad/trust-probe')
 
 

@@ -123,14 +123,6 @@ def post(r, k, entry):
     return bool(r.exists(k['armed']))
 
 
-def armed(r, k, generation):
-    raw = r.get(k['armed'])
-    try:
-        return bool(raw) and int(json.loads(raw).get('generation', -1)) == int(generation)
-    except (ValueError, TypeError, AttributeError):
-        return False
-
-
 def live(r, k):
     """A Stop hook of this slot waits now, is still settling its turn, or yielded to an operator line."""
     return bool(r.exists(k['armed']) or r.exists(k['stopping']) or r.exists(k['human']))

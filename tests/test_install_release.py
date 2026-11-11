@@ -23,7 +23,7 @@ The contract these tests pin (M50, Linux/UTM delivery):
   backslashes in flags and paths stay valid JSON (记录-01/02);
 - success prints the explicit start command with `<release>/bin` first on PATH (console script first, `python -m`
   fallback) and records it as `start_command` (P1-03);
-- only `--activate` moves `~/cmux-fleet-current`, and an existing release dir is never overwritten.
+- only `--activate` moves `~/fleetmux-current`, and an existing release dir is never overwritten.
 
 The tests need no network, no root and no real UTM box: `python3.14` and the release `.venv` are shell stubs.
 """
@@ -95,7 +95,7 @@ PY
     printf '#!/bin/sh\\nexit 0\\n' > "$d/bin/pip"
     chmod 755 "$d/bin/python" "$d/bin/pip"
     if [ -z "${FAKE_NO_ENTRY:-}" ]; then
-      printf '#!/bin/sh\\nprintf \"ENTRY_PATH=%%s\\\\n\" \"$PATH\"\\n' > "$d/bin/cmux-fleet"; chmod 755 "$d/bin/cmux-fleet"
+      printf '#!/bin/sh\\nprintf \"ENTRY_PATH=%%s\\\\n\" \"$PATH\"\\n' > "$d/bin/fleetmux-py"; chmod 755 "$d/bin/fleetmux-py"
     fi
     exit 0 ;;
 esac
@@ -174,8 +174,7 @@ def host_tools(world):
 
 def run(world, args, env_extra=None, path=None, python=None):
     env = {k: v for k, v in os.environ.items()
-           if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES', 'FLEETMUX_TOOL_SHA',
-                        'CMUX_FLEET_PYTHON', 'CMUX_FLEET_RELEASES', 'CMUX_FLEET_TOOL_SHA')}
+           if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES', 'FLEETMUX_TOOL_SHA')}
     env.update(HOME=str(world['home']), FLEETMUX_RELEASES=str(world['releases']),
                FAKE_PY_LOG=str(world['log']), FAKE_REAL_PY=sys.executable)
     env.update(env_extra or {})
@@ -209,7 +208,7 @@ def test_install_without_bin_dir_keeps_the_old_contract(world):
     assert (rel / '.venv' / 'bin' / 'python').exists()  # the stub .venv the installer made
     assert (rel / '.runtime').is_dir() and (rel / '.runtime').stat().st_mode & 0o777 == 0o700
     assert not (rel / 'bin').exists()  # no --bin-dir: nothing invented
-    assert not (world['home'] / 'cmux-fleet-current').exists()  # --activate is opt-in
+    assert not (world['home'] / 'fleetmux-current').exists()  # --activate is opt-in
     assert not check_deps_path(world).startswith(str(rel / 'bin'))
 
 
@@ -233,7 +232,7 @@ def test_install_verifies_and_installs_binaries_with_provenance(world):
     assert installed['installer_sha256'] == sha256(SCRIPT.read_bytes())
     assert installed['python'].endswith('python3.14')
     assert 'PASS' in installed['note'] and 'receipt' in installed['note']  # not an acceptance claim
-    assert not (world['home'] / 'cmux-fleet-current').exists()
+    assert not (world['home'] / 'fleetmux-current').exists()
 
 
 @pytest.mark.parametrize('tamper, drop, needle', [
@@ -250,7 +249,7 @@ def test_install_refuses_unverifiable_binaries_before_creating_the_release(world
     assert done.returncode != 0
     assert needle in done.stderr, done.stderr
     assert not release(world).exists()  # nothing half-installed
-    assert not (world['home'] / 'cmux-fleet-current').exists()
+    assert not (world['home'] / 'fleetmux-current').exists()
 
 
 def test_install_refuses_a_manifest_for_another_source_sha(world):
@@ -297,7 +296,7 @@ def test_install_refuses_an_existing_release_without_touching_it(world):
 def test_install_moves_current_only_with_activate(world):
     make_python(world['bin'])
     built = make_bin_dir(world['tmp'] / 'built')
-    current = world['home'] / 'cmux-fleet-current'
+    current = world['home'] / 'fleetmux-current'
     done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built])
     assert done.returncode == 0, done.stderr
     assert not current.exists()  # installing alone never moves the default symlink
@@ -341,20 +340,6 @@ def test_install_honours_the_fleetmux_python_override(world):
     assert not release(world, OTHER_SHA).exists()
 
 
-def test_install_honours_the_legacy_python_and_releases_names(world):
-    """CMUX_FLEET_PYTHON / CMUX_FLEET_RELEASES: legacy names, kept for compatibility (new names unset)."""
-    custom = write_exe(world['tmp'] / 'custom-python', PY_TEMPLATE.replace('__RC__', '0'))
-    marker, root = world['tmp'] / 'custom-used', world['tmp'] / 'legacy-root'
-    env = {k: v for k, v in os.environ.items() if k not in ('FLEETMUX_PYTHON', 'FLEETMUX_RELEASES')}
-    env.update(HOME=str(world['home']), CMUX_FLEET_RELEASES=str(root), CMUX_FLEET_PYTHON=str(custom),
-               FAKE_PY_LOG=str(world['log']), FAKE_REAL_PY=sys.executable, FAKE_PY_MARK=str(marker),
-               PATH=str(world['bin']) + os.pathsep + str(host_tools(world)))
-    done = subprocess.run(['bash', str(SCRIPT), APP_SHA, str(world['tarball'])], capture_output=True, text=True,
-                          env=env, timeout=120)
-    assert done.returncode == 0, done.stderr
-    assert marker.exists() and (root / APP_SHA).is_dir()
-
-
 def test_failed_dependency_check_removes_the_partial_release(world):
     make_python(world['bin'])
     built = make_bin_dir(world['tmp'] / 'built')
@@ -363,7 +348,7 @@ def test_failed_dependency_check_removes_the_partial_release(world):
     assert done.returncode != 0
     assert 'deps.yaml not satisfied' in done.stderr
     assert not release(world).exists()
-    assert not (world['home'] / 'cmux-fleet-current').exists()
+    assert not (world['home'] / 'fleetmux-current').exists()
 
 
 def test_failed_suite_keeps_the_complete_log_outside_the_release(world):
@@ -486,7 +471,7 @@ def test_success_prints_the_explicit_start_command_with_the_release_bin_first(wo
     assert done.returncode == 0, done.stderr
     rel = release(world)
     line = next(l for l in done.stdout.splitlines() if l.startswith('start (release bin first on PATH):'))
-    assert line.endswith('PATH=%s/bin:$PATH %s/.venv/bin/cmux-fleet --help' % (rel, rel)), line
+    assert line.endswith('PATH=%s/bin:$PATH %s/.venv/bin/fleetmux-py --help' % (rel, rel)), line
     installed = json.loads((rel / 'bin' / 'installed.json').read_text())
     assert installed['start_command'] == line.split(': ', 1)[1]
     # no console script in the venv -> the documented `python -m` fallback, never a bare `fleetmux`
@@ -499,7 +484,7 @@ def test_success_prints_the_explicit_start_command_with_the_release_bin_first(wo
 
 
 def test_start_command_is_executable_when_the_release_path_has_spaces_and_quotes(world):
-    """P1-03: a raw `<rel>/bin:$PATH <rel>/.venv/bin/cmux-fleet` concatenation breaks on such a path."""
+    """P1-03: a raw `<rel>/bin:$PATH <rel>/.venv/bin/fleetmux-py` concatenation breaks on such a path."""
     make_python(world['bin'])
     built = make_bin_dir(world['tmp'] / 'built')
     releases = world['tmp'] / "rel eases 'q' \"dq\""

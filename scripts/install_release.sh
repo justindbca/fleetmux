@@ -7,8 +7,7 @@
 # -p: an existing release is never joined or overwritten) -> .venv with the pinned packages -> the verified GUI
 # binaries into <release>/bin (--bin-dir) -> deps.yaml check (fail = stop; <release>/bin is first on PATH) ->
 # optional full test suite (fail = stop; its log is kept OUTSIDE the release dir) -> private Redis runtime dirs
-# owner-only (700; start refuses anything else) -> optional: point ~/fleetmux-current (and the old name
-# ~/cmux-fleet-current) at it. A failed install
+# owner-only (700; start refuses anything else) -> optional: point ~/fleetmux-current at it. A failed install
 # removes only the release dir this run created (CREATED is set by the successful mkdir), so a retry starts clean
 # and an existing release/current is never touched.
 #
@@ -28,11 +27,7 @@
 #                 the manifest's source_sha must equal <sha> or start with it (short <sha>); the two files then land in <release>/bin next to
 #                 SHA256SUMS, manifest.json and installed.json. A missing file or any mismatch stops the install
 #                 before the release dir is created.
-# Releases root: $FLEETMUX_RELEASES, else ~/fleetmux-releases. With the
-# default root the old path stays usable: a missing ~/cmux-fleet-releases becomes a link to ~/fleetmux-releases; an
-# existing one (a real dir of older releases, pinned by running fleets' config.json) is never moved or removed.
-# --activate points ~/fleetmux-current at the release and, when it is a link or missing, ~/cmux-fleet-current too
-# (a real directory there is left alone, with a note).
+# Releases root: $FLEETMUX_RELEASES, else ~/fleetmux-releases. --activate points ~/fleetmux-current at the release.
 #
 # --tool-sha SHA  the installer-tool commit doing this install (env FLEETMUX_TOOL_SHA); defaults to the git
 #                 HEAD of the checkout this script lives in. This is a DIFFERENT identity from <sha>: <sha> is
@@ -48,13 +43,10 @@
 #   scripts/install_release.sh 35670632e0b923e56dc4fa357189711dbd39328a src-35670632.tgz \
 #     --bin-dir ~/a42/builds/final-35670632/utm-linux --tool-sha <tool commit>
 # Example (macOS): the same, with --bin-dir .../builds/final-35670632/macos.
-#
-# Legacy names, kept for compatibility: CMUX_FLEET_PYTHON / CMUX_FLEET_RELEASES / CMUX_FLEET_TOOL_SHA are read when
-# the FLEETMUX_* name is unset.
 set -euo pipefail
-FLEETMUX_PYTHON="${FLEETMUX_PYTHON:-${CMUX_FLEET_PYTHON:-}}"
-FLEETMUX_RELEASES="${FLEETMUX_RELEASES:-${CMUX_FLEET_RELEASES:-}}"
-FLEETMUX_TOOL_SHA="${FLEETMUX_TOOL_SHA:-${CMUX_FLEET_TOOL_SHA:-}}"
+FLEETMUX_PYTHON="${FLEETMUX_PYTHON:-}"
+FLEETMUX_RELEASES="${FLEETMUX_RELEASES:-}"
+FLEETMUX_TOOL_SHA="${FLEETMUX_TOOL_SHA:-}"
 SHA="${1:?sha}"; TARBALL="${2:?tarball}"; shift 2
 TEST=0; ACTIVATE=0; BIN_DIR=""; TOOL_SHA="$FLEETMUX_TOOL_SHA"
 while [ $# -gt 0 ]; do
@@ -66,9 +58,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-RELEASES="$FLEETMUX_RELEASES"
-DEFAULT_ROOT=0
-if [ -z "$RELEASES" ]; then RELEASES="$HOME/fleetmux-releases"; DEFAULT_ROOT=1; fi
+RELEASES="${FLEETMUX_RELEASES:-$HOME/fleetmux-releases}"
 case "$RELEASES" in /*) ;; *) RELEASES="$(pwd)/$RELEASES" ;; esac
 # <sha> names the release dir under $RELEASES. Only hex is accepted (7-40 chars: older callers pass a short SHA),
 # so a value like ../canary can never make the failure cleanup rm -rf anything outside $RELEASES.
@@ -82,7 +72,7 @@ SHA="$(printf '%s' "$SHA" | tr 'A-F' 'a-f')"
 REL="$RELEASES/$SHA"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ "$(uname -s)" = Darwin ]; then
-  PATH="/opt/homebrew/opt/redis/bin:$HOME/cmux-fleet/npm/bin:/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:$PATH"
+  PATH="/opt/homebrew/opt/redis/bin:/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:$PATH"
 else
   PATH="$HOME/.local/bin:$PATH"
 fi
@@ -166,18 +156,18 @@ PY
 }
 
 # One explicit console command for this release: <release>/bin first on PATH (the caller's own PATH is kept, not
-# replaced) plus the release's own entry point (the venv console script when the install made it, else
-# `python -m`). Every path is shell-quoted by shlex.quote, so the printed line is executable as-is even when the
+# replaced) plus the release's own Python fleet CLI (the venv console script `fleetmux-py` when the install made
+# it, else `python -m`). Every path is shell-quoted by shlex.quote, so the printed line is executable as-is even when the
 # release directory contains spaces or quotes; a raw "%s/bin:$PATH %s" concatenation would split there. Printed
 # on success and recorded in installed.json, so the operator never silently runs the stale ~/.local/bin build.
 start_command() {
   local mode=module
-  if [ -x "$REL/.venv/bin/cmux-fleet" ]; then mode=script; fi
+  if [ -x "$REL/.venv/bin/fleetmux-py" ]; then mode=script; fi
   "$PY" - "$REL" "$mode" <<'PY'
 import shlex, sys
 rel, mode = sys.argv[1], sys.argv[2]
 if mode == 'script':
-    entry = shlex.quote(rel + '/.venv/bin/cmux-fleet')
+    entry = shlex.quote(rel + '/.venv/bin/fleetmux-py')
 else:
     entry = shlex.quote(rel + '/.venv/bin/python') + ' -m fleetmux.fleet'
 print('PATH=' + shlex.quote(rel + '/bin') + ':$PATH ' + entry + ' --help')
@@ -266,10 +256,6 @@ trap cleanup EXIT
 # The container root may be nested (FLEETMUX_RELEASES=~/a42/releases/x), so `-p` is allowed here: only the
 # release leaf below must be created atomically. `-p` on the root cannot remove or join anything.
 mkdir -p "$RELEASES"
-# The old root name keeps working: link it to the new one only when nothing is there (never move / replace a dir).
-if [ "$DEFAULT_ROOT" = 1 ] && [ ! -e "$HOME/cmux-fleet-releases" ] && [ ! -L "$HOME/cmux-fleet-releases" ]; then
-  ln -s "$RELEASES" "$HOME/cmux-fleet-releases"
-fi
 if ! mkdir "$REL" 2>/dev/null; then echo "release exists, not touched: $REL" >&2; exit 1; fi
 CREATED=1
 cd "$REL"
@@ -311,14 +297,6 @@ if [ "$ACTIVATE" = 1 ]; then
   OLD="$(readlink "$HOME/fleetmux-current" 2>/dev/null || echo none)"
   ln -sfn "$REL" "$HOME/fleetmux-current"
   echo "current: $OLD -> $(readlink "$HOME/fleetmux-current")"
-  # The old name follows as before, unless it is a real directory (never touched).
-  if [ -L "$HOME/cmux-fleet-current" ] || [ ! -e "$HOME/cmux-fleet-current" ]; then
-    OLD="$(readlink "$HOME/cmux-fleet-current" 2>/dev/null || echo none)"
-    ln -sfn "$REL" "$HOME/cmux-fleet-current"
-    echo "old name current: $OLD -> $(readlink "$HOME/cmux-fleet-current")"
-  else
-    echo "note: $HOME/cmux-fleet-current is a real directory, left as is (only ~/fleetmux-current moved)" >&2
-  fi
 fi
 READY=1
 echo "release ready: $REL"

@@ -720,7 +720,7 @@ fn tab_rows_use_only_colours_a_16_colour_terminal_shows() {
 // ------------------------------------------- fleet sidebar (S1-③, plan §4.3) -------------------------
 
 /// The kv `sidebar` value the fleet daemon pushes (plan §4.5): one fleet, the current one.
-const ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+const ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 
 fn set_sidebar(srv: &Server) {
     srv.ok("kv.set", json!({ "key": "sidebar", "value": ONE }));
@@ -913,7 +913,7 @@ fn hidden_rail_shows_the_toggle_on_row_0() {
     set_sidebar(&srv);
     v.wait_text("fleetmux-demo", T);
     v.input(&prefixed(b"s"));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let toggle = v.cell(0, 1);
     assert_eq!(
         toggle.ch, '◫',
@@ -1155,7 +1155,7 @@ fn hidden_topbar_keeps_the_buttons_and_the_groups_fill_from_column_0() {
     set_sidebar(&srv);
     v.wait_text("fleetmux-demo", T);
     v.input(&prefixed(b"s"));
-    let screen = v.wait_no_text("~/.cmux-fleet-fmx-demo", T);
+    let screen = v.wait_no_text("~/.fleetmux/fleets/fmx-demo", T);
     let toggle = v.cell(0, 1);
     assert_eq!(
         toggle.ch, '◫',
@@ -1194,10 +1194,10 @@ fn hidden_topbar_keeps_the_buttons_and_the_groups_fill_from_column_0() {
 // ------------------------------ S2b: restoring a closed fleet (plan §13.5 / §13.6) ------------------------------
 
 /// The kv `sidebar` a closer leaves behind after it kept the server (plan §13.3 / §13.6-1): one closed card.
-const CLOSED_ONE: &str = r#"{"v":1,"current":"fleet-20261030-010101-ab12cd34","fleets":[{"id":"fleet-20261030-010101-ab12cd34","title":"fleetmux-demo","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+const CLOSED_ONE: &str = r#"{"v":1,"current":"fleet-20261030-010101-ab12cd34","fleets":[{"id":"fleet-20261030-010101-ab12cd34","title":"fleetmux-demo","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 const CLOSED_ID: &str = "fleet-20261030-010101-ab12cd34";
 /// Two closed cards, `fleet-a` first and `fleet-b` second.
-const CLOSED_TWO: &str = r#"{"v":1,"current":"fleet-a","fleets":[{"id":"fleet-a","title":"fmx-a","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.cmux-fleet-a"},{"id":"fleet-b","title":"fmx-b","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.cmux-fleet-b"}]}"#;
+const CLOSED_TWO: &str = r#"{"v":1,"current":"fleet-a","fleets":[{"id":"fleet-a","title":"fmx-a","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.fleetmux/fleets/a"},{"id":"fleet-b","title":"fmx-b","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.fleetmux/fleets/b"}]}"#;
 
 fn set_kv(srv: &Server, key: &str, value: &str) {
     srv.ok("kv.set", json!({ "key": key, "value": value }));
@@ -1972,7 +1972,7 @@ fn closed_server_stays_while_a_viewer_is_attached() {
 
 /// A running fleet on card 0 and a closed history entry on card 1: the case where a second `↺` must not act
 /// (plan §18.2 "一次只恢复一个" / §18.7-5).
-const RUNNING_AND_CLOSED: &str = r#"{"v":1,"current":"fleet-run-now","fleets":[{"id":"fleet-run-now","title":"fmx-run","state":"running","line1":"运行中 · 监工+1 worker（0忙）","line2":"~/.cmux-fleet-run"},{"id":"fleet-old-gone","title":"fmx-old","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.cmux-fleet-old"}]}"#;
+const RUNNING_AND_CLOSED: &str = r#"{"v":1,"current":"fleet-run-now","fleets":[{"id":"fleet-run-now","title":"fmx-run","state":"running","line1":"运行中 · 监工+1 worker（0忙）","line2":"~/.fleetmux/fleets/run"},{"id":"fleet-old-gone","title":"fmx-old","state":"closed","line1":"已关闭 · 可恢复","line2":"~/.fleetmux/fleets/old"}]}"#;
 
 /// Every closed card of kv `restorable`'s history list draws a grey dot and a `↺` on its first row (white while the
 /// card is `current`, grey otherwise), and the topbar's right part names the current one (plan §18.3 / §18.7-1 /
@@ -2184,7 +2184,7 @@ fn stopped_fleet_server_exits_once_its_last_bash_page_is_closed() {
     set_kv(
         &srv,
         "sidebar",
-        r#"{"v":1,"current":"fleet-s","fleets":[{"id":"fleet-s","title":"fmx-s","state":"stopped","line1":"已停止","line2":"~/.cmux-fleet-s"},{"id":"M0","title":"M0","state":"reclaimed","line1":"已收回 · 随根关闭","line2":"只读，可看记录"}]}"#,
+        r#"{"v":1,"current":"fleet-s","fleets":[{"id":"fleet-s","title":"fmx-s","state":"stopped","line1":"已停止","line2":"~/.fleetmux/fleets/s"},{"id":"M0","title":"M0","state":"reclaimed","line1":"已收回 · 随根关闭","line2":"只读，可看记录"}]}"#,
     );
     let sock = srv.sock();
     srv.ok("pane.kill", json!({ "pane": shell }));

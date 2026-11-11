@@ -1,7 +1,7 @@
 """One configuration file with one block per table (fleetmux/config/fleet.yaml).
 
 The shipped file holds the defaults. The operator's private file has the same format
-(``$FLEETMUX_CONFIG``, else ``~/.fleetmux/fleet.yaml``; legacy ``~/.cmux-fleet/fleet.yaml`` until migrated) and is never part of this repository:
+(``$FLEETMUX_CONFIG``, else ``~/.fleetmux/fleet.yaml``) and is never part of this repository:
 a top-level block there replaces the shipped block as a whole, and only ``USER_BLOCKS`` may appear
 there (cli_pairs is the real-smoke gate and watchdog_prompts the dialog whitelist; those, the cards
 and the matrix change only in the shipped file).

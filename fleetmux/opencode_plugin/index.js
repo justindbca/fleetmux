@@ -47,7 +47,7 @@ function launchInstructionFiles(dir, depth = 0, out = []) {
 }
 
 export default {
-  id: "cmux-fleet.bridge",  // legacy name, kept for compatibility: the registered plugin id
+  id: "fleetmux.bridge",
   async setup(ctx) {
     if (!COMMAND.length || !COMMAND.every((p) => typeof p === "string")) throw new Error("Fleet opencode bridge command missing")
     if (COMMAND.at(-2) !== SLOT || Number(COMMAND.at(-1)) !== GENERATION) throw new Error("Fleet opencode slot/generation mismatch")

@@ -28,7 +28,7 @@
 #   SMOKE_KEEP=1             keep the temp dir for inspection (processes are still stopped)
 #
 # Isolation: FLEETMUX_HOME / FLEETMUX_STATE / the private Redis runtime all live in one
-# mktemp dir; never the production Redis or ~/.cmux-fleet, never another fleet. Cleanup stops
+# mktemp dir; never the production Redis or ~/.fleetmux, never another fleet. Cleanup stops
 # only this run (fleet stop, its own cmux tabs, processes whose command line names the temp dir).
 #
 # v2 mandatory checks (design.md §11, master design v2 §4.12), each printed PASS/FAIL:

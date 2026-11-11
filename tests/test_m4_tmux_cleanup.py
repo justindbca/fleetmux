@@ -60,7 +60,7 @@ def world(request, monkeypatch):
         w.fake = FakeCmux()
         monkeypatch.setattr(cm, '_run', w.fake)
         w.ledger = W.Ledger(root)
-        w.parent = cm.CmuxSessionManager('cmux-fleet', state_dir=state)
+        w.parent = cm.CmuxSessionManager('fleetmux', state_dir=state)
     else:
         W.install_fleetmux(monkeypatch, root, 'real')
         w.servers = W.Servers(root, 'real', state)

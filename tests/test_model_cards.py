@@ -140,7 +140,7 @@ def test_start_host_is_written_to_config_only_when_given(tmp_path, monkeypatch, 
     from fleetmux import cmux_manager
     args, _ = mock_start(tmp_path, monkeypatch)
     monkeypatch.setattr(cmux_manager, 'CmuxSessionManager', lambda name, **kw: SimpleNamespace(
-        meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json', session_exists=lambda: False,
+        meta_path=tmp_path / 'isolated-state' / 'fleetmux.json', session_exists=lambda: False,
         spawn_window=lambda *a, **k: SimpleNamespace(success=True)))
     fleet.main(args + extra)
     assert fleet.load(tmp_path / 'latest.json')['host'] == expected

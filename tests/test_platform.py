@@ -127,7 +127,7 @@ def test_start_prepends_the_prefix_to_the_daemon_command(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet, 'keep_awake_prefix', fake_prefix)
     args, _ = test_pi.mock_start(tmp_path, monkeypatch)
     spawned = []
-    spy = SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json',
+    spy = SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'fleetmux.json',
                           session_exists=lambda: False,
                           claim_run=lambda run: True,
                           spawn_window=lambda name, command, **kw: (spawned.append((name, command)),

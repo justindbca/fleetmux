@@ -27,10 +27,10 @@ def fleetmux_start(tmp_path, monkeypatch):
     from test_pi import mock_start
     args, ran = mock_start(tmp_path, monkeypatch)
     state = tmp_path / 'state'
-    runtime = state / 'fleetmux' / 'cmux-fleet'
+    runtime = state / 'fleetmux' / 'fleetmux'
     runtime.mkdir(parents=True)
     spawned = []
-    mgr = SimpleNamespace(meta_path=state / 'cmux-fleet.fleetmux.json', runtime_root=runtime,
+    mgr = SimpleNamespace(meta_path=state / 'fleetmux.fleetmux.json', runtime_root=runtime,
                           session_exists=lambda: False, claim_run=lambda run: None,
                           spawn_window=lambda *a, **kw: spawned.append(a) or SimpleNamespace(success=True, error=None))
     bindir = tmp_path / 'bin'

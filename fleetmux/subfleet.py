@@ -1,7 +1,7 @@
 """Sub-fleets (docs/design.md §19): a worker of one fleet becomes the supervisor of a child fleet.
 
 The child is a complete fleet of its own (daemon, private Redis, run directory under the
-parent's ``sub/<task id>``, cmux registry ``cmux-fleet:<task id>``, its own workspace beside
+parent's ``sub/<task id>``, cmux registry ``fleetmux:<task id>``, its own workspace beside
 the parent's). The worker's live pane is handed over, not respawned: the parent stops
 delivering to the slot (``state=delegated``) and releases the surface from its registry; the
 child daemon adopts it as its supervisor, rewrites its role file and asks it for READY. The
@@ -80,7 +80,7 @@ def valid_child_id(parent_task_id, task_id):
 
 
 def session_name(task_id=None):
-    return 'cmux-fleet' + (':' + task_id if task_id else '')  # legacy name, kept for compatibility
+    return 'fleetmux' + (':' + task_id if task_id else '')
 
 
 def root_name(cfg, goal=''):

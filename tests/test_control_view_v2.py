@@ -100,7 +100,7 @@ class Reader:
 @pytest.fixture
 def observed(monkeypatch, tmp_path):
     store = Store()
-    cfg = {"run": str(tmp_path / "run-test"), "redis_socket": "/tmp/cmux-fleet-test.sock",
+    cfg = {"run": str(tmp_path / "run-test"), "redis_socket": "/tmp/fleetmux-test.sock",
            "workers": ["worker-1"]}
     monkeypatch.setattr(control, "_open_client",
                         lambda cfg, *, blocking=False: Reader(store, blocking))
@@ -229,11 +229,11 @@ def test_invalid_filters_rejected_before_connect(observed, kwargs):
 
 
 def test_run_id_and_private_socket_validation(monkeypatch, tmp_path):
-    cfg = {"run": str(tmp_path / "fallback"), "redis_socket": "/tmp/cmux-fleet-none.sock"}
+    cfg = {"run": str(tmp_path / "fallback"), "redis_socket": "/tmp/fleetmux-none.sock"}
     assert control._settings(cfg).run_id == "fallback"
     cfg["run_id"] = "explicit"
     assert control._settings(cfg).prefix == "fx:v2:run:explicit"
-    for socket in ("localhost:6379", "/tmp/other.sock", "/tmp/cmux-fleet-a/../b.sock"):
+    for socket in ("localhost:6379", "/tmp/other.sock", "/tmp/fleetmux-a/../b.sock"):
         cfg["redis_socket"] = socket
         with pytest.raises(ValueError, match="private"):
             control.snapshot(cfg)
@@ -259,7 +259,7 @@ def test_snapshot_state_context_queue_unknown_and_no_config_dump(observed):
 
 
 def test_socket_failure_clear_safe_and_does_not_fallback(monkeypatch, tmp_path):
-    cfg = {"run": str(tmp_path / "run"), "redis_socket": "/tmp/cmux-fleet-none.sock",
+    cfg = {"run": str(tmp_path / "run"), "redis_socket": "/tmp/fleetmux-none.sock",
            "api_key": "SYNTHETIC_SECRET"}
     def fail(*args, **kwargs):
         raise redis.ConnectionError("unreachable SYNTHETIC_SECRET\x1b")
@@ -522,7 +522,7 @@ def private_redis():
     if not binary:
         pytest.skip("redis-server unavailable")
     with tempfile.TemporaryDirectory(prefix="control-v2-") as directory:
-        socket = "/tmp/cmux-fleet-control-test-" + uuid.uuid4().hex[:12] + ".sock"
+        socket = "/tmp/fleetmux-control-test-" + uuid.uuid4().hex[:12] + ".sock"
         logpath = Path(directory) / "redis.log"
         with logpath.open("wb") as log:
             process = subprocess.Popen([binary, "--port", "0", "--unixsocket", socket,

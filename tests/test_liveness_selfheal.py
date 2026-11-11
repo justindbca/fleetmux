@@ -428,7 +428,7 @@ def test_crashed_child_daemon_is_revived_with_resume_and_replays_its_requests(tm
         rec['launched'] = rec['created'] = time.time() - subfleet.LAUNCH_GRACE - 1
         subfleet.save_record(rec['run'], rec)
         subfleet.tick(f)
-        mgr = t.world.mgrs['cmux-fleet:ops']
+        mgr = t.world.mgrs['fleetmux:ops']
         assert subfleet.record(rec['run'])['state'] == 'running' and '--resume' in mgr.windows[-1][1]
         cfg = dict(fleet.load(Path(rec['run']) / 'config.json'), max_attempts=2)  # this run's parent had 1
         fleet.save(Path(rec['run']) / 'config.json', cfg)

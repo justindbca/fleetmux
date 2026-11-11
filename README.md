@@ -102,8 +102,8 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
   the strategy's assumptions and answers in JSON. A request that names `to` skips the supervisor's turn; triggers
   that arrive together queue under `--max-busy`; the daemon checks the reply's fields before your program reads it
   (`fleetmux results --drain`). Requests have no global deadline: one that expires holds only its own slot, and a
-  frozen Claude Code worker resumes its own session and gets the same request again. `--clear-after-result` starts
-  every review from a clean context. The fleet places no orders and knows no calendar: your program decides what to
+  frozen Claude Code worker resumes its own session and gets the same request again. The fleet places no
+  orders and knows no calendar: your program decides what to
   do with the verdict, sends any order through its own checks, and `pause` / `resume`s the fleet around market hours.
 - **One mid-strength model leading a crowd of weak free models on routine work.** Translation, drafting,
   summarising and sorting are mostly volume. A mid-strength supervisor (through Pi or Codex) cuts the job into small
@@ -124,9 +124,7 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
 - **Resident judgment service** (`service`). Another program sends JSON requests with `fleetmux request`;
   a request that names `to` goes straight to that role's worker (`--worker-names exit-1,reentry-1,...`, one
   prompt per role through `--roles`). The daemon checks each reply against `reply.required` / `reply.allowed`,
-  and the caller holds the fleet outside its working hours with `pause` / `resume`. For stateless one-shot work
-  (e.g. extracting memories from transcripts with a small model) `--clear-after-result` empties the context
-  after every answer. See *Service mode*.
+  and the caller holds the fleet outside its working hours with `pause` / `resume`. See *Service mode*.
 - **Feature development with independent review** (`dev_task`). The supervisor splits the feature, workers build
   it, and separate reviewer workers judge it; review is capped at three rounds and leftover P0 / P1 go to you
   instead of a fourth round. The task is done only when the delivery gate's `test_cmd` has passed and the work
@@ -147,8 +145,8 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
 - **Run anywhere, watch from anywhere.** On Linux the `fleetmux` backend replaces cmux; `fleetmux attach` (also
   over `ssh -t`) or `fleetmux gui` shows the live page from another terminal, including a phone terminal app.
 
-Planned, not merged yet: chat channels (Telegram, Feishu, WeChat, email) as a second keyboard for the supervisor,
-with results and "waiting for a human" pushed back to the same chat.
+Chat channels (Telegram, Feishu, WeChat, email, Slack) are a second keyboard for the supervisor, with results and
+"waiting for a human" pushed back to the same chat: `fleetmux channel`, [contracts §8](docs/contracts.md).
 
 ## Why
 
@@ -200,9 +198,8 @@ What the daemon enforces, independently of what the models claim:
 
 One command: `fleetmux <subcommand>` (e.g. `fleetmux start`, `fleetmux status`, `fleetmux channel`). The binary runs
 its own terminal subcommands (`server`, `attach`, `reap`, `web`, `gui --runtime D`) and hands every fleet subcommand
-to the Python CLI of the same release (docs/design.md §50). Setups made under the project's
-earlier name keep working: its command, environment variable and release directory names stay accepted as aliases
-(docs/design.md §50).
+to the Python CLI of the same release (docs/design.md §50). A machine set up under the project's earlier name
+moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux
@@ -227,21 +224,19 @@ scripts/install_release.sh <sha> <tarball> [--bin-dir DIR] [--tool-sha SHA] [--t
 ```
 
 One application release per full source SHA: the tarball (a `git archive <sha>`) is unpacked into
-`$FLEETMUX_RELEASES/<sha>` (default `~/fleetmux-releases`; the releases directory of
-the project's earlier name is linked to it when missing and left alone when it exists), the release's `.venv` is built from the pinned
+`$FLEETMUX_RELEASES/<sha>` (default `~/fleetmux-releases`), the release's `.venv` is built from the pinned
 requirements, an already-built `--bin-dir` (`fleetmux`, `fleetmux-web`, `SHA256SUMS`, `manifest.json`) is verified
 and both binaries land in `<release>/bin`, and `scripts/check_deps.py` runs with `<release>/bin` first on `PATH`.
 An existing release is never joined or overwritten (the directory is created with a bare `mkdir`), a failed
 install removes only the directory that run created, and `<sha>` must be 7-40 hex characters because it is the
 release directory name. `--test` runs the release's own suite and keeps the complete log outside the release
 dir, at `<releases>/.logs/<sha>-<timestamp>.log`, printing that path (so a failed run stays diagnosable);
-`--activate` is the only step that moves `~/fleetmux-current` (and the link of the project's earlier
-name, unless that is a real directory). On success the installer prints one explicit
+`--activate` is the only step that moves `~/fleetmux-current`. On success the installer prints one explicit
 start command, and records it as `start_command` in `<release>/bin/installed.json`, so `fleetmux` resolves to
 this release instead of a stale `~/.local/bin` build:
 
 ```bash
-PATH=<release>/bin:$PATH <release>/.venv/bin/cmux-fleet --help
+PATH=<release>/bin:$PATH <release>/.venv/bin/fleetmux-py --help
 ```
 
 `--tool-sha` records the installer-tool commit separately from the application `<sha>`. An installed release is
@@ -541,17 +536,17 @@ Each run writes to `~/.fleetmux/runs/fleet-<time>-<token>/`: `config.json`, `wor
 `redis_runtime_dir`, `redis_instance_id` and `redis_socket` for callbacks and control.
 
 All per-user data lives under `~/.fleetmux/`: the fleet home above, `state/` (window registries), `config/`
-(channel credentials, whitelists, leases), `launchers.env` and `board/`. A machine that still has the old
-`~/.cmux-fleet`, `~/.local/state/cmux-fleet` or `~/.config/fleetmux` keeps using them (one stderr line says so);
-`fleetmux home migrate [--dry-run]`, run while no fleet is running, moves them and leaves a symlink at each old
-path, so old runs keep working ([design §50.1](docs/design.md)).
+(channel credentials, whitelists, leases), `launchers.env`, `board/` and `fleets/<name>/` (a second fleet's
+home). A machine set up under the project's earlier name runs `fleetmux home migrate [--dry-run]` once, while no
+fleet is running: it moves the data here, leaves a symlink at each old path and updates the run records, so old
+runs can be resumed ([design §50.1](docs/design.md)); until then `fleetmux start` stops with one line saying so.
 
 Private Redis files live separately in `.runtime/redis/<token>/`: `redis.sock`, `redis.pid`,
 `redis.log`, `fleet.rdb`, and v2's `appendonlydir/`. The short token avoids Unix socket path-length
 limits; directories are owner-only (700). Overlong paths fail before Redis starts, with no `/tmp`
 or TCP fallback. Use an explicit short, writable `--redis-runtime-dir` for a read-only/non-editable
-installation. Legacy `/tmp/cmux-fleet-*.sock` configs remain supported; existing fleets are not
-migrated or restarted. Stop removes the socket through Redis shutdown, but retains logs/data.
+installation. Older configs pinned to an unmanaged `/tmp/fleetmux-*.sock` remain supported; existing
+fleets are not restarted. Stop removes the socket through Redis shutdown, but retains logs/data.
 Keep `.runtime/` out of Git (a local `.git/info/exclude` entry is sufficient); these are runtime
 files, not source. See [the design baseline](docs/design.md#13-redis-run-directory-inside-the-project).
 
@@ -743,7 +738,7 @@ turn woken by a peer message answers no delivery: logged as `unsolicited`, never
 A busy worker can be turned into the supervisor of its own fleet for one numbered piece of work
 (`M0`, `M1`, ...; a sub-fleet of `M0` numbers `M0.0`, `M0.1`, ...). Details: `docs/design.md` §19.
 
-- Each fleet has its own cmux registry (`cmux-fleet`, `cmux-fleet:M0`, ...), daemon, private Redis and run
+- Each fleet has its own cmux registry (`fleetmux`, `fleetmux:M0`, ...), daemon, private Redis and run
   directory (`<main run>/sub/M0`). Only the main fleet is written to `latest.json`.
 - The sub-fleet is a separate workspace right after its parent in the sidebar, titled
   `<main fleet name> › worker-1 › 子 fleet M0` ("sub-fleet M0"; `start --name` sets the name; default: the task goal or
@@ -965,7 +960,7 @@ python3 -m pytest -q tests/test_pi_v2_contract.py tests/test_runtime_v2_planning
 python3 -m pytest -q tests
 ```
 
-These tests use freshly created `/tmp/cmux-fleet-<token>.sock` instances with `port=0`, fake cmux
+These tests use freshly created `/tmp/fleetmux-<token>.sock` instances with `port=0`, fake cmux
 and no model/GUI/production registry. The installed Pi packages are required by the TS harness.
 
 ## How a task flows

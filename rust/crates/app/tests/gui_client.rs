@@ -232,7 +232,6 @@ impl Gui {
             .env("XDG_RUNTIME_DIR", &root)
             .env("DISPLAY", ":0")
             .env_remove("FLEETMUX_WEB_BIN")
-            .env_remove(fleetmux::attach::web::WEB_BIN_ENV_LEGACY)
             .stdin(Stdio::null())
             .stdout(out.try_clone().unwrap())
             .stderr(out)

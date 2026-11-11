@@ -10,10 +10,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/launchers/start-dsh.command"
 
 # Operator's private launcher settings (outside the repo), e.g. DSH_PURGE=on; explicit env still wins.
-# Default ~/.fleetmux/launchers.env; the legacy ~/.config/fleetmux/launchers.env while only that one exists.
+# Default ~/.fleetmux/launchers.env. A file still at the pre-fleetmux place is not read: stop and say how to move it.
 LAUNCHER_ENV="${FLEETMUX_LAUNCHER_ENV:-$HOME/.fleetmux/launchers.env}"
-if [ -z "${FLEETMUX_LAUNCHER_ENV:-}" ] && [ ! -f "$LAUNCHER_ENV" ] && [ -f "$HOME/.config/fleetmux/launchers.env" ]; then
-  LAUNCHER_ENV="$HOME/.config/fleetmux/launchers.env"
+if [ -z "${FLEETMUX_LAUNCHER_ENV:-}" ] && [ ! -f "$LAUNCHER_ENV" ] && [ -f "$HOME/.config/fleetmux/launchers.env" ] \
+   && [ ! -L "$HOME/.config/fleetmux/launchers.env" ]; then
+  echo "fleetmux: $HOME/.config/fleetmux/launchers.env is not read any more; run 'fleetmux home migrate'" >&2
+  exit 2
 fi
 if [ -f "$LAUNCHER_ENV" ]; then
   while IFS='=' read -r _k _v; do

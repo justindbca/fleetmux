@@ -18,9 +18,6 @@ pub const MAX_KILL_TIMEOUT_MS: u32 = 600_000;
 /// when its offset is <= `timeout_ms`; then at most `KILL_REAP_GRACE_MS` more to confirm the reap, with no new signal.
 pub const KILL_SCHEDULE_MS: [u32; 3] = [0, 2000, 5000];
 pub const KILL_REAP_GRACE_MS: u32 = 500;
-/// Ratio clamp range for `layout.set` (PROTOCOL.md §4.15).
-pub const RATIO_MIN: u8 = 10;
-pub const RATIO_MAX: u8 = 90;
 
 /// A pane id such as `k7q2-12` (PROTOCOL.md §1.4). Kept as the wire string; `fleetmux-layout` has its own type.
 pub type PaneId = String;
@@ -805,25 +802,6 @@ pub struct PaneInfo {
     /// Optional key (stage A P-2): current scrollback rows; absent = `0`.
     #[serde(default)]
     pub scrollback: u32,
-}
-
-/// Per-group map used by the layout object (`groups`, `selected`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PerGroup<T> {
-    pub supervisor: T,
-    pub lower: T,
-    pub workers: T,
-}
-
-/// The layout object of `layout.get` / `layout.set` and `layout.json` (PROTOCOL.md §4.14, §8.3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LayoutInfo {
-    pub h_ratio: u8,
-    pub v_ratio: u8,
-    pub zoom: Option<PaneId>,
-    pub focus: Group,
-    pub groups: PerGroup<Vec<PaneId>>,
-    pub selected: PerGroup<Option<PaneId>>,
 }
 
 /// Standard base64 (RFC 4648 §4, `+/`, `=` padding) used by `pane.write.data`. Ruling R12: M0 implements these two

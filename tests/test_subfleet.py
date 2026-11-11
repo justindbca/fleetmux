@@ -353,7 +353,7 @@ def test_worker_pane_becomes_subfleet_supervisor_and_comes_back(tree, path):
     child_cfg = fleet.load(Path(rec['run']) / 'config.json')
     # names, titles, tree layout on disk; latest.json is never written for a sub-fleet
     assert Path(rec['run']) == f.run_dir / 'sub' / 'M0'
-    assert child_cfg['session'] == 'cmux-fleet:M0' and child_cfg['task_id'] == 'M0'
+    assert child_cfg['session'] == 'fleetmux:M0' and child_cfg['task_id'] == 'M0'
     assert child_cfg['agents_title'] == '研报 › worker-1 › 子 fleet M0'
     assert child_cfg['redis_socket'] != f.cfg['redis_socket'] and child_cfg['supervisor_cli'] == 'claude'
     assert child_cfg['adopt']['label'] == f.label('worker-1')  # §46: named in its report_up notices
@@ -362,14 +362,14 @@ def test_worker_pane_becomes_subfleet_supervisor_and_comes_back(tree, path):
     assert info['state'] == 'delegated' and info['delegated_pane'] == sid and info['pane'] == rec['placeholder']
     assert (rec['placeholder'], sid) in f.mgr.tabbed
     assert any('已委派：子 fleet M0（看侧栏「研报 › worker-1 › 子 fleet M0」）' in label for _, label in f.mgr.renamed)
-    assert f.mgr.get_pane_status(sid) is None and t.world.owner[sid] == 'cmux-fleet:M0'
+    assert f.mgr.get_pane_status(sid) is None and t.world.owner[sid] == 'fleetmux:M0'
     # the child daemon adopts the live pane top-left (no new supervisor process) and asks for READY
     cf = child_daemon(t, rec)
     assert cf.agent('supervisor')['pane'] == sid
     assert cf.mgr.arranged[0] == sid and len(cf.mgr.arranged[1]) == 2
     assert [kw['window_name'] for kw in cf.mgr.spawned] == ['fx-M0/worker-1', 'fx-M0/worker-2']
-    assert ('cmux-fleet:M0' and (sid, 'fx-M0/supervisor-1') in cf.mgr.renamed)
-    assert ('ws-cmux-fleet:M0', f.mgr.workspace_id()) in t.world.order  # sidebar: right after the parent
+    assert ('fleetmux:M0' and (sid, 'fx-M0/supervisor-1') in cf.mgr.renamed)
+    assert ('ws-fleetmux:M0', f.mgr.workspace_id()) in t.world.order  # sidebar: right after the parent
     assert 'Supervisor: observe, judge, dispatch' in (Path(child_cfg['supervisor_cwd']) / 'CLAUDE.md').read_text()
     # §46: the adopted supervisor and the sub-workers get the sub-fleet boundary rules
     assert '## Sub-fleet boundaries (you supervise sub-fleet M0' in (Path(child_cfg['supervisor_cwd']) / 'CLAUDE.md').read_text()
@@ -432,9 +432,9 @@ def test_worker_pane_becomes_subfleet_supervisor_and_comes_back(tree, path):
     assert rec['state'] == 'returned' and rec['outcome'] == 'completed'
     assert out.read_text() == 'merged findings'  # the parent daemon copied it back before checking
     assert rec['placeholder'] not in t.world.alive
-    assert 'cmux-fleet:M0' in t.world.closed and redis_down(child_cfg)
+    assert 'fleetmux:M0' in t.world.closed and redis_down(child_cfg)
     assert (fleet.agent_cwd(f.cfg, 'worker-1') / 'CLAUDE.md').read_text() == worker_rules
-    assert 'cmux-fleet:M0' not in [p.stem for p in t.world.state_dir.glob('*.json')]
+    assert 'fleetmux:M0' not in [p.stem for p in t.world.state_dir.glob('*.json')]
     info = f.agent('worker-1')
     assert not info['delegate_cfg']
     new_typed = [(p, x) for p, x in t.world.sent[len(sent_before):]]
@@ -451,7 +451,7 @@ def test_worker_pane_becomes_subfleet_supervisor_and_comes_back(tree, path):
         assert 'sub-fleet M0' in launch and 'worker of the main fleet' in launch and 'READY' in launch, launch
         assert not [x for p, x in new_typed if p in panes], 'the return typed into a hook worker pane'
         assert not [k for p, k in new_keys if p in panes and k == 'Enter'], 'Enter was sent to a hook worker pane'
-        assert sid not in t.world.alive or t.world.owner.get(sid) != 'cmux-fleet:M0'
+        assert sid not in t.world.alive or t.world.owner.get(sid) != 'fleetmux:M0'
         # the new generation becomes READY through its own Stop hook, then work reaches it through the hook
         assert hook(t, f, 'worker-1', 'READY', prompt='startup')['status'] == 'ready'
         assert f.agent('worker-1')['state'] == 'idle'
@@ -477,7 +477,7 @@ def test_worker_pane_becomes_subfleet_supervisor_and_comes_back(tree, path):
     else:
         # control: without the hook channel the returned session keeps its generation and is
         # told by a typed role-change prompt (the pre-hook behaviour)
-        assert t.world.owner[sid] == 'cmux-fleet' and info['pane'] == sid and info['state'] == 'starting'
+        assert t.world.owner[sid] == 'fleetmux' and info['pane'] == sid and info['state'] == 'starting'
         back = [x for p, x in new_typed if p == sid][-1]
         assert 'worker of the main fleet again' in back
         assert parent_hook(t, 'READY', back)['status'] == 'ready'  # same generation, same session
@@ -749,7 +749,7 @@ def test_manager_browser_url_goto_and_select_workspace(tmp_path, monkeypatch):
         calls.append(args)
         return SimpleNamespace(returncode=0, stdout='file:///r/history.html?fleet-jump=x\n', stderr='')
     monkeypatch.setattr(cmux_manager, '_run', run)
-    m = cmux_manager.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
+    m = cmux_manager.CmuxSessionManager('fleetmux', state_dir=tmp_path)
     monkeypatch.setattr(m, '_surfaces', lambda w: {'h1': {'pane_id': 'p1'}} if w == 'ws' else {})
     m._save_meta({'workspace': 'ws', 'control_workspace': None, 'surfaces': {'h1': {'type': 'history'}}})
     assert m.browser_url('h1') == 'file:///r/history.html?fleet-jump=x'
@@ -791,7 +791,7 @@ def test_root_stop_stops_children_first_without_orphans(tree):
     assert rec['state'] == 'failed' and rec['outcome'] == 'stopped'
     # taken back from the child: a hook-channel worker's returned session is retired at once (its
     # next generation replaces it), so no orphan stays with the child; the parent's stop retires the rest
-    assert sid not in t.world.alive or t.world.owner.get(sid) == 'cmux-fleet'
+    assert sid not in t.world.alive or t.world.owner.get(sid) == 'fleetmux'
     assert all(f.v2.retire(s, 'explicit fleet stop') for s in f.names)
     assert sid not in t.world.alive
 
@@ -910,7 +910,7 @@ def test_ids_levels_and_sessions():
     assert subfleet.valid_child_id(None, 'M3') and not subfleet.valid_child_id(None, 'M0.1')
     assert subfleet.valid_child_id('M0', 'M0.2') and not subfleet.valid_child_id('M0', 'M1.2')
     assert subfleet.task_level('M0') == 2 and subfleet.task_level('M0.1') == 3
-    assert subfleet.session_name() == 'cmux-fleet' and subfleet.session_name('M0.1') == 'cmux-fleet:M0.1'
+    assert subfleet.session_name() == 'fleetmux' and subfleet.session_name('M0.1') == 'fleetmux:M0.1'
 
 
 def test_v2_matrix_allows_claude_supervisor_only_for_adopted_subfleets():
@@ -952,13 +952,13 @@ def test_start_name_sets_cfg_and_title(tmp_path, monkeypatch):
 
     def factory(name, **kw):
         seen.update(kw, session=name)
-        return SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'cmux-fleet.json', session_exists=lambda: False,
+        return SimpleNamespace(meta_path=tmp_path / 'isolated-state' / 'fleetmux.json', session_exists=lambda: False,
                                spawn_window=lambda *a, **k: SimpleNamespace(success=True))
     monkeypatch.setattr(cmux_manager, 'CmuxSessionManager', factory)
     fleet.main(args + ['--name', '研报'])
     cfg = fleet.load(tmp_path / 'latest.json')
     assert cfg['name'] == '研报' and cfg['agents_title'] == 'Fleet 研报' and len(cfg['token']) == 8
-    assert seen == {'agents_title': 'Fleet 研报', 'session': 'cmux-fleet'}
+    assert seen == {'agents_title': 'Fleet 研报', 'session': 'fleetmux'}
 
 
 # ------------------------------------------------------------------ real cmux_manager primitives (fake _run)
@@ -979,8 +979,8 @@ def test_manager_release_adopt_place_after_close(tmp_path, monkeypatch):
                 ws.pop(sid, None)
         return SimpleNamespace(returncode=0, stdout='OK', stderr='')
     monkeypatch.setattr(cmux_manager, '_run', run)
-    parent = cmux_manager.CmuxSessionManager('cmux-fleet', state_dir=tmp_path)
-    child = cmux_manager.CmuxSessionManager('cmux-fleet:M0', state_dir=tmp_path)
+    parent = cmux_manager.CmuxSessionManager('fleetmux', state_dir=tmp_path)
+    child = cmux_manager.CmuxSessionManager('fleetmux:M0', state_dir=tmp_path)
     for m, ws in ((parent, 'parent-ws'), (child, 'child-ws')):
         monkeypatch.setattr(m, '_surfaces', lambda w, ws=ws: {s: dict(v) for s, v in live.get(w, {}).items()})
     parent._save_meta({'workspace': 'parent-ws', 'control_workspace': None,
@@ -1047,9 +1047,9 @@ def test_parent_resume_keeps_a_delegated_slot_and_relaunches_the_child(tree):
     again.v2.resume_run()
     info = again.agent('worker-1')
     assert info['state'] == 'delegated' and info['generation'] == '0' and info['pane'] == rec['placeholder']
-    assert rec['placeholder'] in t.world.alive and t.world.owner[rec['pane']] == 'cmux-fleet:M0'
+    assert rec['placeholder'] in t.world.alive and t.world.owner[rec['pane']] == 'fleetmux:M0'
     assert subfleet.delegated_route(again.cfg, 'worker-1', 0)[0]['task_id'] == 'M0'
-    child_mgr = t.world.mgrs['cmux-fleet:M0']
+    child_mgr = t.world.mgrs['fleetmux:M0']
     assert any('--resume' in cmd for _, cmd in getattr(child_mgr, 'windows', []))  # child daemon relaunched
     assert again.agent('worker-2')['state'] != 'delegated'
 
@@ -1064,10 +1064,10 @@ def test_failed_child_redis_start_rolls_back_without_killing_the_parent(tree, mo
     with pytest.raises(subfleet.Refused, match='did not become ready'):
         spawn_m0(t)
     info = f.agent('worker-1')
-    assert info['state'] == 'idle' and info['pane'] == sid and t.world.owner[sid] == 'cmux-fleet'
+    assert info['state'] == 'idle' and info['pane'] == sid and t.world.owner[sid] == 'fleetmux'
     assert not subfleet.active_children(f.run_dir)
     assert subfleet.record(f.run_dir / 'sub' / 'M0')['state'] == 'failed'
-    assert len([p for p in t.world.alive if t.world.owner.get(p) == 'cmux-fleet']) == 4  # sup, 2 workers, history
+    assert len([p for p in t.world.alive if t.world.owner.get(p) == 'fleetmux']) == 4  # sup, 2 workers, history
 
 
 @pytest.mark.parametrize('path', ['hook', pytest.param('typed_fallback', marks=RETIRED)])
@@ -1675,7 +1675,7 @@ def test_autostart_delegates_on_ready_revives_and_stops_on_crashloop(svc):
     subfleet.tick(f)
     assert named_subfleet.state(f, 'ops')['state'] == 'up'
     child_cfg = fleet.load(Path(rec['run']) / 'config.json')
-    mgr = t.world.mgrs['cmux-fleet:ops']
+    mgr = t.world.mgrs['fleetmux:ops']
     for crash in range(1, 4):
         die(cf)
         subfleet.shutdown_redis(child_cfg)

@@ -15,9 +15,8 @@ from fleetmux.runtime_v2 import v2_cli_problem
 
 def inventory():
     home = Path.home()
-    roots, seen = [], set()  # ~/.fleetmux and ~/.fleetmux/fleets/* (§50.1); a migrated ~/.cmux-fleet links there
-    for path in ([home/'.fleetmux'] + sorted((home/'.fleetmux'/'fleets').glob('*')) + sorted(home.glob('.cmux-fleet*'))
-                 + sorted(Path('/tmp').glob('cmux-fleet*'))):
+    roots, seen = [], set()  # ~/.fleetmux and ~/.fleetmux/fleets/* (§50.1)
+    for path in [home/'.fleetmux'] + sorted((home/'.fleetmux'/'fleets').glob('*')):
         if path.is_dir() and path.resolve() not in seen:
             seen.add(path.resolve())
             roots.append(path)
@@ -37,7 +36,7 @@ def inventory():
         except ValueError:
             continue
         for i, arg in enumerate(args):
-            if Path(arg).name in ('fleet.py', 'cmux-fleet') and len(args) > i+2 and args[i+1] in ('daemon', 'actor'):
+            if Path(arg).name in ('fleet.py', 'fleetmux-py') and len(args) > i+2 and args[i+1] in ('daemon', 'actor'):
                 cfg = Path(args[i+2]).expanduser()
                 if cfg.is_absolute() and cfg.suffix == '.json':
                     configs.add(cfg)
@@ -109,10 +108,10 @@ def inventory():
         problem = v2_cli_problem(item)
         item['v2_cli_supported'] = problem is None
         item['v2_cli_reason'] = problem or ''
-    registry_paths = set((home/'.local/state/cmux-fleet').glob('*.json'))
+    registry_paths = set()
     for root in roots:
         registry_paths.update((root/'state').glob('*.json'))
-    unique = {}  # one entry per file: the legacy state dir may link to ~/.fleetmux/state
+    unique = {}  # one entry per file: a state dir may be reached through a link
     for path in sorted(registry_paths):
         unique.setdefault(path.resolve(), path)
     registries = []

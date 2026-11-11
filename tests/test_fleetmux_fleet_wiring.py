@@ -43,7 +43,7 @@ def test_backend_class_returns_fleetmux_manager(tmp_path, monkeypatch):
     # build() / fleet.manager_for() reach this class with the config's arguments. The constructor itself
     # is backend behaviour (a phase-0 skeleton), so it is replaced by a recorder here.
     seen = []
-    monkeypatch.setattr(cls, '__init__', lambda self, session_name='cmux-fleet', **kw: seen.append((session_name, kw)))
+    monkeypatch.setattr(cls, '__init__', lambda self, session_name='fleetmux', **kw: seen.append((session_name, kw)))
     assert isinstance(backends.build('fleetmux', 'wiring-test', state_dir=tmp_path), cls)
     assert seen[-1] == ('wiring-test', {'state_dir': tmp_path})
     cfg = {'session': 'wiring-test', 'cmux_state_dir': str(tmp_path), 'backend': 'fleetmux', 'agents_title': 'A'}

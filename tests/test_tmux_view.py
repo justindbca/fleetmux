@@ -322,8 +322,8 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(cm, 'TMUX', TMUX)
     w = SimpleNamespace(fake=fake, run=run, sock=str(run / 'tmux.sock'), claude=str(claude), tmux_tmp=tmux_tmp,
                         root=root,
-                        parent=cm.CmuxSessionManager('cmux-fleet', state_dir=tmp_path / 'state'),
-                        child=cm.CmuxSessionManager('cmux-fleet:ops', state_dir=tmp_path / 'state'))
+                        parent=cm.CmuxSessionManager('fleetmux', state_dir=tmp_path / 'state'),
+                        child=cm.CmuxSessionManager('fleetmux:ops', state_dir=tmp_path / 'state'))
     yield w
     if kept:  # the m4 gate (M60): registered processes only, no pattern kill, nothing removed
         _m4_world_teardown(w, fake, root / 'teardown-ledger.json')

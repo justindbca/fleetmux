@@ -51,7 +51,7 @@ fn cell(r: fleetmux_layout::Rect) -> CellRect {
 #[test]
 fn topbar_for_is_the_current_fleets_title_and_status() {
     let json = r#"{"v":1,"current":"fleet-a","fleets":[
-        {"id":"fleet-a","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet"},
+        {"id":"fleet-a","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux"},
         {"id":"fleet-b","title":"other","state":"running","line1":"x","line2":"y"}]}"#;
     let side = sidebar::Side {
         data: Some(sidebar::parse(json).expect("kv `sidebar` parses")),
@@ -523,7 +523,7 @@ fn overlay_rect_moves_right_with_the_sidebar() {
 // ------------------------------ fleet sidebar close box (S1b-④, plan §2.5 / §3.5) -------------------------
 
 /// The kv `sidebar` value the fleet daemon pushes: one running fleet, the current one (plan §4.5).
-const SIDEBAR_ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+const SIDEBAR_ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 
 #[cfg(target_os = "linux")]
 #[test]

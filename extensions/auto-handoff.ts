@@ -1,5 +1,5 @@
 /**
- * auto-handoff.ts — pi 版上下文接力（cmux-fleet-pi）
+ * auto-handoff.ts — pi 版上下文接力（fleetmux）
  *
  * 把 Claude Code 侧的 /handoff 搬到 pi：上下文逼近阈值 → 生成交接单 → 开新 cmux 窗口接力 → 本会话优雅退出。
  * 新窗口由 start-pi-autohandoff.command 启动（与扩展同目录即可，自洽部署）；首条 prompt 由本扩展在
@@ -25,8 +25,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 
 // fleet 仓根目录（可选）：没设就只找扩展同目录 / 上一级 launchers/ 里的接力启动器。
-// CMUX_FLEET_PI_DIR: legacy name, kept for compatibility.
-const FLEET_DIR = process.env.FLEETMUX_PI_DIR || process.env.CMUX_FLEET_PI_DIR || "";
+const FLEET_DIR = process.env.FLEETMUX_PI_DIR || "";
 const HANDOFF_DIR = process.env.PI_HANDOFF_DIR ?? join(homedir(), ".handoff");
 const TRIGGER_PCT = Number(process.env.PI_AUTO_HANDOFF_PCT ?? "80");
 // 绝对 token 阈值（>0 时生效）：极短会话里 percent 可能 <1%，自测/小会话需要绝对阈值。
@@ -220,7 +219,7 @@ function launcherPath(): string {
 	const explicit = process.env.PI_AUTO_HANDOFF_LAUNCHER;
 	if (explicit && explicit.trim()) return explicit.trim();
 	// 自洽部署：扩展与接力启动器同目录（或上一级 launchers/）优先，这样在 Studio 这类
-	// 没有 cmux-fleet-pi 仓、没有 PI_* 环境的机器上也能跑。
+	// 没有 fleetmux 仓、没有 PI_* 环境的机器上也能跑。
 	const here = dirname(fileURLToPath(import.meta.url));
 	const candidates = [
 		join(here, "start-pi-autohandoff.command"),

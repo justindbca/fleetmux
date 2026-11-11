@@ -5,7 +5,7 @@
 //!
 //! The Python CLI is found at, in order: `$FLEETMUX_PYTHON_CLI` (an executable, run as is), the release this
 //! binary sits in (`<release>/bin/fleetmux` → `<release>/.venv/bin/python <release>/fleetmux/fleet.py`),
-//! `~/fleetmux-current`, `~/cmux-fleet-current`. Nothing found → exit 127 with a message saying how to set it.
+//! `~/fleetmux-current`. Nothing found → exit 127 with a message saying how to set it.
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -210,50 +210,17 @@ fn the_release_this_binary_sits_in_is_found_first() {
 }
 
 #[test]
-fn home_fleetmux_current_then_the_legacy_current_link() {
+fn home_fleetmux_current_is_used() {
     let t = TempDir::new();
     let home = t.path().join("home");
     let new = make_release(&t.path().join("new"));
-    let old = make_release(&t.path().join("old"));
-    std::os::unix::fs::symlink(&old, home_join(&home, "cmux-fleet-current")).unwrap();
+    std::os::unix::fs::symlink(&new, home_join(&home, "fleetmux-current")).unwrap();
     let argv = t.path().join("argv");
-    // only the old name: it is used
-    let out = run(Path::new(BIN), &["stop"], &home, None, &argv, "");
-    assert_eq!(out.status.code(), Some(7), "{out:?}");
-    assert_eq!(
-        argv_of(&argv)[1],
-        home.join("cmux-fleet-current/fleetmux/fleet.py")
-            .display()
-            .to_string()
-    );
-    // both: the new name wins
-    std::os::unix::fs::symlink(&new, home.join("fleetmux-current")).unwrap();
     let out = run(Path::new(BIN), &["stop"], &home, None, &argv, "");
     assert_eq!(out.status.code(), Some(7), "{out:?}");
     assert_eq!(
         argv_of(&argv)[1],
         home.join("fleetmux-current/fleetmux/fleet.py")
-            .display()
-            .to_string()
-    );
-}
-
-#[test]
-fn a_release_with_the_legacy_package_path_still_runs() {
-    let t = TempDir::new();
-    let home = t.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    let rel = t.path().join("legacy");
-    write_exe(&rel.join(".venv/bin/python"), FAKE);
-    fs::create_dir_all(rel.join("cmux_fleet")).unwrap();
-    fs::write(rel.join("cmux_fleet/fleet.py"), "# fake\n").unwrap();
-    std::os::unix::fs::symlink(&rel, home.join("fleetmux-current")).unwrap();
-    let argv = t.path().join("argv");
-    let out = run(Path::new(BIN), &["stop"], &home, None, &argv, "");
-    assert_eq!(out.status.code(), Some(7), "{out:?}");
-    assert_eq!(
-        argv_of(&argv)[1],
-        home.join("fleetmux-current/cmux_fleet/fleet.py")
             .display()
             .to_string()
     );
@@ -277,7 +244,6 @@ fn no_python_cli_anywhere_fails_and_says_how_to_set_it() {
         "status",
         "FLEETMUX_PYTHON_CLI",
         "fleetmux-current",
-        "cmux-fleet-current",
         "install_release.sh",
     ] {
         assert!(err.contains(needle), "missing {needle:?} in: {err}");

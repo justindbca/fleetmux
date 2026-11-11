@@ -819,7 +819,6 @@ dependencies = [
 name = "fleetmux-layout"
 version = "0.2.0"
 dependencies = [
- "serde",
  "serde_json",
 ]
 

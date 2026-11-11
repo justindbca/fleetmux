@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 for required in launchers/start-pi-full.command extensions/opencode-free/index.ts extensions/opencode-free/backend.mjs extensions/opencode-free/mcp-stub.mjs; do
   if [ ! -f "$ROOT/$required" ]; then
     printf 'ERROR: 启动器位置错误或安装不完整，缺少：%s\n' "$ROOT/$required" >&2
-    echo '请运行 cmux-fleet-pi/launchers 内的正式启动器；其他项目请使用 launchers/compat 内的薄 wrapper。' >&2
+    echo '请运行 fleetmux 仓 launchers 内的正式启动器；其他项目请使用 launchers/compat 内的薄 wrapper。' >&2
     exit 127
   fi
 done

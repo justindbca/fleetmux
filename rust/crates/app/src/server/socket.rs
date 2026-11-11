@@ -137,6 +137,8 @@ pub async fn serve(listener: UnixListener, state: Arc<Mutex<State>>) -> io::Resu
                 // Out of descriptors and the like: the next accept may work; one bad peer never stops the server.
                 Err(e) => {
                     boot::log("WARN", &format!("accept: {e}"));
+                    // A lasting error (no descriptors left) keeps the listener readable: do not spin on it.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     continue;
                 }
             },

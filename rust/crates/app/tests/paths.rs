@@ -48,7 +48,7 @@ fn mode(p: &Path) -> u32 {
 
 #[test]
 fn token_keeps_only_safe_chars_and_40_max() {
-    assert_eq!(token("cmux-fleet"), "cmux-fleet");
+    assert_eq!(token("fleetmux"), "fleetmux");
     assert_eq!(token("Fleet_agents-2"), "Fleet_agents-2");
     // Unsafe chars are replaced by `_`, one per char (same rule as wezterm.py `_token`).
     assert_eq!(token("a b/c.d:e"), "a_b_c_d_e");
@@ -68,11 +68,11 @@ fn token_keeps_only_safe_chars_and_40_max() {
 
 #[test]
 fn same_state_and_session_give_same_runtime_dir() {
-    let state = Path::new("/Users/someone/.local/state/cmux-fleet");
-    let a = runtime_dir(state, "cmux-fleet");
-    let b = runtime_dir(state, "cmux-fleet");
+    let state = Path::new("/Users/someone/.fleetmux/state");
+    let a = runtime_dir(state, "fleetmux");
+    let b = runtime_dir(state, "fleetmux");
     assert_eq!(a, b);
-    assert_eq!(a, state.join("fleetmux").join("cmux-fleet"));
+    assert_eq!(a, state.join("fleetmux").join("fleetmux"));
 
     // The token, not the raw session name, names the directory.
     assert_eq!(
@@ -82,19 +82,19 @@ fn same_state_and_session_give_same_runtime_dir() {
 
     // Different session or different state dir → different runtime dir.
     assert_ne!(
-        runtime_dir(state, "cmux-fleet"),
+        runtime_dir(state, "fleetmux"),
         runtime_dir(state, "other-fleet")
     );
     assert_ne!(
-        runtime_dir(state, "cmux-fleet"),
-        runtime_dir(Path::new("/var/tmp/state"), "cmux-fleet")
+        runtime_dir(state, "fleetmux"),
+        runtime_dir(Path::new("/var/tmp/state"), "fleetmux")
     );
 }
 
 #[test]
 fn socket_over_limit_is_error_not_tmp_fallback() {
     // Short path: exactly `<runtime>/ctl.sock`.
-    let short = Path::new("/var/tmp/fmx/cmux-fleet");
+    let short = Path::new("/var/tmp/fmx/fleetmux");
     assert_eq!(socket_path(short), Ok(short.join(SOCKET_NAME)));
 
     // `/` + name + `/ctl.sock` hits the limit exactly, then one byte over.
@@ -116,7 +116,7 @@ fn socket_over_limit_is_error_not_tmp_fallback() {
     // A realistic deep state dir: error carrying the byte length, never a /tmp path.
     let deep = runtime_dir(
         Path::new(&format!(
-            "/Users/someone/{}.local/state/cmux-fleet",
+            "/Users/someone/{}.fleetmux/state",
             "nested/".repeat(10)
         )),
         &"s".repeat(40),

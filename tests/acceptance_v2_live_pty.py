@@ -140,7 +140,7 @@ def main():
               'cmux_layout': False, 'passed': False, 'checks': []}
     with tempfile.TemporaryDirectory(prefix='fleet-v2-live-') as directory:
         root = Path(directory)
-        sock = '/tmp/cmux-fleet-live-' + uuid.uuid4().hex[:10] + '.sock'
+        sock = '/tmp/fleetmux-live-' + uuid.uuid4().hex[:10] + '.sock'
         home = pi_adapter.prepare_home(root/'pi-home', args.agent_dir)
         (home/'settings.json').write_text(json.dumps({'quietStartup': True, 'cacheWarming': 'off',
             'compaction': {'enabled': True}, 'retry': {'enabled': False},

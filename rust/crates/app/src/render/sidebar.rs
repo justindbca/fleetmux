@@ -1437,11 +1437,11 @@ mod tests {
     use ratatui::style::{Color, Modifier, Style};
 
     /// The kv `sidebar` value of plan §4.5: one fleet, the root.
-    const ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.cmux-fleet-fmx-demo"}]}"#;
+    const ONE: &str = r#"{"v":1,"current":"fleet-20261029-231820-ab12cd34","fleets":[{"id":"fleet-20261029-231820-ab12cd34","title":"fleetmux-demo","state":"running","line1":"运行中 · 监工+2 worker（1忙）","line2":"~/.fleetmux/fleets/fmx-demo"}]}"#;
 
     fn fleet(id: &str, title: &str, state: &str) -> String {
         format!(
-            r#"{{"id":"{id}","title":"{title}","state":"{state}","line1":"运行中 · 监工+1 worker（0忙）","line2":"~/.cmux-fleet-fmx-demo"}}"#
+            r#"{{"id":"{id}","title":"{title}","state":"{state}","line1":"运行中 · 监工+1 worker（0忙）","line2":"~/.fleetmux/fleets/fmx-demo"}}"#
         )
     }
 
@@ -1478,7 +1478,7 @@ mod tests {
         assert_eq!(e.title, "fleetmux-demo", "{ONE}");
         assert_eq!(e.state, "running", "{ONE}");
         assert_eq!(e.line1, "运行中 · 监工+2 worker（1忙）", "{ONE}");
-        assert_eq!(e.line2, "~/.cmux-fleet-fmx-demo", "{ONE}");
+        assert_eq!(e.line2, "~/.fleetmux/fleets/fmx-demo", "{ONE}");
         // Unknown keys are ignored (S2 adds `close` to the same value).
         let with_close = ONE.replace(r#""fleets":"#, r#""close":{"title":"x"},"fleets":"#);
         assert!(parse(&with_close).is_ok(), "{with_close}");

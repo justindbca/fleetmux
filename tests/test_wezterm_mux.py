@@ -8,7 +8,7 @@ tests). Everything runs in a private mux server the test started itself:
 * its own ``WEZTERM_UNIX_SOCKET`` in a short ``tmp_path`` and ``--no-auto-start`` on every call,
 * the pid the backend recorded is the only one killed, in a ``finally``.
 
-Nothing here touches the operator's WezTerm, ``~/.cmux-fleet`` or ``~/.local/state/cmux-fleet``.
+Nothing here touches the operator's WezTerm, ``~/.fleetmux`` or ``~/.fleetmux/state``.
 """
 import json
 import os

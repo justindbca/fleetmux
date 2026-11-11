@@ -1099,7 +1099,7 @@ def sidebar_closed_run(tmp_path, monkeypatch, **result):
     mgr = KeptRegistry({'run': str(run), 'surfaces': {}})
     mgr.kv['sidebar'] = json.dumps({'v': 1, 'current': run.name, 'fleets': [
         {'id': run.name, 'title': 'fmx-demo', 'state': 'stopping',
-         'line1': '正在关闭 · 监工+1 worker（1忙）', 'line2': '~/.cmux-fleet'},
+         'line1': '正在关闭 · 监工+1 worker（1忙）', 'line2': '~/.fleetmux'},
         {'id': 'fleet-child-a', 'title': 'child', 'state': 'running', 'line1': '运行中', 'line2': '~'}]},
         ensure_ascii=False)
     mgr.kv['stop_request'] = json.dumps({'v': 1, 'state': 'accepted'})
@@ -1197,7 +1197,7 @@ def test_closer_caps_the_merged_sidebar_at_sixteen_cards(tmp_path, monkeypatch):
     older = older_resumable_run(tmp_path, name='fleet-older-a', closed_at=1789000000)
     too_old = older_resumable_run(tmp_path, name='fleet-older-b', closed_at=1788000000)
     fleets = [{'id': SIDEBAR_CLOSED_RUN, 'title': 'fmx-demo', 'state': 'stopping',
-               'line1': '正在关闭 · 监工+1 worker（1忙）', 'line2': '~/.cmux-fleet'}]
+               'line1': '正在关闭 · 监工+1 worker（1忙）', 'line2': '~/.fleetmux'}]
     fleets += [{'id': 'fleet-c%d' % i, 'title': 'c%d' % i, 'state': 'running',
                 'line1': '运行中 · 1 worker', 'line2': '~'} for i in range(14)]
     mgr.kv['sidebar'] = json.dumps({'v': 1, 'current': SIDEBAR_CLOSED_RUN, 'fleets': fleets}, ensure_ascii=False)
@@ -1267,7 +1267,7 @@ def tree_closed_run(tmp_path, monkeypatch, **result):
     sub_record(run, 'ops', 'running')
     mgr.kv['sidebar'] = json.dumps({'v': 1, 'current': run.name, 'fleets': [
         {'id': run.name, 'title': 'fmx-demo', 'state': 'stopping', 'page': '',
-         'line1': '正在关闭 · 监工+3 worker（1忙）', 'line2': '~/.cmux-fleet'},
+         'line1': '正在关闭 · 监工+3 worker（1忙）', 'line2': '~/.fleetmux'},
         card('svc', 'running', '运行中 · 1 worker', page='svc'),
         card('M0', 'stopping', '运行中 · 1 worker', page='M0'),
         card('memx', 'paused', '运行中 · 1 worker', page='memx'),

@@ -12,7 +12,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && sed -n 30,50p scripts/acceptance42/lifecycle_fixture.py;
  echo '---'; sed -n 120,140p
  scripts/acceptance42/lifecycle_fixture.py; echo '---'; sed
@@ -30,7 +30,7 @@
 
 
  $ cd
- /Users/USER/Documents/projects/cmux-fleet-wt-acceptance42
+ /Users/USER/Documents/projects/fleetmux-wt-acceptance42
  && python3 - <<'PY'
  from pathlib import Path
 
@@ -195,6 +195,6 @@
 ── ⠧ Working ────────────────────────────────────────────────
 
 ─────────────────────────────────────────────────────────────
-~/.cmux-fleet-layout-finish/runs/fleet-20261030-140716-21e...
+~/.fleetmux/fleets/layout-finish/runs/fleet-20261030-140716-21e...
 ↑215k ↓106k R10M CH99.4% 45.1%/400k (auto)  workbuddy-ai/deep
 执行派工任务

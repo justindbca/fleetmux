@@ -262,7 +262,10 @@ def _wait(check, timeout: float = 5.0, step: float = 0.05) -> bool:
 
 
 def _exe(comm: str) -> str:
-    return os.path.basename(comm.strip()).lstrip('-')
+    """Executable basename without a login shell's ``-`` or ``.exe`` (the native Claude installer runs
+    ``.../bin/claude.exe``)."""
+    name = os.path.basename(comm.strip()).lstrip('-')
+    return name[:-4] if name.endswith('.exe') else name
 
 
 class FleetmuxSessionManager:
@@ -274,7 +277,7 @@ class FleetmuxSessionManager:
     nested_tabs = True
 
     # Instance fields the constructor sets:
-    session_name: str        # default 'cmux-fleet'
+    session_name: str        # default 'fleetmux'
     agents_title: str        # default 'Fleet agents'
     control_title: str       # default 'Fleet daemon'
     state_dir: Path          # resolved; default $FLEETMUX_STATE or paths.state_dir()
@@ -284,7 +287,7 @@ class FleetmuxSessionManager:
     def available(cls) -> bool:
         return availability_problem() is None
 
-    def __init__(self, session_name: str = 'cmux-fleet', agents_title: str = 'Fleet agents',
+    def __init__(self, session_name: str = 'fleetmux', agents_title: str = 'Fleet agents',
                  control_title: str = 'Fleet daemon', state_dir: Optional[Path] = None):
         """Keeps the four arguments, resolves ``state_dir`` (default ``$FLEETMUX_STATE`` or
         ``paths.state_dir()``, as the other backends) and sets ``last_error = ''``. Nothing is

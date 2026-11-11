@@ -59,7 +59,7 @@ def make(tmp_path, spec=None, workers=('worker-1',), **cfg_extra):
     """A v1 fleet with every agent idle and (optionally) one task submitted."""
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = dict({'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = dict({'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
                 'workers': list(workers), 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
                 'codex_home': str(tmp_path / 'codex-home'), 'quota_file': str(tmp_path / 'quota.json')}, **cfg_extra)
     (run / 'config.json').write_text(json.dumps(cfg))

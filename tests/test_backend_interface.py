@@ -96,7 +96,7 @@ def test_constructors_take_the_same_arguments():
     for cls in classes():
         have = shape(cls.__init__)
         have = [('session_name' if h[0] == 'self' else h[0],) + tuple(h[1:]) for h in have]
-        # both take (session_name='cmux-fleet', agents_title, control_title, state_dir); a backend may
+        # both take (session_name='fleetmux', agents_title, control_title, state_dir); a backend may
         # add trailing keyword-only options, never reorder or drop one of these four
         assert [h[0] for h in have][:4] == [h[0] for h in ref][:4], cls.__module__
 
@@ -182,8 +182,8 @@ def test_forwarding_module_picks_up_monkeypatched_functions(monkeypatch, tmp_pat
 
 def test_manager_for_still_builds_the_cmux_registry(tmp_path):
     """fleet's single construction point keeps its cmux behaviour (design §1, §5)."""
-    cfg = {'session': 'cmux-fleet:iface', 'cmux_state_dir': str(tmp_path)}
+    cfg = {'session': 'fleetmux:iface', 'cmux_state_dir': str(tmp_path)}
     mgr = fleet.manager_for(cfg)
     assert isinstance(mgr, backends.backend_class('cmux'))
-    assert mgr.session_name == 'cmux-fleet:iface'
-    assert mgr.meta_path == (tmp_path / 'cmux-fleet:iface.json').resolve()
+    assert mgr.session_name == 'fleetmux:iface'
+    assert mgr.meta_path == (tmp_path / 'fleetmux:iface.json').resolve()

@@ -19,7 +19,7 @@ def private_redis_v2():
     binary = shutil.which("redis-server")
     if binary is None:
         pytest.skip("redis-server unavailable")
-    sock = "/tmp/cmux-fleet-" + uuid.uuid4().hex[:12] + ".sock"
+    sock = "/tmp/fleetmux-" + uuid.uuid4().hex[:12] + ".sock"
     with tempfile.TemporaryDirectory(prefix="fleet-bus-v2-") as directory:
         logpath = Path(directory) / "redis.log"
         with logpath.open("wb") as log:

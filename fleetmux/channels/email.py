@@ -1,5 +1,5 @@
-"""Email adapter (package P5; docs/design.md §53, contracts §8 邮件专项). Ported in spirit from
-``~/.cmux-fleet-channels/ref/curve_report.py`` (SMTP_SSL + app password), with every business part removed.
+"""Email adapter (package P5; docs/design.md §53, contracts §8 邮件专项). Ported in spirit from an
+earlier private SMTP report script (SMTP_SSL + app password), with every business part removed.
 
 Account file ``channels/email-<account>.env`` (none of these is a roster key; nothing relaxes the sender check):
 ``ALLOW`` (sender addresses, lower case), ``ADDRESS``, ``APP_PASSWORD``, ``SMTP_HOST`` / ``SMTP_PORT`` (default

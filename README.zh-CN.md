@@ -84,8 +84,8 @@
   ["verdict", "param", "evidence"]}}`，由负责该角色的 worker（每个角色一份提示词，经 `--roles` 提供；工具与 skill 经 `--worker-kit`
   载入）做一次完整复盘：读持仓和行情数据、重新检验策略的前提，用 JSON 作答。指定了 `to` 的请求不经监工回合；同时到达的多个触发按
   `--max-busy` 排队；回复字段先由 daemon 校验，你的程序再去读（`fleetmux results --drain`）。请求没有全局时限：过期的请求只占住
-  它自己的槽位；卡死的 Claude Code worker 会恢复它自己的会话，并重新收到同一条请求。`--clear-after-result` 让每次复盘都从干净的
-  上下文开始。fleet 不下单，也不认交易日历：结论怎么用由你的程序决定，下单走它自己的校验，开收盘前后由它对 fleet 执行
+  它自己的槽位；卡死的 Claude Code worker 会恢复它自己的会话，并重新收到同一条请求。
+  fleet 不下单，也不认交易日历：结论怎么用由你的程序决定，下单走它自己的校验，开收盘前后由它对 fleet 执行
   `pause` / `resume`。
 - **一个中等强度模型带一群免费弱模型做日常活。** 翻译、起草、摘要、整理，难点主要在量大。中等强度的监工（经 Pi 或 Codex）把活切成
   小块，一个章节、一批文档、一个主题，并声明任务必须产出的文件、每份的长度和必含内容。worker 经 Pi 用免费模型做这些小块（名单每行
@@ -99,8 +99,8 @@
   必含章节；daemon 按字面验收，给这次运行设硬性时限，结束时关闭工作区。
 - **常驻判定服务**（`service`）。另一个程序用 `fleetmux request` 发 JSON 请求；指定了 `to` 的请求直接交给该角色的 worker
   （`--worker-names exit-1,reentry-1,...`，每个角色一份提示词，经 `--roles` 提供）。daemon 按 `reply.required` / `reply.allowed`
-  校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。对无状态的一次性任务（例如用小模型从会话记录里提取记忆），
-  `--clear-after-result` 在每次作答后清空上下文。详见英文版[服务模式](README.md#service-mode-resident-fleet)。
+  校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。
+  详见英文版[服务模式](README.md#service-mode-resident-fleet)。
 - **功能开发与独立复核**（`dev_task`）。监工拆分功能，worker 实现，另设复核 worker 评审；复核至多三轮，剩下的 P0 / P1 交给你，
   而不是开第四轮。只有交付闸的 `test_cmd` 通过、代码合并并交给发布队列，任务才算完成。接口契约（`"contracts": true`）在开工前
   冻结共用接口。
@@ -117,13 +117,13 @@
 - **在哪都能跑，在哪都能看。** 在 Linux 上由 `fleetmux` 后端取代 cmux；`fleetmux attach`（也可经 `ssh -t`）或 `fleetmux gui` 能从另一个
   终端看实时页面，手机上的终端应用也行。
 
-规划中、尚未合并：聊天通道（Telegram、飞书、微信、邮件）作为监工的第二块键盘，结果和「等人处理」的事项推回同一个对话。
+聊天通道（Telegram、飞书、微信、邮件、Slack）是监工的第二块键盘，结果和「等人处理」的事项推回同一个对话：`fleetmux channel`，见 [contracts §8](docs/contracts.md)。
 
 ## 安装
 
 只有一个命令：`fleetmux <subcommand>`（如 `fleetmux start`、`fleetmux status`、`fleetmux channel`）。二进制自己跑终端子命令（`server`、
-`attach`、`reap`、`web`、`gui --runtime D`），其余 fleet 子命令转交同一发版的 Python 命令行（docs/design.md §50）。用项目旧名装好的环境
-照常可用：旧的命令名、环境变量名和发版目录名继续作为别名（docs/design.md §50）。
+`attach`、`reap`、`web`、`gui --runtime D`），其余 fleet 子命令转交同一发版的 Python 命令行（docs/design.md §50）。用项目旧名装好的机器
+用 `fleetmux home migrate` 把数据一次搬过来（docs/design.md §50.1）。
 
 ```bash
 git clone https://github.com/justindbca/fleetmux && cd fleetmux

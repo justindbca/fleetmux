@@ -34,7 +34,7 @@ const LOG = env.FLEETMUX_DSH_LOG || ""
 const KEY_ENV = "FLEETMUX_DSH_API_KEY"
 const ARG_KEYS = ["command", "file_path", "path", "pattern", "url"]
 
-export const name = "cmux-fleet-bridge"  // legacy name, kept for compatibility (dsh_adapter.PLUGIN_ID)
+export const name = "fleetmux-bridge"  // dsh_adapter.PLUGIN_ID
 export const inject = ["agents", "tools"]
 
 export function apply(ctx) {

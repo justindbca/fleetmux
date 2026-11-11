@@ -13,7 +13,19 @@ fleetmux <command> --help";
 fn main() -> ExitCode {
     let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let first = raw.first().map(|a| a.to_str().unwrap_or(""));
-    let args = || -> Vec<String> { std::env::args().skip(1).collect() };
+    // The server / attach / reap / web / gui options are all UTF-8 (`std::env::args` would panic on anything
+    // else); a lossy copy would point --runtime at another directory, so a bad argument is a usage error.
+    let own = matches!(first, Some("server" | "attach" | "reap" | "web"))
+        || (first == Some("gui") && raw[1..].iter().any(|a| a == "--runtime"));
+    if own && raw.iter().any(|a| a.to_str().is_none()) {
+        eprintln!("fleetmux: arguments must be valid UTF-8\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    let args = || -> Vec<String> {
+        raw.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    };
     match first {
         Some("--version") => {
             println!(

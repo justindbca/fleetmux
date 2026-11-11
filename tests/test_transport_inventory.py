@@ -8,7 +8,7 @@ from fleetmux import transport_inventory as inventory
 
 def prepare(monkeypatch, tmp_path, version=1):
     home = tmp_path/'home'
-    run = home/'.cmux-fleet-test/runs/fleet-fixture'
+    run = home/'.fleetmux/fleets/test/runs/fleet-fixture'
     run.mkdir(parents=True)
     cfg = run/'config.json'
     data = {'run': str(run), 'redis_socket': str(run/'private.sock'), 'workers': ['worker-1'],
@@ -52,7 +52,7 @@ def test_inventory_counts_messages_without_reading_them(monkeypatch, tmp_path):
 
 def test_missing_transport_is_legacy_and_registry_is_not_liveness(monkeypatch, tmp_path):
     home, _, _ = prepare(monkeypatch, tmp_path, None)
-    registry = home/'.cmux-fleet-test/state/cmux-fleet.json'
+    registry = home/'.fleetmux/fleets/test/state/fleetmux.json'
     registry.parent.mkdir(parents=True)
     registry.write_text(json.dumps({'workspace': 'old-workspace', 'surfaces': {'old': {}}}))
     monkeypatch.setattr(inventory.subprocess, 'run', lambda args, **kw: subprocess.CompletedProcess(args, 0, '', ''))

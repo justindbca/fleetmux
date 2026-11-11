@@ -205,7 +205,7 @@ def append_rollout(sessions, thread, cwd, rows):
 def fx(tmp_path):
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': ['worker-1'], 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
            'chrome_script': str(tmp_path / 'broker.sh'), 'codex_home': str(tmp_path / 'codex-home')}
     (run / 'config.json').write_text(json.dumps(cfg))
@@ -501,7 +501,7 @@ def test_busy_native_subagent_defers_rotation(fx):
 
 def test_notify_requires_real_completion_and_dedupes(tmp_path, monkeypatch):
     run = tmp_path / 'run'
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-t.sock', 'workers': ['worker-1'], 'python': 'py',
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-t.sock', 'workers': ['worker-1'], 'python': 'py',
            'codex_home': str(tmp_path / 'codex-home')}
     (tmp_path / 'c.json').write_text(json.dumps(cfg))
     r = FakeRedis()
@@ -520,7 +520,7 @@ def test_notify_requires_real_completion_and_dedupes(tmp_path, monkeypatch):
 
 
 def test_connect_refuses_non_private_socket():
-    for sock in ('/tmp/redis.sock', '/tmp/other-fleet-x.sock', 'cmux-fleet-x.sock', '/var/run/redis.sock'):
+    for sock in ('/tmp/redis.sock', '/tmp/other-fleet-x.sock', 'fleetmux-x.sock', '/var/run/redis.sock'):
         with pytest.raises(ValueError):
             fleet.connect({'redis_socket': sock})
 
@@ -811,7 +811,7 @@ def cfx(tmp_path, monkeypatch):
     (kit / 'mcp.json').write_text('{"mcpServers": {}}')
     run = tmp_path / 'run'
     (run / 'workspace').mkdir(parents=True)
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': ['worker-1'], 'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000,
            'codex_home': str(tmp_path / 'codex-home'), 'worker_cli': 'claude', 'worker_kit': str(kit),
            'claude': '/bin/claude', 'claude_window': 200000}
@@ -859,7 +859,7 @@ def test_claude_multiline_message_goes_through_a_file(cfx):
 
 
 def test_claude_stop_skips_background_work(tmp_path, monkeypatch):
-    (tmp_path / 'c.json').write_text(json.dumps({'redis_socket': '/tmp/cmux-fleet-t.sock'}))
+    (tmp_path / 'c.json').write_text(json.dumps({'redis_socket': '/tmp/fleetmux-t.sock'}))
     r = FakeRedis()
     monkeypatch.setattr(fleet, 'connect', lambda cfg: r)
     busy = json.dumps({'session_id': 's1', 'transcript_path': '/x', 'last_assistant_message': 'wait',
@@ -903,7 +903,7 @@ def test_claude_turn_must_answer_the_current_delivery_once(cfx):
 
 
 def test_claude_stop_reads_delivery_id_from_transcript(tmp_path, monkeypatch):
-    (tmp_path / 'c.json').write_text(json.dumps({'redis_socket': '/tmp/cmux-fleet-t.sock'}))
+    (tmp_path / 'c.json').write_text(json.dumps({'redis_socket': '/tmp/fleetmux-t.sock'}))
     r = FakeRedis()
     monkeypatch.setattr(fleet, 'connect', lambda cfg: r)
     tr = tmp_path / 't.jsonl'
@@ -995,7 +995,7 @@ def sfx(tmp_path):
     roles = tmp_path / 'roles'
     roles.mkdir()
     (roles / 'exit.md').write_text('You judge exits. Propose only trail_dd.')
-    cfg = {'run': str(run), 'redis_socket': '/tmp/cmux-fleet-test.sock', 'python': sys.executable,
+    cfg = {'run': str(run), 'redis_socket': '/tmp/fleetmux-test.sock', 'python': sys.executable,
            'workers': ['exit', 'reentry'], 'mode': 'service', 'roles': str(roles), 'max_busy': 1,
            'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 95000, 'codex_home': str(tmp_path / 'codex-home')}
     (run / 'config.json').write_text(json.dumps(cfg))

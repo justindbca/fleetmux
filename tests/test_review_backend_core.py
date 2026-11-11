@@ -1,4 +1,4 @@
-"""Review repro (cmux-fleet-backend-core, 41632170..1462b17a). Copy into tests/ and run with pytest."""
+"""Review repro (fleetmux-backend-core, 41632170..1462b17a). Copy into tests/ and run with pytest."""
 import sys
 from pathlib import Path
 from types import SimpleNamespace

@@ -1,7 +1,7 @@
 """Regression: no test may write the operator's live fleet namespace (operator report, pytest-8260).
 
 `pytest-8260/test_resume_keeps_the_hot_edit0` (= `test_kit_fleet.test_resume_keeps_the_hot_edited_copy_without_the_kit`)
-wrote the live `~/.cmux-fleet-layout-finish/latest.json` and pointed it at a temporary redis socket: the test
+wrote the live `~/.fleetmux/fleets/layout-finish/latest.json` and pointed it at a temporary redis socket: the test
 process had inherited `FLEETMUX_HOME` from the running fleet, so `start` recorded that live home in the run's
 config.json, and `start --resume` re-pinned `fleet.LATEST` from the config and saved it there.
 
@@ -27,7 +27,7 @@ def test_every_test_runs_in_its_own_fleet_namespace(isolated_fleet_namespace):
     assert fleet.HOME == home and fleet.LATEST == home / 'latest.json'
     assert cmux_manager.STATE_DIR == state
     # the operator's real locations are never the ones a test would write
-    assert fleet.HOME != Path.home() / '.cmux-fleet'
+    assert fleet.HOME != Path.home() / '.fleetmux'
     assert fleet.HOME != Path.home() / '.fleetmux'
     assert str(fleet.LATEST).startswith(str(home.parent))
 

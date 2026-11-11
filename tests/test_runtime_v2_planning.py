@@ -11,7 +11,7 @@ from fleetmux.message_bus import MessageBus
 
 
 class Source(FakeRedis):
-    connection_pool = SimpleNamespace(connection_kwargs={'decode_responses':True,'path':'/tmp/cmux-fleet-unit.sock'})
+    connection_pool = SimpleNamespace(connection_kwargs={'decode_responses':True,'path':'/tmp/fleetmux-unit.sock'})
     def type(self, k):
         return 'hash' if k in self.h else 'list' if k in self.l else 'string' if k in self.kv else 'none'
 

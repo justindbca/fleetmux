@@ -574,7 +574,7 @@ def test_tui_half_opens_the_session_the_server_half_bound():
     # there yet, the tab stayed on the home screen and a typed line opened a second session (E2E C3/C4/R3/R4).
     # tui.js (the TUI loads it from the plugin directory) opens the bound session by id, once it is bound.
     out = harness('tui_shows_bound_session')
-    assert out['tui_present'] is True and out['tui_id'] == 'cmux-fleet.bridge.tui'
+    assert out['tui_present'] is True and out['tui_id'] == 'fleetmux.bridge.tui'
     assert out['navigations_before_create'] == 0
     assert out['navigations'] == [{'type': 'session', 'sessionID': 'ses_harness01'}]
     (startup,) = [f for f in out['frames'] if f['kind'] == 'startup']

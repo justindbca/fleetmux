@@ -40,7 +40,7 @@ REAL = Path(os.environ.get('FLEETMUX_REAL_BIN') or ROOT / 'rust/target/debug/fle
 # bound before any HOME change. FM4_EVIDENCE_ROOT wins; else M4E_ROOT, the kept root the m4 gate exports for the
 # integration slot (scripts/fleetmux_gate.sh: $HOME/.m4e/fm4-integ); else py-1's own slot root.
 BASE = Path(os.environ.get('FM4_EVIDENCE_ROOT') or os.environ.get('M4E_ROOT') or Path.home() / '.m4e' / 'fm4-py')
-ROOT_SESSION = 'cmux-fleet'
+ROOT_SESSION = 'fleetmux'
 PAGE_ID = re.compile(r'[A-Za-z0-9._-]{1,64}\Z')  # design §4.1
 SOCK_LIMIT = 103
 
@@ -318,7 +318,7 @@ class Servers:
         return self.track(fm.FleetmuxSessionManager(session, state_dir=self.state))
 
     def child_mgr(self, page: str, root_session: str = ROOT_SESSION):
-        """``FleetmuxSessionManager('cmux-fleet:<page>')`` bound to ``page`` of the root's server (design §6.1 S0)."""
+        """``FleetmuxSessionManager('fleetmux:<page>')`` bound to ``page`` of the root's server (design §6.1 S0)."""
         mgr = self.track(fm.FleetmuxSessionManager(root_session + ':' + page, state_dir=self.state))
         need(mgr, 'bind_page')(root_session, page)
         return mgr
