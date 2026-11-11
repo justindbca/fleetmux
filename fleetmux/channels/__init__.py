@@ -113,8 +113,11 @@ def adapter_class(type_):
 # ------------------------------------------------------------------ push events (roster ``push:``)
 # design draft §5.1. ``escalation`` (worker blocked / non-delete dialog waiting for the supervisor) is
 # information only and off unless listed.
-PUSH_EVENTS = ('result', 'task_done', 'prompt_wait', 'escalation', 'run_closed', 'daemon_down', 'security')
-DEFAULT_PUSH = ('result', 'task_done', 'prompt_wait', 'run_closed', 'daemon_down', 'security')  # security: P8a alerts, on
+# ``tab_crashloop`` (design §31): a ``restart: on-exit`` companion tab stopped being reopened; on.
+PUSH_EVENTS = ('result', 'task_done', 'prompt_wait', 'escalation', 'run_closed', 'daemon_down', 'security',
+               'tab_crashloop')
+DEFAULT_PUSH = ('result', 'task_done', 'prompt_wait', 'run_closed', 'daemon_down', 'security',
+                'tab_crashloop')  # security: P8a alerts, on
 # Outbound queue items also carry these two: a receipt to an inbound message, and `channel send` by hand.
 OUT_EVENTS = PUSH_EVENTS + ('reply', 'manual')
 

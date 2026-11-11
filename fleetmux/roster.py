@@ -27,6 +27,8 @@
     tabs:                     # optional companion tabs (docs/design.md §31): terminal programs (no agents)
       - {name: shell, command: python3 -m http.server 8895, cwd: ., env: {PORT: '8895'}}
                               # opened with this fleet, as tabs after control
+      - {name: exec, command: python3 exec.py, restart: on-exit,      # optional: reopened when it exits
+         backoff: {first_s: 5, max_s: 300}, crashloop: {restarts: 5, minutes: 10}}  # (defaults shown)
 
 The daemon re-reads the file while running (hot add / graceful remove; advisor on / off without
 a restart, also via `fleet advisor on|off` or the supervisor's decision key). Optional `channels:` (docs/design.md
@@ -545,13 +547,17 @@ def load_subfleets(path):
 
 
 # ------------------------------------------------------------------ companion tabs (docs/design.md §31)
-TAB_KEYS = {'name', 'command', 'cwd', 'env'}
+TAB_KEYS = {'name', 'command', 'cwd', 'env', 'restart', 'backoff', 'crashloop'}
+TAB_RESTART = 'on-exit'  # the one value of ``restart:`` (absent = opened once, §31)
+TAB_BACKOFF = {'first_s': 5, 'max_s': 300}  # seconds before the 1st restart, doubling up to max_s
+TAB_CRASHLOOP = {'restarts': 5, 'minutes': 10}  # this many restarts within the window = stop restarting
 TAB_NAME_RE = r'[a-z][a-z0-9-]*'
 ENV_NAME_RE = r'[A-Za-z_][A-Za-z0-9_]*'
 
 
 def tab_entries(value, base):
-    """(entries, errors) of the optional ``tabs:`` list: each entry {name, command, cwd (absolute), env}.
+    """(entries, errors) of the optional ``tabs:`` list: each entry {name, command, cwd (absolute), env}, plus
+    ``restart: {first_s, max_s, restarts, window_s}`` for an entry with ``restart: on-exit`` (§31 keepalive).
     ``cwd`` is relative to the roster's directory (``~`` expanded), default that directory, and must exist
     (the tab runs ``cd <cwd> && exec ...``)."""
     if value is None:
@@ -582,11 +588,48 @@ def tab_entries(value, base):
         if not isinstance(env, dict) or not all(isinstance(k, str) and re.fullmatch(ENV_NAME_RE, k)
                                                 and isinstance(v, str) for k, v in env.items()):
             bad.append('env must map variable names to strings (quote numbers: PORT: "8895")')
+        restart, more = tab_restart(item)
+        bad += more
         if bad:
             errors += [where + ': ' + b for b in bad]
         else:
-            entries.append({'name': name, 'command': command, 'cwd': str(path.resolve()), 'env': dict(env)})
+            entry = {'name': name, 'command': command, 'cwd': str(path.resolve()), 'env': dict(env)}
+            if restart:
+                entry['restart'] = restart
+            entries.append(entry)
     return entries, errors
+
+
+def _positive(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < float('inf')
+
+
+def tab_restart(item):
+    """(restart settings or None, errors) of one tab entry: ``restart: on-exit`` with optional
+    ``backoff: {first_s, max_s}`` and ``crashloop: {restarts, minutes}`` (defaults TAB_BACKOFF / TAB_CRASHLOOP)."""
+    if 'restart' not in item:
+        extra = [k for k in ('backoff', 'crashloop') if k in item]
+        return None, ([', '.join(extra) + ' need restart: ' + TAB_RESTART] if extra else [])
+    if item['restart'] != TAB_RESTART:
+        return None, ['restart must be ' + TAB_RESTART + ' (or left out: opened once)']
+    errors, out = [], {}
+    for key, defaults in (('backoff', TAB_BACKOFF), ('crashloop', TAB_CRASHLOOP)):
+        value = item.get(key) or {}
+        if not isinstance(value, dict) or not set(value) <= set(defaults):
+            errors.append(key + ' must be a mapping with ' + ', '.join(sorted(defaults)) + ' only')
+            continue
+        out.update(defaults, **value)
+    if errors:
+        return None, errors
+    if not (_positive(out['first_s']) and _positive(out['max_s']) and out['first_s'] <= out['max_s']):
+        errors.append('backoff first_s / max_s must be positive seconds, first_s <= max_s')
+    if not (isinstance(out['restarts'], int) and not isinstance(out['restarts'], bool) and out['restarts'] >= 1
+            and _positive(out['minutes'])):
+        errors.append('crashloop restarts must be an integer >= 1 and minutes a positive number')
+    if errors:
+        return None, errors
+    return {'first_s': float(out['first_s']), 'max_s': float(out['max_s']), 'restarts': out['restarts'],
+            'window_s': float(out['minutes']) * 60}, []
 
 
 def tabs(raw, base):

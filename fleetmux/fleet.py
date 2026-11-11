@@ -2455,6 +2455,7 @@ class Fleet:
         self.roster_followed = None  # day or night roster file (night.json picks it)
         self.max_busy_start = self.cfg.get('max_busy') or 0  # --max-busy; a roster `max_busy:` overrides it live
         self.tab_specs, self.tabs_opened = None, False  # roster `tabs:` (§31): opened once per daemon start
+        self.tab_watch = {}  # tabs opened by this daemon: keepalive / `tab restart` state (tabs.watch, §31)
         self.service = self.cfg.get('mode') == 'service'
         self.stopping = False
         self.next_liveness = 0
@@ -7971,6 +7972,7 @@ class Fleet:
                           ('result', self.write_result), ('contracts', self.sync_contract_files),
                           ('subfleet', lambda: subfleet.tick(self)),  # side effects, outside any v2 transaction
                           ('tabs', lambda: tabs.open_all(self)),  # companion tabs (§31): once per daemon start
+                          ('tab_watch', lambda: tabs.watch(self)),  # §31 restart: on-exit + `tab restart`
                           ('fleetmux', lambda: fleetmux_sidebar.tick(self)),  # fleetmux sidebar cards (kv sidebar)
                           ('escalations', self.escalation_tick), ('waiting', self.waiting_tick),
                           ('notices', self.relay_notices), ('vetoes', self.apply_vetoes),
@@ -9284,6 +9286,22 @@ def request(cfg, event, wait=30):
     return {'status': 'pending', 'request_id': event['request_id']}
 
 
+def tab_restart(cfg, name, wait=30):
+    """`fleetmux tab restart NAME` (§31): only a tab the run's roster declares; the daemon reopens it."""
+    try:
+        declared = [t['name'] for t in roster.tabs(Path(cfg['roster']).read_bytes(), Path(cfg['roster']).parent)]
+    except (KeyError, TypeError, OSError, ValueError) as exc:
+        return {'status': 'rejected', 'reason': 'no roster with tabs: for this run (' + str(exc)[:200] + ')'}
+    if name not in declared:
+        return {'status': 'rejected', 'reason': 'the roster declares no tab ' + name + ' (tabs: '
+                + (', '.join(declared) or 'none') + ')'}
+    r = connect(cfg)
+    try:
+        return tabs.request_restart(r, name, wait=wait)
+    finally:
+        r.close(); r.connection_pool.disconnect()
+
+
 def status(cfg):
     if cfg.get('transport_version', 1) == 2:
         from fleetmux.control_view import snapshot
@@ -9539,6 +9557,13 @@ def cli():
     hmm.add_argument('--dry-run', action='store_true', help='print the plan, change nothing')
     sp.add_argument('--raise', dest='raise_', action='append', metavar='LIMIT=VALUE',
                     help='after a budget pause: raise a budget line (e.g. max_calls=400); repeatable')
+    tb = sub.add_parser('tab', help='companion tabs (roster tabs:, docs/design.md §31)')
+    tb_sub = tb.add_subparsers(dest='tab_cmd', required=True)
+    tr = tb_sub.add_parser('restart', help='reopen a tab of the running daemon now and forget its crash history '
+                                           '(the way back after tab.crashloop); prints accepted / rejected / failed / pending')
+    tr.add_argument('name')
+    tr.add_argument('--config', default=str(LATEST))
+    tr.add_argument('--wait', type=int, default=30, help='seconds to wait for the daemon (default 30)')
     av = sub.add_parser('advisor', help='turn the advisor on / off for a run: edits its roster (--roster, else '
                                         '<run>/roster.yaml); the daemon applies it without a restart')
     av.add_argument('state', choices=('on', 'off'))
@@ -9702,6 +9727,10 @@ def main(argv=None):
             print(json.dumps(night_cmd(cfg, args.state), ensure_ascii=False))
         elif args.cmd == 'advisor':
             print(advisor_switch(cfg, args.state == 'on'))
+        elif args.cmd == 'tab':
+            ans = tab_restart(cfg, args.name, args.wait)
+            print(json.dumps(ans, ensure_ascii=False))
+            sys.exit({'accepted': 0, 'rejected': 2, 'failed': 2}.get(ans.get('status'), 3))
         elif args.cmd == 'subfleet':
             print(json.dumps(subfleet.cli_spawn(cfg, args), ensure_ascii=False))
         elif args.cmd == 'chrome':

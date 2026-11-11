@@ -423,7 +423,7 @@ def test_cli_parser_existing_subcommands_unchanged():
 
 def test_cli_parser_adds_channel_with_five_subcommands(tmp_path, monkeypatch):
     p = fleet.cli()
-    assert set(commands(p)) - BASE_COMMANDS == {'channel', 'claude-pretool', 'home', 'operator', 'setup'}  # main §48 / §52 / §50.1
+    assert set(commands(p)) - BASE_COMMANDS == {'channel', 'claude-pretool', 'home', 'operator', 'setup', 'tab'}  # main §48 / §52 / §50.1 / §31
     assert set(commands(commands(p)['channel'])) == {'login', 'test', 'send', 'status', 'actor', 'audit', 'approve'}
     assert p.parse_args(['channel', 'actor', 'c.json']).cfg == 'c.json'
     with pytest.raises(SystemExit) as exc:
