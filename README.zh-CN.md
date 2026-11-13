@@ -152,6 +152,16 @@
 
 要求：`redis-server` ≥ 7.0、`tmux` ≥ 3.4、`git` ≥ 2.30，加一个 agent 命令行（Claude Code、Codex、pi 或 opencode，只装名单里用到的；pi 另需 Node.js ≥ 22）。完整表格见英文版 [Requirements](README.md#requirements)。
 
+### 从 PyPI 或 crates.io 安装
+
+```bash
+uv tool install fleetmux      # 或：pip install fleetmux
+```
+
+PyPI 的安装包（Apple 芯片 macOS 11+、Intel macOS 10.12+、glibc 2.39+ 的 Linux）带着与 GitHub Release 相同的
+预编译 `fleetmux` 和 `fleetmux-web`，装完即可用 `fleetmux`。系统软件包和 pi 照上面第 1、3 步装。
+`cargo install fleetmux` 只编终端程序；fleet 命令还需要同版本的 Python 包。
+
 ### 从源码安装（开发用）
 
 ```bash

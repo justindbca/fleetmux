@@ -123,7 +123,9 @@ KILL_REAP_GRACE_MS = 500
 REMOVED_ON_STOP = ('ctl.sock', 'server.json', 'panes.json')
 KEPT_ON_STOP = ('server.log', 'layout.json', 'start.lock')
 
-KEYS_FILE = Path(__file__).resolve().parents[2] / 'rust' / 'protocol' / 'keys.json'
+#: Packaged copy of rust/protocol/keys.json (tests/test_packaged_keys.py keeps the two identical), so an installed
+#: wheel finds it without the repository.
+KEYS_FILE = Path(__file__).resolve().with_name('keys.json')
 #: Key names ``send_key`` knows -> the bytes they stand for (rust/protocol/keys.json, plan §3.0).
 KEYS: Dict[str, str] = json.loads(KEYS_FILE.read_text(encoding='utf-8'))['keys']
 

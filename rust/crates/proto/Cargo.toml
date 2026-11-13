@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "fleetmux wire protocol: frame codec shared by the fleetmux terminal and its web window."
 
 [dependencies]
 serde.workspace = true

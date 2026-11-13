@@ -238,6 +238,17 @@ moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
 Options: `FLEETMUX_VERSION=0.2.1` installs a given release; `FLEETMUX_RELEASES` and `FLEETMUX_BIN_DIR` move the
 install and the links (see the header of `scripts/install.sh`).
 
+### From PyPI or crates.io
+
+```bash
+uv tool install fleetmux      # or: pip install fleetmux
+```
+
+The PyPI wheels (macOS 11+ on Apple silicon, macOS 10.12+ on Intel, Linux with glibc 2.39+) carry the same
+prebuilt `fleetmux` and `fleetmux-web` binaries as the GitHub release, so `fleetmux` works right after the install.
+Install the system packages and pi as in steps 1 and 3 above. `cargo install fleetmux` builds only the terminal
+binary; fleet commands also need the Python package of the same version.
+
 ### From source (development)
 
 ```bash

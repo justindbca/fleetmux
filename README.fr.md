@@ -210,6 +210,17 @@ nom du projet déplace ses données une fois avec `fleetmux home migrate` (docs/
 
 Prérequis : `redis-server` ≥ 7.0, `tmux` ≥ 3.4, `git` ≥ 2.30, et un CLI d'agent (Claude Code, Codex, pi ou opencode ; seulement ceux que votre roster utilise ; pi demande aussi Node.js ≥ 22). Tableau complet : [Requirements](README.md#requirements).
 
+### Depuis PyPI ou crates.io
+
+```bash
+uv tool install fleetmux      # ou : pip install fleetmux
+```
+
+Les wheels PyPI (macOS 11+ sur Apple silicon, macOS 10.12+ sur Intel, Linux avec glibc 2.39+) contiennent les mêmes
+binaires `fleetmux` et `fleetmux-web` précompilés que la release GitHub : `fleetmux` fonctionne dès l'installation.
+Installez les paquets système et pi comme aux étapes 1 et 3. `cargo install fleetmux` compile seulement le binaire
+du terminal ; les commandes de flotte demandent aussi le paquet Python de la même version.
+
 ### Depuis les sources (développement)
 
 ```bash

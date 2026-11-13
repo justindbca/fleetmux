@@ -10,7 +10,12 @@ import stat
 import sys
 
 
-DEFAULT_ROOT = Path(__file__).resolve().parents[1] / '.runtime' / 'redis'
+_CHECKOUT = Path(__file__).resolve().parents[1]
+# A checkout or release directory keeps its runtime beside the code; an installed wheel (site-packages) keeps it
+# in the fleetmux state directory instead.
+DEFAULT_ROOT = (_CHECKOUT / '.runtime' / 'redis' if (_CHECKOUT / 'pyproject.toml').is_file()
+                else Path(os.environ.get('FLEETMUX_STATE') or Path.home() / '.fleetmux' / 'state').expanduser()
+                / 'redis-runtime')
 # sockaddr_un.sun_path includes a terminating NUL: 104 bytes on macOS, 108 on Linux.
 SOCKET_PATH_LIMIT = 103 if sys.platform == 'darwin' else 107
 LEGACY_SOCKET = re.compile(r'/tmp/fleetmux-[A-Za-z0-9_.-]+\.sock\Z')

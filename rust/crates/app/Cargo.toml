@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../../README.md"
+description = "fleetmux: run AI agent teams. A supervisor agent leads worker agents (Claude Code, Codex, Pi, opencode), and the program, not the model, accepts the work. This crate installs the terminal binary; fleet commands also need the Python CLI of the same release (see the README)."
 
 [[bin]]
 name = "fleetmux"
