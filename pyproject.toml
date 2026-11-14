@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fleetmux"
-version = "0.2.2"
+version = "0.2.3"
 description = "Run AI teams: a supervisor agent leads worker agents (Claude Code, Codex, Pi, opencode), and the program, not the model, accepts the work."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -27,7 +27,7 @@ include = ["fleetmux*"]
 
 [tool.setuptools.package-data]
 "fleetmux.backends" = ["keys.json"]
-fleetmux = ["agents/*.md", "agents/devflow/*.md", "agents/devflow/*.yaml", "pi_extension*.ts", "config/*.yaml",
+fleetmux = ["deps.yaml", "agents/*.md", "agents/devflow/*.md", "agents/devflow/*.yaml", "pi_extension*.ts", "config/*.yaml",
             "dsh_bridge.mjs", "opencode_plugin/*.js", "opencode_plugin/package.json"]
 
 [tool.pytest.ini_options]

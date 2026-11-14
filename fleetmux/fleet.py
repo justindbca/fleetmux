@@ -28,6 +28,12 @@ Subcommands
   pi-event  Pi settled/session extension callback (internal)
   actor     exec the configured CLI for one agent (internal)
 """
+import os
+import sys
+
+if __name__ == '__main__' and sys.path and os.path.realpath(sys.path[0] or '.') == os.path.dirname(os.path.realpath(__file__)):
+    sys.path.pop(0)  # run as a script (or via a symlink): fleetmux/platform.py must not shadow the stdlib module
+
 import argparse
 import collections
 import copy
@@ -35,14 +41,12 @@ import fcntl
 import hashlib
 import json
 import math
-import os
 import re
 import shlex
 import shutil
 import signal
 import stat
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -8980,7 +8984,8 @@ def start(args):
                 'opencode': opencode, 'dsh': dsh, 'redis-server': redis_server}
     missing = [n for n in sorted(clis | {'redis-server'}) if not binaries[n] or not shutil.which(binaries[n])]
     if missing:
-        raise SystemExit('binaries not found: ' + ', '.join(missing) + ' (pass the corresponding binary flag)')
+        raise SystemExit('binaries not found: ' + ', '.join(missing) + '. Install them with `fleetmux setup --install`'
+                         ' (it asks first), or pass the corresponding binary flag')
     queue_ok, codex_version, queue_why = codex_queue.capability(codex)  # pinned for the run (config.json)
     if 'codex' in clis and not queue_ok:
         print('official Codex: `codex queue` channel unsupported (' + queue_why + '); Codex slots use typed delivery',
@@ -9549,6 +9554,10 @@ def cli():
     su = sub.add_parser('setup', help='probe this machine\'s agent CLIs, logins and models; rank them and cache the '
                         'default supervisor x worker pair (docs/design.md §52)')
     su.add_argument('--json', action='store_true', help='print the cached result as JSON instead of the table')
+    su.add_argument('--install', action='store_true',
+                    help='first install what a fleet needs and this machine lacks (redis-server, git, tmux, Node.js '
+                         '22, pi), after you confirm; programs already there are never changed')
+    su.add_argument('--yes', action='store_true', help='with --install: do not ask')
     hm = sub.add_parser('home', help='per-user data directories (docs/design.md §50.1)')
     hm_sub = hm.add_subparsers(dest='home_cmd', required=True)
     hmm = hm_sub.add_parser('migrate', help='move data kept under the names used before fleetmux (per-user and '
@@ -9659,6 +9668,11 @@ def main(argv=None):
         start(args)
         return
     if args.cmd == 'setup':  # §52
+        if args.install:
+            from fleetmux import setup_install
+            code = setup_install.main(yes=args.yes)
+            if code:
+                sys.exit(code)
         result = discover.run()
         discover.save(result)
         print(json.dumps(result, ensure_ascii=False, indent=1) if args.json else discover.render(result))
@@ -9712,6 +9726,10 @@ def main(argv=None):
     elif args.cmd in ('agents', 'plan'):
         print_inspection(args)
     else:
+        if not Path(args.config).is_file():
+            raise SystemExit('fleetmux ' + args.cmd + ': no fleet has run here yet (' + str(args.config) + ' is missing);'
+                             ' start one with `fleetmux start`' if Path(args.config) == LATEST else
+                             'fleetmux ' + args.cmd + ': ' + str(args.config) + ' does not exist')
         cfg = pin_paths(load(args.config))
         if args.cmd == 'logs':
             from fleetmux.control_view import iter_events

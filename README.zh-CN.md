@@ -152,15 +152,31 @@
 
 要求：`redis-server` ≥ 7.0、`tmux` ≥ 3.4、`git` ≥ 2.30，加一个 agent 命令行（Claude Code、Codex、pi 或 opencode，只装名单里用到的；pi 另需 Node.js ≥ 22）。完整表格见英文版 [Requirements](README.md#requirements)。
 
-### 从 PyPI 或 crates.io 安装
+### 从 PyPI、crates.io 或 npm 安装
 
-```bash
-uv tool install fleetmux      # 或：pip install fleetmux
-```
+1. **装 fleetmux。**
 
-PyPI 的安装包（Apple 芯片 macOS 11+、Intel macOS 10.12+、glibc 2.39+ 的 Linux）带着与 GitHub Release 相同的
-预编译 `fleetmux` 和 `fleetmux-web`，装完即可用 `fleetmux`。系统软件包和 pi 照上面第 1、3 步装。
-`cargo install fleetmux` 只编终端程序；fleet 命令还需要同版本的 Python 包。
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh   # 没有 uv 时先装，装完开一个新终端
+   uv tool install fleetmux      # 或：pip install fleetmux
+   ```
+
+   PyPI 的安装包（Apple 芯片 macOS 11+、Intel macOS 10.12+、glibc 2.39+ 的 Linux）带着与 GitHub Release 相同的
+   预编译 `fleetmux` 和 `fleetmux-web`。
+
+2. **装 fleet 要用的程序。** 这条命令列出本机缺的（redis-server、git、tmux、Node.js 22、pi），逐条打印要做的步骤，
+   问过你再执行。系统软件包用 `sudo apt-get`（Debian / Ubuntu）或 `brew`（macOS）装；Node.js 和 pi 装进
+   `~/.fleetmux/tools`，链接到 `fleetmux` 命令所在的目录。已经装了的程序一律不动。
+
+   ```bash
+   fleetmux setup --install
+   ```
+
+3. **登录模型。** 运行 `pi` 输入 `/login`，或在 `~/.pi/agent/models.json` 里加 provider；然后 `fleetmux setup`
+   会列出 fleet 能用的模型。
+
+`cargo install fleetmux` 和 `npm install -g fleetmux` 只装终端程序（npm 装的是与 GitHub Release 相同的预编译程序）。
+fleet 命令还需要同版本的 Python 包：`uv tool install fleetmux`。
 
 ### 从源码安装（开发用）
 

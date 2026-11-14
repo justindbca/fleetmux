@@ -6,10 +6,15 @@ persistent producer pool keep blocking I/O out of Pi's event loop. Receipt retai
 inbox PEL. On transport failure execution is disabled and never replayed; recovery
 requires daemon reconciliation. Only this child's connections/threads are closed.
 """
+import os
+import sys
+
+if __name__ == '__main__' and sys.path and os.path.realpath(sys.path[0] or '.') == os.path.dirname(os.path.realpath(__file__)):
+    sys.path.pop(0)  # run as a script (or via a symlink): fleetmux/platform.py must not shadow the stdlib module
+
 import argparse
 import json
 from pathlib import Path
-import sys
 import threading
 import time
 import uuid

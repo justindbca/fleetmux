@@ -238,16 +238,32 @@ moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
 Options: `FLEETMUX_VERSION=0.2.1` installs a given release; `FLEETMUX_RELEASES` and `FLEETMUX_BIN_DIR` move the
 install and the links (see the header of `scripts/install.sh`).
 
-### From PyPI or crates.io
+### From PyPI, crates.io or npm
 
-```bash
-uv tool install fleetmux      # or: pip install fleetmux
-```
+1. **Install fleetmux.**
 
-The PyPI wheels (macOS 11+ on Apple silicon, macOS 10.12+ on Intel, Linux with glibc 2.39+) carry the same
-prebuilt `fleetmux` and `fleetmux-web` binaries as the GitHub release, so `fleetmux` works right after the install.
-Install the system packages and pi as in steps 1 and 3 above. `cargo install fleetmux` builds only the terminal
-binary; fleet commands also need the Python package of the same version.
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh   # only when uv is missing; then open a new terminal
+   uv tool install fleetmux      # or: pip install fleetmux
+   ```
+
+   The PyPI wheels (macOS 11+ on Apple silicon, macOS 10.12+ on Intel, Linux with glibc 2.39+) carry the same
+   prebuilt `fleetmux` and `fleetmux-web` binaries as the GitHub release.
+
+2. **Install what a fleet needs.** The command lists what this machine lacks (redis-server, git, tmux,
+   Node.js 22, pi), prints each step and asks before it runs them. System packages come from `sudo apt-get`
+   (Debian / Ubuntu) or `brew` (macOS); Node.js and pi go into `~/.fleetmux/tools` and are linked beside the
+   `fleetmux` command. Programs that are already installed are never changed.
+
+   ```bash
+   fleetmux setup --install
+   ```
+
+3. **Log in to a model.** Run `pi` and type `/login`, or add a provider to `~/.pi/agent/models.json`. Then
+   `fleetmux setup` lists the models fleet can use.
+
+`cargo install fleetmux` and `npm install -g fleetmux` install only the terminal (npm: the same prebuilt binaries
+as the GitHub release). Fleet commands also need the Python package of the same version: `uv tool install fleetmux`.
 
 ### From source (development)
 

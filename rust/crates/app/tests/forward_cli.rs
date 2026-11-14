@@ -5,7 +5,7 @@
 //!
 //! The Python CLI is found at, in order: `$FLEETMUX_PYTHON_CLI` (an executable, run as is), the release this
 //! binary sits in (`<release>/bin/fleetmux` → `<release>/.venv/bin/python <release>/fleetmux/fleet.py`),
-//! `~/fleetmux-current`. Nothing found → exit 127 with a message saying how to set it.
+//! `~/fleetmux-current`, `fleetmux-py` on `PATH`. Nothing found → exit 127 with a message saying how to set it.
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -62,7 +62,8 @@ fn make_release(root: &Path) -> PathBuf {
     root.to_path_buf()
 }
 
-/// Run `bin args` with a clean lookup environment: HOME = `home`, no `$FLEETMUX_PYTHON_CLI` unless given.
+/// Run `bin args` with a clean lookup environment: HOME = `home`, no `$FLEETMUX_PYTHON_CLI` unless given, PATH =
+/// the system directories only (no `fleetmux-py` of the machine running the tests).
 fn run(
     bin: &Path,
     args: &[&str],
@@ -71,9 +72,22 @@ fn run(
     argv_file: &Path,
     stdin: &str,
 ) -> Output {
+    run_with_path(bin, args, home, cli, argv_file, stdin, "/usr/bin:/bin")
+}
+
+fn run_with_path(
+    bin: &Path,
+    args: &[&str],
+    home: &Path,
+    cli: Option<&Path>,
+    argv_file: &Path,
+    stdin: &str,
+    path: &str,
+) -> Output {
     let mut cmd = Command::new(bin);
     cmd.args(args)
         .env("HOME", home)
+        .env("PATH", path)
         .env("FAKE_ARGV", argv_file)
         .env_remove("FLEETMUX_PYTHON_CLI")
         .stdin(Stdio::piped())
@@ -232,6 +246,46 @@ fn home_join(home: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
+fn fleetmux_py_on_path_is_used_last() {
+    let t = TempDir::new();
+    let home = t.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let bin_dir = t.path().join("pybin");
+    write_exe(&bin_dir.join("fleetmux-py"), FAKE);
+    let path = format!("relative-dir:{}:/usr/bin:/bin", bin_dir.display());
+    let argv = t.path().join("argv");
+    let out = run_with_path(
+        Path::new(BIN),
+        &["status", "--json"],
+        &home,
+        None,
+        &argv,
+        "",
+        &path,
+    );
+    assert_eq!(out.status.code(), Some(7), "{out:?}");
+    assert_eq!(
+        argv_of(&argv),
+        vec![
+            bin_dir.join("fleetmux-py").display().to_string(),
+            "status".into(),
+            "--json".into()
+        ]
+    );
+    // ~/fleetmux-current still wins over PATH
+    let cur = make_release(&t.path().join("cur"));
+    std::os::unix::fs::symlink(&cur, home.join("fleetmux-current")).unwrap();
+    let out = run_with_path(Path::new(BIN), &["stop"], &home, None, &argv, "", &path);
+    assert_eq!(out.status.code(), Some(7), "{out:?}");
+    assert_eq!(
+        argv_of(&argv)[1],
+        home.join("fleetmux-current/fleetmux/fleet.py")
+            .display()
+            .to_string()
+    );
+}
+
+#[test]
 fn no_python_cli_anywhere_fails_and_says_how_to_set_it() {
     let t = TempDir::new();
     let home = t.path().join("home");
@@ -245,6 +299,9 @@ fn no_python_cli_anywhere_fails_and_says_how_to_set_it() {
         "FLEETMUX_PYTHON_CLI",
         "fleetmux-current",
         "install_release.sh",
+        "fleetmux-py on PATH",
+        concat!("uv tool install fleetmux==", env!("CARGO_PKG_VERSION")),
+        "fleetmux setup --install",
     ] {
         assert!(err.contains(needle), "missing {needle:?} in: {err}");
     }

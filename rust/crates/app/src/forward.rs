@@ -3,8 +3,9 @@
 //! stderr and the exit code are the Python CLI's own.
 //!
 //! Lookup, first hit wins: `$FLEETMUX_PYTHON_CLI` (an executable, run as is; set but unusable is an error, never a
-//! fallback), the release this binary sits in (`<release>/bin/fleetmux`), `~/fleetmux-current`. A release dir
-//! counts when it holds `.venv/bin/python` and `fleetmux/fleet.py`.
+//! fallback), the release this binary sits in (`<release>/bin/fleetmux`), `~/fleetmux-current`, then
+//! `fleetmux-py` on `PATH` (the console script of the PyPI package, e.g. after `uv tool install fleetmux`, so an
+//! npm or cargo `fleetmux` finds it). A release dir counts when it holds `.venv/bin/python` and `fleetmux/fleet.py`.
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -58,6 +59,7 @@ pub fn locate(
     env_cli: Option<OsString>,
     exe: Option<PathBuf>,
     home: Option<OsString>,
+    path: Option<OsString>,
 ) -> Result<Cli, String> {
     if let Some(v) = env_cli.filter(|v| !v.is_empty()) {
         let p = PathBuf::from(&v);
@@ -90,12 +92,25 @@ pub fn locate(
     } else {
         looked.push("~/fleetmux-current ($HOME not set)".into());
     }
+    for dir in path.iter().flat_map(std::env::split_paths) {
+        let p = dir.join("fleetmux-py");
+        if dir.is_absolute() && is_exe(&p) {
+            return Ok(Cli {
+                program: p,
+                lead: Vec::new(),
+            });
+        }
+    }
+    looked.push("fleetmux-py on PATH".into());
     Err(format!(
         "fleetmux: `{cmd}` is a fleet command, run by the Python fleet CLI, and none was found.\n\
-         looked for .venv/bin/python + fleetmux/fleet.py in: {}\n\
-         fix: set {CLI_ENV} to the fleet CLI (e.g. <release>/.venv/bin/fleetmux-py), or install a release \
-         with scripts/install_release.sh <sha> <tarball> --activate (it maintains ~/fleetmux-current)",
-        looked.join(", ")
+         looked in: {}\n\
+         fix: install the Python package of this version (`uv tool install fleetmux=={}`, then \
+         `fleetmux setup --install`), set {CLI_ENV} to the fleet CLI (e.g. <release>/.venv/bin/fleetmux-py), \
+         or install a release with scripts/install_release.sh <sha> <tarball> --activate (it maintains \
+         ~/fleetmux-current)",
+        looked.join(", "),
+        env!("CARGO_PKG_VERSION")
     ))
 }
 
@@ -110,6 +125,7 @@ pub fn run(args: &[OsString]) -> ExitCode {
         std::env::var_os(CLI_ENV),
         std::env::current_exe().ok(),
         std::env::var_os("HOME"),
+        std::env::var_os("PATH"),
     ) {
         Ok(cli) => cli,
         Err(msg) => {

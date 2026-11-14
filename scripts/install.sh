@@ -109,5 +109,6 @@ if PATH="$REL/bin:$PATH" .venv/bin/python scripts/check_deps.py; then
 else
   echo
   echo "fleetmux is installed. Install the FAIL items above before \`fleetmux start\`."
-  echo "Debian / Ubuntu: sudo apt install redis-server tmux git; then install and log in to one agent CLI (claude, codex, pi or opencode)."
+  echo "Run \`fleetmux setup --install\`: it lists what is missing (redis-server, git, tmux, Node.js 22, pi) and installs it after you confirm."
+  echo "Then log in to a model with \`pi\` (type /login)."
 fi

@@ -111,10 +111,12 @@ def _models(name, path, claude_models):
         code, out = _run([path, '--list-models'])
         if code != 0:
             return []
-        rows = []
-        for line in out.splitlines():
-            cols = line.split()
-            if len(cols) >= 2 and cols[0] != 'provider':
+        rows, table = [], False
+        for line in out.splitlines():  # rows follow the `provider model ...` header; without a login pi prints
+            cols = line.split()        # "No models available. Use /login ..." and no table
+            if cols[:1] == ['provider']:
+                table = True
+            elif table and len(cols) >= 2:
                 rows.append(cols[0] + '/' + cols[1])
         return rows
     if name == 'opencode':

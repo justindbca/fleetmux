@@ -208,16 +208,33 @@ anterior del proyecto traslada sus datos una vez con `fleetmux home migrate` (do
 
 Requisitos: `redis-server` ≥ 7.0, `tmux` ≥ 3.4, `git` ≥ 2.30 y un CLI de agente (Claude Code, Codex, pi u opencode; solo los que use tu roster; pi necesita además Node.js ≥ 22). Tabla completa: [Requirements](README.md#requirements).
 
-### Desde PyPI o crates.io
+### Desde PyPI, crates.io o npm
 
-```bash
-uv tool install fleetmux      # o: pip install fleetmux
-```
+1. **Instala fleetmux.**
 
-Los wheels de PyPI (macOS 11+ en Apple silicon, macOS 10.12+ en Intel, Linux con glibc 2.39+) incluyen los mismos
-binarios `fleetmux` y `fleetmux-web` precompilados que la release de GitHub, así que `fleetmux` funciona tras
-instalar. Instala los paquetes del sistema y pi como en los pasos 1 y 3. `cargo install fleetmux` compila solo el
-binario del terminal; los comandos de la flota necesitan también el paquete Python de la misma versión.
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh   # solo si falta uv; después abre una terminal nueva
+   uv tool install fleetmux      # o: pip install fleetmux
+   ```
+
+   Los wheels de PyPI (macOS 11+ en Apple silicon, macOS 10.12+ en Intel, Linux con glibc 2.39+) incluyen los mismos
+   binarios `fleetmux` y `fleetmux-web` precompilados que la release de GitHub.
+
+2. **Instala lo que necesita una flota.** El comando lista lo que falta en esta máquina (redis-server, git, tmux,
+   Node.js 22, pi), muestra cada paso y pregunta antes de ejecutarlo. Los paquetes del sistema vienen de
+   `sudo apt-get` (Debian / Ubuntu) o `brew` (macOS); Node.js y pi van a `~/.fleetmux/tools` y se enlazan junto al
+   comando `fleetmux`. Los programas ya instalados nunca se cambian.
+
+   ```bash
+   fleetmux setup --install
+   ```
+
+3. **Inicia sesión en un modelo.** Ejecuta `pi` y escribe `/login`, o añade un proveedor en
+   `~/.pi/agent/models.json`. Después `fleetmux setup` lista los modelos que la flota puede usar.
+
+`cargo install fleetmux` y `npm install -g fleetmux` instalan solo el terminal (npm: los mismos binarios
+precompilados que la release de GitHub). Los comandos de la flota necesitan también el paquete Python de la misma
+versión: `uv tool install fleetmux`.
 
 ### Desde el código fuente (desarrollo)
 

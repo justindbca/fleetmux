@@ -28,7 +28,9 @@ programs:
   node: {cmd: [node, --version], min: "22.0.0", with: pi, why: "pi runtime"}
   tmux: {cmd: [tmux, -V], min: "3.4", why: "sub-fleets: one session shown in two tabs (3.4 = Ubuntu 24.04, the oldest tested)"}
   git: {cmd: [git, --version], min: "2.30", why: "delivery gate fast-forward"}
-# Optional Python packages, one per channel type that needs one (contracts §8 「可选依赖清单」). Not in
+agent_installs:  # what `fleetmux setup --install` installs when it is missing (pi only)
+  pi: {npm: "@earendil-works/pi-coding-agent", version: "1.5.0"}
+# Optional Python packages, one per channel type that needs one (contracts §8, optional dependency list). Not in
 # requirements.txt and not checked by scripts/check_deps.py: only a fleet whose roster configures that channel
 # needs it, and a missing one makes just that channel raise channels.MissingDependency.
 optional_python_packages:

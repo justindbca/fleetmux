@@ -134,6 +134,16 @@ def test_nothing_private_is_kept_printed_or_cached(tmp_path, gateway, monkeypatc
     assert discover.load() == r
 
 
+def test_pi_without_a_login_has_no_models_and_is_not_logged_in(tmp_path):
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    fake_bin(bindir, 'pi', 'case "$1" in --version) echo "1.5.0";; --list-models) echo "No models available. Use '
+             '/login to log into a provider via OAuth or API key. See:"; echo "  /x/docs/providers.md";; esac\n')
+    row = discover.probe_cli('pi', '1.2.0', str(bindir), CLAUDE_MODELS)
+    assert row['models'] == [] and row['logged_in'] is False
+    assert discover.fixes({'pi': row}, {'supervisor': 'x'}) == ['pi is not logged in: run `pi, then /login`']
+
+
 def test_logged_out_too_old_and_missing_are_reported(tmp_path, gateway):
     r = probe(tmp_path, gateway, claude_logged_in=False, pi_version='1.0.0')
     assert r['clis']['claude']['logged_in'] is False and r['clis']['pi']['version_ok'] is False
