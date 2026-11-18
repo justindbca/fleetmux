@@ -4,7 +4,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · **Français** · [Español](README.es.md)
 
-**Pilotez des équipes d'agents IA comme vous gérez des conteneurs.** Une équipe, pas un simple assistant : fleetmux fait tourner un agent superviseur et N agents
+**L'équipe d'IA toujours active, sur plusieurs machines et plusieurs harnesses.** Une équipe, pas un simple assistant : fleetmux fait tourner un agent superviseur et N agents
 workers sous forme de sessions de terminal visibles. Le superviseur ne fait que juger et répartir le travail ; les workers
 ne font qu'exécuter ; c'est un daemon, et non les modèles, qui décide quand le travail est terminé. Une session proche de sa
 limite de contexte passe le relais à une nouvelle session au moyen d'une note de passation écrite, si bien qu'une même tâche

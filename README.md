@@ -4,7 +4,7 @@
 
 **English** · [中文](README.zh-CN.md) · [Français](README.fr.md) · [Español](README.es.md)
 
-**Run AI agent teams the way you run containers.** Run a team, not a single assistant: fleetmux runs one supervisor agent and N worker agents as visible
+**The always-on AI team, across machines and harnesses.** Run a team, not a single assistant: fleetmux runs one supervisor agent and N worker agents as visible
 terminal sessions. The supervisor only judges and dispatches; workers only execute; a daemon, not the models,
 decides when the work is done. Sessions near their context limit hand over to a fresh session with a written note,
 so one task can run for hours across many model sessions. Official **Claude Code**, official **Codex CLI**, **Pi**

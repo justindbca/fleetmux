@@ -4,7 +4,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · [Français](README.fr.md) · **Español**
 
-**Gestiona equipos de agentes de IA como gestionas contenedores.** Un equipo, no un único asistente: fleetmux ejecuta un agente supervisor y N agentes workers como sesiones de
+**El equipo de IA siempre activo, en varias máquinas y con varios harnesses.** Un equipo, no un único asistente: fleetmux ejecuta un agente supervisor y N agentes workers como sesiones de
 terminal visibles. El supervisor solo evalúa y reparte el trabajo; los workers solo ejecutan; quien decide cuándo está
 terminado el trabajo es un daemon, no los modelos. Una sesión que se acerca a su límite de contexto cede el relevo a una
 sesión nueva mediante una nota de traspaso escrita, de modo que una misma tarea puede durar horas a lo largo de muchas
