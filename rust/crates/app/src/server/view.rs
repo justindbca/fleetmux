@@ -696,7 +696,13 @@ pub fn apply_pty_sizes(state: &mut State) {
         pty_rects(layout, c, r, &mut want);
     }
     let mut changed = false;
+    // A bash tab is in two layouts (the root page's worker area and its own bash page, user 2026-11-14): the first
+    // rectangle wins, and `want` starts with the current page's.
+    let mut seen = std::collections::BTreeSet::new();
     for (id, w, h) in want {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
         let Some(info) = state.panes.info(&id) else {
             continue;
         };
@@ -815,7 +821,9 @@ fn pty_rects(layout: &fleetmux_layout::Layout, c: u16, r: u16, out: &mut Vec<(Pa
 /// After the layout changed (selection, focus, zoom, ratios): mirror it into the pane ledger, resize what
 /// needs it, mark dirty.
 pub(crate) fn layout_changed(state: &mut State) {
-    state.panes.sync_layout(&state.layout);
+    state
+        .panes
+        .sync_page_layout(&state.layout, &state.fleet_pages.current, true);
     sync_bash(state);
     apply_pty_sizes(state);
     state.viewers.mark_dirty();
@@ -943,10 +951,29 @@ fn pane_seq(pane: &str) -> u32 {
         .unwrap_or(0)
 }
 
-/// S1c (plan §14.3): mirror the `type == "shell"` panes into [`Side::bash`] (creation order) and the bash tab the root
-/// page shows into [`Side::bash_sel`] (user 2026-11-09: each bash is a tab of the main fleet's worker area, so the
-/// selected bash card is the root page's zoomed pane or focused tab, when that is a bash).
+/// S1c (plan §14.3): mirror the `type == "shell"` panes into [`Side::bash`] (creation order) and the shown bash page's
+/// pane into [`Side::bash_sel`] (user 2026-11-14: a bash card shows its own clean page; the root page's worker area
+/// keeps the same pane as a tab, which selects no bash card). A bash page whose shell is gone is closed (the view
+/// goes back to the root page when it was shown).
 pub(crate) fn sync_bash(state: &mut State) {
+    let stale: Vec<String> = state
+        .fleet_pages
+        .pages
+        .keys()
+        .filter(|p| {
+            sidebar::bash_page_pane(p)
+                .is_some_and(|pane| state.panes.info(pane).is_none_or(|i| i.ty != sidebar::SHELL_TYPE))
+        })
+        .cloned()
+        .collect();
+    for page in stale {
+        if let Err(fail) = super::handlers::page_close(state, &page, false) {
+            log(
+                "WARN",
+                &format!("closing bash page {page}: {} {}", fail.0.as_str(), fail.1),
+            );
+        }
+    }
     let mut bash: Vec<PaneId> = state
         .panes
         .list()
@@ -955,14 +982,9 @@ pub(crate) fn sync_bash(state: &mut State) {
         .map(|p| p.pane)
         .collect();
     bash.sort_by_key(|p| pane_seq(p));
-    let layout = &state.layout;
-    let sel = state
-        .fleet_pages
-        .current
-        .is_empty()
-        .then(|| layout.zoom().or(layout.selected(layout.focus())).cloned())
-        .flatten()
-        .filter(|p| bash.contains(p));
+    let sel = sidebar::bash_page_pane(&state.fleet_pages.current)
+        .filter(|p| bash.iter().any(|b| b == p))
+        .map(str::to_string);
     // Plan §14.2: the box about a bash page closes with the page (its shell exited while the box was open).
     if let Some(pane) = state.side.close_bash.as_ref()
         && !bash.contains(pane)
@@ -988,7 +1010,7 @@ pub(crate) fn sync_bash(state: &mut State) {
 /// Open a bash (plan §14.2 / §14.5-2): `$SHELL -l` (or `/bin/bash -l`) in `$HOME`, `type "shell"`, titled `bash-<n>`
 /// for the next card, as the last tab of the root page's `workers` group (user 2026-11-09: "在fleetmux侧边栏双击打开的
 /// 任意新的bash窗口，都在主fleet的worker区域有映射，都纳入主fleet的管理"; the root daemon registers it), shown at once
-/// ([`show_bash`]) — also when a child page was current.
+/// on its own clean page ([`show_bash`], user 2026-11-14) — also when a child page was current.
 pub(crate) fn new_bash(state: &mut State) {
     let argv = vec![
         std::env::var("SHELL")
@@ -1020,32 +1042,25 @@ pub(crate) fn new_bash(state: &mut State) {
     }
 }
 
-/// Show bash tab `pane` (user 2026-11-09): the root page becomes current, a zoom of another pane is cancelled (it would
-/// hide the tab), and the tab is selected in its group, which gets the focus.
+/// Show bash tab `pane` on its own page (user 2026-11-14: "当新双击一个bash窗口的话，它只是一个干净的bash窗口，但是这个
+/// bash窗口会映射到…第一页的Fleet Mix…上面，让那个上面能管理"): page `_bash-<pane>` shows the shell zoomed, alone; the
+/// root page — where the pane stays a tab of the worker area — keeps its tabs, focus and zoom untouched.
 fn show_bash(state: &mut State, pane: PaneId) {
-    if !state.fleet_pages.current.is_empty() {
-        select_page(state, "");
+    let n = state.side.bash.iter().position(|p| *p == pane).unwrap_or(state.side.bash.len());
+    let title = format!("{}{}", sidebar::BASH_TITLE, n + 1);
+    match super::handlers::bash_page(state, &pane, &title) {
+        Ok(page) => {
+            select_page(state, &page);
+        }
+        Err(fail) => log("WARN", &format!("bash page: {} {}", fail.0.as_str(), fail.1)),
     }
-    if state.layout.zoom().is_some_and(|z| *z != pane) {
-        unzoom(state);
-    }
-    let Some(group) = Group::ALL
-        .into_iter()
-        .find(|g| state.layout.group(*g).contains(&pane))
-    else {
-        return;
-    };
-    state.layout.select(pane);
-    state.layout.focus_group(group);
-    layout_changed(state);
 }
 
-/// The fleet card's view (plan §14.2; user 2026-11-09): while a bash card is selected the focus goes back to the
-/// supervisor group (the bash stays a tab of the worker area), and a zoom is cancelled.
+/// The fleet card's view (plan §14.2): a zoom is cancelled; from a bash page the root page comes back as it was.
 fn fleet_view(state: &mut State) {
-    if state.side.bash_sel.is_some() {
-        state.layout.focus_group(Group::Supervisor);
-        layout_changed(state);
+    if sidebar::bash_page_pane(&state.fleet_pages.current).is_some() {
+        select_page(state, "");
+        return;
     }
     unzoom(state);
 }
@@ -1124,9 +1139,6 @@ fn select_card(state: &mut State, j: usize) {
         Some((Some(page), _)) if page != state.fleet_pages.current => {
             if !select_page(state, &page) {
                 notice(state, NO_PAGE_NOTICE);
-            } else if state.side.bash_sel.is_some() {
-                // The root page came back with a bash tab focused: the fleet card was picked, not the bash card.
-                fleet_view(state);
             }
         }
         Some((Some(_), _)) => fleet_view(state),

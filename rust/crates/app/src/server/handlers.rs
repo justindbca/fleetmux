@@ -447,16 +447,19 @@ pub(super) fn after_layout_change(st: &mut State, panes_changed: bool) {
         return;
     }
     st.fleet_pages.pending = None;
-    st.panes.sync_layout(&st.layout);
-    // M4 (F8): every other page's panes mirror their own page's layout, none of them displayed.
+    // M4 (F8): every other page's panes mirror their own page's layout, none of them displayed. The current page goes
+    // last: a bash page shows the root page's bash tab (user 2026-11-14), which its hidden root layout must not mark
+    // as not displayed.
     if let Some(l) = &st.fleet_pages.root_layout {
-        st.panes.sync_layout_hidden(l);
+        st.panes.sync_page_layout(l, "", false);
     }
-    for p in st.fleet_pages.pages.values() {
+    for (id, p) in &st.fleet_pages.pages {
         if let Some(l) = &p.layout {
-            st.panes.sync_layout_hidden(l);
+            st.panes.sync_page_layout(l, id, false);
         }
     }
+    st.panes
+        .sync_page_layout(&st.layout, &st.fleet_pages.current, true);
     // S1c (plan §14.3): the bash cards are the `type "shell"` panes; spawn, kill and a shell that exits all come
     // through here, so the card list follows the pane set.
     view::sync_bash(st);
@@ -507,6 +510,30 @@ pub(super) fn spawn(st: &mut State, s: &Spawn) -> Res {
     // M4 (design m4 R8): the server's own panes (the restore pane; the sidebar's bash tabs, user 2026-11-09: in the
     // main fleet's worker area) always land in the root page.
     spawn_on(st, "", s)
+}
+
+/// The bash page of root-page bash tab `pane` (user 2026-11-14: a double click opens a clean bash, mapped into the
+/// main fleet's worker area): page `_bash-<pane>`, created on first use, whose own layout shows that same pane zoomed,
+/// so it fills the content without frames. The pane stays a tab of the root page (its record, the root fleet's
+/// registry and management are the root page's); only this page's layout shows it too. Returns the page id.
+pub(super) fn bash_page(st: &mut State, pane: &str, title: &str) -> Result<String, Fail> {
+    let page = format!("{}{pane}", crate::render::sidebar::BASH_PAGE);
+    if !st.fleet_pages.pages.contains_key(&page) {
+        new_page(st, &page, title.to_string(), false)?;
+    }
+    on_page(st, &page, |st| {
+        if group_of(&st.layout, pane).is_none() {
+            let group = st
+                .layout
+                .insert(pane.to_string(), pane_type(crate::render::sidebar::SHELL_TYPE));
+            st.layout.focus_group(group);
+        }
+        if st.layout.zoom().map(String::as_str) != Some(pane) {
+            st.layout.toggle_zoom(pane.to_string());
+        }
+        after_layout_change(st, false);
+    });
+    Ok(page)
 }
 
 /// M4: `pane.spawn` into `page` (which exists): its layout is swapped in for the placement, the record gets the

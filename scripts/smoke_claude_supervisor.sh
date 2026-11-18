@@ -44,7 +44,7 @@ live() {
   unset FLEETMUX_HOME FLEETMUX_STATE FLEETMUX_CONFIG  # §50: the new names would win over the isolated ones
   export FLEETMUX_HOME="$SMOKE_DIR/home" FLEETMUX_STATE="$SMOKE_DIR/state"
   mkdir -p "$FLEETMUX_HOME" "$FLEETMUX_STATE"
-  local args=(start --transport-version 2 --allow-development-v2 --lifecycle smoke --mode task --workers 2
+  local args=(start --no-view --transport-version 2 --allow-development-v2 --lifecycle smoke --mode task --workers 2
               --supervisor-cli claude --supervisor-model "${SUPERVISOR_MODEL:-opus}" --worker-cli "$worker"
               --runs-dir "$SMOKE_DIR/runs" --redis-runtime-dir "$SMOKE_DIR/redis" --name claude-sup-smoke)
   [[ -n "${CLAUDE:-}" ]] && args+=(--claude "$CLAUDE")

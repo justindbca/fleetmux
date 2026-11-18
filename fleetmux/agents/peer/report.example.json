@@ -1,0 +1,12 @@
+{
+  "id": "peer.field.claude-route.1",
+  "payload": {
+    "kind": "report",
+    "from": "field",
+    "problem": "Claude sessions in the field fleet fail with a connection error to the Claude API.",
+    "goal": "Claude sessions started by the field fleet work on this network.",
+    "facts": "curl to the Claude API times out. DNS resolves. Other HTTPS sites work."
+  },
+  "reply": {"required": ["status", "text", "owner"]},
+  "instruction": "Peer report from machine field. Answer with status ask, done or blocked."
+}

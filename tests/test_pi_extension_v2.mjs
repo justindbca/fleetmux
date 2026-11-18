@@ -154,14 +154,24 @@ await wait(()=>messages.at(-1)?.msg.details.message_id==='m-silent');
 await emit('agent_start');
 await result.execute('silent',{result:{reply:'silent'}},undefined,undefined,ctx);
 const idleSilent=records().filter(r=>r.kind==='availability'&&r.idle===true).length;
+// The post-settle availability check runs on the next Node turn (setImmediate). Whether the completed frame is read
+// before or after it is a race; hold those callbacks until completed is handled, so every run takes the order in
+// which both the settle and the completed path could report idle. Exactly one report must reach the bridge.
+const realImmediate=globalThis.setImmediate, deferred=[];
+globalThis.setImmediate=(fn,...args)=>{ deferred.push(()=>fn(...args)); };
 await emit('agent_settled',{aborted:false});
 globalThis.setTimeout=realTimeout;
 assert.equal(statuses.at(-1),'已结算，等 fleet 确认');
 fixture({event:'completed',message_id:'m-silent'});
-await wait(()=>records().filter(r=>r.kind==='availability'&&r.idle===true).length===idleSilent+1);
+await wait(()=>statuses.at(-1)==='等待派工');
+globalThis.setImmediate=realImmediate;
+for (const run of deferred.splice(0)) run();
+// The bridge is serial (one JSONL pipe): once the next frame's round trip is back, every earlier send is recorded.
 const count=messages.length;
 fixture({event:'ui',event_id:'late-ui',render:'失败，不代表已停止。'});
 await wait(()=>entries.some(e=>e.data.event_id==='late-ui'));
+assert.equal(records().filter(r=>r.kind==='availability'&&r.idle===true).length,idleSilent+1,
+  'the late completed frame reports idle exactly once (settle path and completed path must not both report)');
 assert.equal(messages.length,count);
 // A split-cap hold arrives as a fault frame with its own text; it must not read as "connection lost".
 fixture({event:'fault',reason:'已达续做上限，等监工拆小。'});

@@ -261,6 +261,13 @@ pub(crate) const BASH_TITLE: &str = "bash-";
 /// 2026-11-09: mapped into the main fleet's worker area; the root fleet registers it but it is no worker), so
 /// `pane.list` rows of this type are [`Side::bash`] and nothing else (`server/view.rs`).
 pub(crate) const SHELL_TYPE: &str = "shell";
+/// The page id head of a bash page (user 2026-11-14): `_bash-<pane id>` shows that root-page bash tab zoomed, alone.
+pub(crate) const BASH_PAGE: &str = "_bash-";
+
+/// The bash pane page `page` shows, when it is a bash page (`_bash-<pane id>`).
+pub(crate) fn bash_page_pane(page: &str) -> Option<&str> {
+    page.strip_prefix(BASH_PAGE).filter(|p| !p.is_empty())
+}
 
 /// The topbar's `(title, line1)`: the selected bash card's own (`bash-<n>`, `终端 · 运行中`, numbered like its card)
 /// while one is selected, else the current fleet card's; `None` when there is neither.

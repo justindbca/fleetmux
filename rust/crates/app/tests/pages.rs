@@ -189,7 +189,7 @@ fn page_open_rejects_bad_ids_and_the_root() {
 fn page_open_reclaimed_sets_the_page_history_url() {
     let srv = Kept::start("page_open_reclaimed_sets_the_page_history_url");
     let url = history_page(&srv, "sub/M0");
-    open_reclaimed(&srv, "M0", "memx", &url);
+    open_reclaimed(&srv, "M0", "alfa", &url);
     assert_eq!(
         page_entry(&srv, "M0")["state"],
         json!("reclaimed"),
@@ -282,11 +282,11 @@ fn pane_spawn_on_a_bound_connection_creates_the_page() {
         "{m0} {}",
         srv.at()
     );
-    open(&srv, "M0", "memx");
+    open(&srv, "M0", "alfa");
     let m0 = page_entry(&srv, "M0");
     assert_eq!(
         (m0["state"].as_str(), m0["title"].as_str()),
-        (Some("live"), Some("memx")),
+        (Some("live"), Some("alfa")),
         "{m0}"
     );
     assert_eq!(
@@ -796,7 +796,7 @@ fn overlay_url_follows_the_selected_page() {
 fn page_select_pushes_the_page_history_url_to_web_windows() {
     let srv = Kept::start("page_select_pushes_the_page_history_url_to_web_windows");
     let child_url = history_page(&srv, "sub/M0");
-    open_reclaimed(&srv, "M0", "memx", &child_url);
+    open_reclaimed(&srv, "M0", "alfa", &child_url);
     let mut wv = Raw::attach(&srv, json!({}));
     wv.window_open();
     let pending = request_async(&srv, "page.select", json!({"page": "M0"}));
@@ -837,7 +837,7 @@ fn jump_event_selects_the_page_whose_history_url_matches() {
     let root_url = history_page(&srv, "");
     let child_url = history_page(&srv, "sub/M0");
     srv.ok("kv.set", json!({"key": "history_url", "value": root_url}));
-    open_reclaimed(&srv, "M0", "memx", &child_url);
+    open_reclaimed(&srv, "M0", "alfa", &child_url);
     let mut wv = Raw::attach(&srv, json!({}));
     wv.window_open();
     wv.send_json(json!({"event": "jump", "url": jump_url(&root_url, &child_url)}));
@@ -859,7 +859,7 @@ fn jump_from_a_reclaimed_page_back_to_the_root_needs_no_daemon() {
     let root_url = history_page(&srv, "");
     let child_url = history_page(&srv, "sub/M0");
     srv.ok("kv.set", json!({"key": "history_url", "value": root_url}));
-    open_reclaimed(&srv, "M0", "memx", &child_url);
+    open_reclaimed(&srv, "M0", "alfa", &child_url);
     assert_eq!(page_entry(&srv, "M0")["panes"], json!(0));
     srv.ok("page.select", json!({"page": "M0"}));
     wait_current(&srv, "M0");
@@ -876,7 +876,7 @@ fn jump_event_to_an_unknown_path_does_nothing() {
     root_hello(&srv);
     let root_url = history_page(&srv, "");
     srv.ok("kv.set", json!({"key": "history_url", "value": root_url}));
-    open_reclaimed(&srv, "M0", "memx", &history_page(&srv, "sub/M0"));
+    open_reclaimed(&srv, "M0", "alfa", &history_page(&srv, "sub/M0"));
     let mut wv = Raw::attach(&srv, json!({}));
     wv.window_open();
     wv.send_json(
@@ -899,7 +899,7 @@ fn jump_event_to_an_unknown_path_does_nothing() {
 #[ignore = "m4"]
 fn history_pane_does_not_reopen_a_reclaimed_page() {
     let srv = Kept::start("history_pane_does_not_reopen_a_reclaimed_page");
-    open_reclaimed(&srv, "M0", "memx", &history_page(&srv, "sub/M0"));
+    open_reclaimed(&srv, "M0", "alfa", &history_page(&srv, "sub/M0"));
     let mut root = srv.client();
     spawn_on(
         &srv,
@@ -936,7 +936,7 @@ fn history_pane_does_not_reopen_a_reclaimed_page() {
 fn reclaimed_page_draws_the_read_only_banner() {
     let srv = Kept::start("reclaimed_page_draws_the_read_only_banner");
     srv.spawn_id("fx-root-sup", "supervisor", SLEEP);
-    open_reclaimed(&srv, "M0", "memx", &history_page(&srv, "sub/M0"));
+    open_reclaimed(&srv, "M0", "alfa", &history_page(&srv, "sub/M0"));
     let mut v = Viewer::attach(&srv, W, H);
     srv.ok("page.select", json!({"page": "M0"}));
     v.wait_text("已收回 · 只读", T);

@@ -32,7 +32,8 @@ SEVERITY_INFO = 'info'
 SEVERITIES = (SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_WARN)
 
 TERMINAL = ('ok', 'timeout', 'invalid', 'stalled', 'blocked', 'cancelled', 'failed', 'skipped',
-            'rejected')  # rejected: a named sub-fleet up / down refused (design.md §29)
+            'rejected',  # rejected: a named sub-fleet up / down refused (design.md §29)
+            'lease_ended')  # an applet lease ended while its message was queued or running (applet-interface.md)
 NONTERMINAL = ('queued', 'accepted', 'offered', 'received', 'running', 'dispatched',
                'paused', 'retrying', 'handoff', 'uncertain')
 STOP_STATES = (True, False, None)

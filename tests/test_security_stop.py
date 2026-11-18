@@ -632,6 +632,7 @@ def test_stop_redis_down_replies_stop_failed_and_writes_flag_file(fx, monkeypatc
 def test_tick_table_appends_security_after_channels(monkeypatch):
     assert hasattr(fleet.Fleet, 'security_tick')        # P8m phase B adds it (no fleet.py stub at A2')
     f = object.__new__(fleet.Fleet)
+    f.v2 = None  # no v2 runtime: tick skips the daemon gap check
     logged = []
     f.log = lambda kind, **data: logged.append((kind, data))
 
@@ -642,7 +643,7 @@ def test_tick_table_appends_security_after_channels(monkeypatch):
     for attr, name in (('roster_tick', 'roster'), ('advisor_tick', 'advisor'), ('write_result', 'result'),
                        ('sync_contract_files', 'contracts'), ('escalation_tick', 'escalations'),
                        ('waiting_tick', 'waiting'), ('relay_notices', 'notices'), ('apply_vetoes', 'vetoes'),
-                       ('channel_tick', 'channels'), ('security_tick', 'security')):
+                       ('channel_tick', 'channels'), ('security_tick', 'security'), ('job_tick', 'jobs')):
         setattr(f, attr, boom(name))
     monkeypatch.setattr(lifecycle_close, 'tick', boom('lifecycle'))
     monkeypatch.setattr(subfleet, 'tick', boom('subfleet'))
@@ -660,7 +661,7 @@ def test_tick_table_appends_security_after_channels(monkeypatch):
     errors = [d for kind, d in logged if kind == 'tick.error']
     for d in errors:
         assert 'segment ' + d['part'] in d['error'], d
-    parts = [d['part'] for d in errors]
+    parts = [d['part'] for d in errors if d['part'] != 'jobs']  # §58 jobs segment: pinned in test_channel_actor_supervise
     assert parts[:12] == OLD_PARTS
     assert parts[12:14] == ['channels', 'security'] and parts.count('security') == 1
 

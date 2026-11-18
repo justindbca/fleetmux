@@ -1,0 +1,4 @@
+# Field fleet roster (docs/distributed-development.md "Example rosters"): one liaison that talks to the home fleet.
+# Start: fleetmux start --mode service --roster <this file> ...
+workers:
+  - {name: onsite-1, role: liaison.md}

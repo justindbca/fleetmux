@@ -229,7 +229,7 @@ run_case() {
 
   # --roster replaces --workers/--worker-names outright (fleet.py refuses both); the roster's own
   # "workers: [{name: worker-1}]" above is what defines the single worker slot here.
-  local args=(start --lifecycle smoke --supervisor-cli "$SUP" --worker-cli "$WRK"
+  local args=(start --no-view --lifecycle smoke --supervisor-cli "$SUP" --worker-cli "$WRK"
               --allow-development-v2 --redis-runtime-dir "$TMP/r" --name "smoke-mt-$SUP-$WRK-$MODE"
               --roster "$ROSTER" --handoff-ratio "$HANDOFF_RATIO_LOW")
   [ "$MODE" = service ] && args+=(--mode service --request-timeout "$SERVICE_TIMEOUT_S")

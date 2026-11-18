@@ -3,7 +3,8 @@ deps.yaml, downloaded from the release base and checked against its sha256 befor
 
 The contract these tests pin (B19 implements it):
 
-- the version is ``programs.fleetmux.min`` of the repo's own ``deps.yaml``;
+- the version is ``$FLEETMUX_VERSION`` when set (``scripts/install.sh`` passes the release it installs), else
+  ``programs.fleetmux.min`` of the repo's own ``deps.yaml``;
 - the host's target triple comes from ``uname -s`` / ``uname -m``: Darwin arm64 -> ``aarch64-apple-darwin``,
   Darwin x86_64 -> ``x86_64-apple-darwin``, Linux x86_64 -> ``x86_64-unknown-linux-musl``, Linux aarch64 ->
   ``aarch64-unknown-linux-musl`` (the four release targets, design §8 item 5);
@@ -100,7 +101,8 @@ def release_server(tmp_path):
 
 
 def run_script(args, env_extra, bin_dir=None):
-    env = dict(os.environ, no_proxy='127.0.0.1,localhost', NO_PROXY='127.0.0.1,localhost', **env_extra)
+    env = {k: v for k, v in os.environ.items() if k != 'FLEETMUX_VERSION'}  # only a test sets the release
+    env.update(no_proxy='127.0.0.1,localhost', NO_PROXY='127.0.0.1,localhost', **env_extra)
     if bin_dir is not None:
         env['PATH'] = str(bin_dir) + os.pathsep + env['PATH']
     return subprocess.run(['bash', str(SCRIPT)] + args, capture_output=True, text=True, env=env, timeout=120)
@@ -124,6 +126,19 @@ def test_install_downloads_pinned_version_from_deps_yaml_and_verifies_sha256(tmp
     name = '/v%s/fleetmux-%s-aarch64-apple-darwin.tar.gz' % (version, version)
     assert name in seen and name + '.sha256' in seen
     assert sorted(p.name for p in dest.iterdir()) == ['fleetmux']  # no tarball / temp left behind
+
+
+def test_install_downloads_fleetmux_version_when_set(tmp_path, release_server):
+    """scripts/install.sh passes the release it installs as FLEETMUX_VERSION; that release wins over the floor."""
+    base, www, seen = release_server
+    release_tree(www, '9.9.9')
+    dest = tmp_path / 'dest'
+    bin_dir = fake_uname(tmp_path / 'bin', 'Linux', 'aarch64')
+    done = run_script(['--dest', str(dest)], {'FLEETMUX_RELEASE_BASE': base, 'FLEETMUX_VERSION': 'v9.9.9'}, bin_dir)
+    assert done.returncode == 0, done.stderr
+    got = subprocess.run([str(dest / 'fleetmux'), '--version'], capture_output=True, text=True, timeout=20).stdout
+    assert got.split()[:2] == ['fleetmux', '9.9.9'] and 'aarch64-unknown-linux-musl' in got
+    assert '/v9.9.9/fleetmux-9.9.9-aarch64-unknown-linux-musl.tar.gz' in seen
 
 
 @milestone(2)

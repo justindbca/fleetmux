@@ -10,7 +10,9 @@ ne font qu'exécuter ; c'est un daemon, et non les modèles, qui décide quand l
 limite de contexte passe le relais à une nouvelle session au moyen d'une note de passation écrite, si bien qu'une même tâche
 peut tourner pendant des heures à travers de nombreuses sessions de modèle. **Claude Code** officiel, **Codex CLI** officiel,
 **Pi** (modèles Codex et modèles locaux) et **opencode** cohabitent dans une même flotte, dans toute combinaison
-superviseur × worker validée par un vrai test de fumée (`fleetmux/config/fleet.yaml#cli_pairs`).
+superviseur × worker validée par un vrai test de fumée (`fleetmux/config/fleet.yaml#cli_pairs`). Des flottes sur des machines différentes se relient par ssh et s'appellent entre elles
+([docs/distributed-development.md](docs/distributed-development.md)). La routine fixe d'une équipe tourne comme un applet : un programme placé à côté du daemon,
+qui emprunte un worker au superviseur quand il a besoin d'un modèle ([docs/applets.md](docs/applets.md)).
 
 **En production au quotidien.** Depuis octobre 2026, fleetmux fait tourner des flottes de service résidentes et des flottes
 de tâches planifiées sur trois Mac pour une activité de trading réelle : une équipe d'exploitation qui démarre et arrête les
@@ -42,6 +44,13 @@ fleetmux ajoute ce que fait un chef de projet :
    des plafonds d'usage fait descendre d'un cran de modèle ou met l'exécution en pause pour la reprendre plus tard.
 7. **Des équipes d'équipes.** Un worker peut devenir le chef de sa propre sous-flotte : une seule flotte résidente peut ainsi
    mener plusieurs activités, chacune démarrée et arrêtée selon son propre calendrier.
+8. **Applets : le logiciel propre à l'équipe.** La partie fixe et mécanique d'une équipe (une chaîne de mise en production,
+   un balayage nocturne, une boucle d'interrogation) tourne comme un applet, un processus placé à côté du daemon. Un applet
+   n'appelle jamais un modèle lui-même. Quand il a besoin d'un modèle, il demande au superviseur un bail sur un worker, pour
+   une durée et un périmètre limités, et rend le worker dès que le travail est fini. Voir [docs/applets.md](docs/applets.md).
+9. **Des flottes sur plusieurs machines.** Des flottes sur des machines différentes se relient par ssh, sans nouveau port ni
+   service intermédiaire. Chaque flotte sert les autres et les appelle. Une flotte toujours active détient l'objectif : le
+   travail continue quand une autre machine est hors ligne. Voir [docs/distributed-development.md](docs/distributed-development.md).
 
 Nous avons compris pourquoi c'est important avec notre propre installation : une passerelle d'assistant que nous utilisions a
 perdu ses canaux de discussion pendant des mois sans que rien à l'extérieur ne s'en aperçoive, parce que rien à l'extérieur ne
@@ -146,7 +155,8 @@ planifié, le service résident et le développement de fonctionnalités tournen
 - **Service de jugement résident** (`service`). Un autre programme envoie des requêtes JSON avec `fleetmux request` ; une
   requête qui indique `to` va directement au worker de ce rôle (`--worker-names exit-1,reentry-1,...`, un prompt par rôle via
   `--roles`). Le daemon contrôle chaque réponse au regard de `reply.required` / `reply.allowed`, et l'appelant suspend la
-  flotte en dehors de ses heures de travail avec `pause` / `resume`. Voir
+  flotte en dehors de ses heures de travail avec `pause` / `resume`. Un travail plus gros entre avec `fleetmux task` comme
+  un job exécuté dans sa propre sous-flotte en mode task. Voir
   [Service mode](README.md#service-mode-resident-fleet) dans le README en anglais.
 - **Développement de fonctionnalités avec revue indépendante** (`dev_task`). Le superviseur découpe la fonctionnalité, des
   workers la construisent et des workers relecteurs distincts la jugent ; la revue est limitée à trois tours et les P0 / P1
@@ -170,7 +180,7 @@ planifié, le service résident et le développement de fonctionnalités tournen
   local), sous les mêmes noms d'emplacement, et indiquent au superviseur ce qui est fait et ce qui reste (un cycle complet
   jour → nuit → jour n'est pas encore validé de bout en bout). `start --resume` relance de la même manière une exécution
   interrompue.
-- **Tourne partout, se suit de partout.** Sous Linux, le backend `fleetmux` remplace cmux ; `fleetmux attach` (y compris via
+- **Tourne partout, se suit de partout.** Sur toutes les plateformes, le backend par défaut `fleetmux` remplace cmux ; `fleetmux attach` (y compris via
   `ssh -t`) ou `fleetmux gui` affiche la page en direct depuis un autre terminal, y compris une application de terminal sur
   téléphone.
 
@@ -190,8 +200,8 @@ nom du projet déplace ses données une fois avec `fleetmux home migrate` (docs/
 1. **Installez les paquets système.**
 
    ```bash
-   sudo apt install redis-server tmux git     # Debian / Ubuntu
-   brew install redis tmux git                # macOS
+   sudo apt install curl redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                     # macOS
    ```
 
 2. **Lancez l'installeur.** Il ne demande que `curl` et `tar`. Il installe la dernière version dans `~/fleetmux-releases/v<version>`, obtient Python 3.14 via uv, télécharge les binaires précompilés (vérifiés par sha256), crée le lien `fleetmux` dans `~/.local/bin` et lance la vérification des dépendances. Ni root, ni compilateur.
@@ -200,15 +210,16 @@ nom du projet déplace ses données une fois avec `fleetmux home migrate` (docs/
    curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
    ```
 
-3. **Installez un CLI d'agent et connectez-vous**, par exemple Claude Code :
+3. **Installez pi et connectez-vous** (obligatoire), et si vous voulez d'autres CLI d'agent comme Claude Code :
 
    ```bash
+   npm install -g @earendil-works/pi-coding-agent    # pi (Node.js >= 22)
    curl -fsSL https://claude.ai/install.sh | bash && claude
    ```
 
 4. **Vérifiez.** `fleetmux start --help` affiche les options.
 
-Prérequis : `redis-server` ≥ 7.0, `tmux` ≥ 3.4, `git` ≥ 2.30, et un CLI d'agent (Claude Code, Codex, pi ou opencode ; seulement ceux que votre roster utilise ; pi demande aussi Node.js ≥ 22). Tableau complet : [Requirements](README.md#requirements).
+Prérequis : `redis-server` ≥ 7.0, `tmux` ≥ 3.4, `git` ≥ 2.30, pi (obligatoire, avec Node.js ≥ 22) ; Claude Code, Codex et opencode sont facultatifs et ignorés s'ils manquent ou sont trop anciens. Tableau complet : [Requirements](README.md#requirements).
 
 ### Depuis PyPI, crates.io ou npm
 
@@ -261,7 +272,7 @@ L'installation par version sur une machine cible (`scripts/install_release.sh`) 
 
 ## Démarrage rapide
 
-Ouvrez un terminal cmux, configurez votre fournisseur et votre modèle Pi, et remplacez `local/my-model` ci-dessous. Les
+Ouvrez n'importe quel terminal (le backend par défaut fleetmux n'a pas besoin de cmux), configurez votre fournisseur et votre modèle Pi, et remplacez `local/my-model` ci-dessous. Les
 nouveaux démarrages exigent Redis v2 et une activation explicite du mode développement. Sans `--supervisor-cli` /
 `--worker-cli`, `start` prend la paire par défaut dans `fleetmux/config/fleet.yaml#cli_pairs` : **un superviseur Pi sur
 `openai-codex/gpt-6-astra` (thinking high) avec des workers Claude Code officiels**. Cette table liste chaque paire prise en
@@ -285,6 +296,14 @@ fleetmux stop                                 # cancel; confirm runtime retireme
 `fleetmux task -` confie l'objectif au superviseur ; `fleetmux status` affiche la tâche, l'état de chaque agent,
 l'occupation du contexte et la profondeur de la boîte de réception ; `fleetmux stop` annule, en confirmant le retrait du
 runtime avant l'arrêt de Redis.
+
+**Une flotte par machine.** Quand une de vos flottes racines tourne déjà sur cette machine, `fleetmux start` n'en
+démarre pas une seconde. Il s'y rattache : il indique à quelle flotte il s'est rattaché, écrit un fichier de
+rattachement (join stub) et s'arrête. Soumettez le travail avec la commande `fleetmux task` qu'il affiche. La flotte
+en cours l'exécute comme un job dans sa propre sous-flotte, listée dans sa barre latérale dans l'ordre de soumission
+des jobs. Le job reprend `--name`, `--roster`, `--roles`, `--lifecycle` et `--budget` du `start` : une flotte de
+développement entière tourne ainsi comme un seul job. `status`, `stop` et `result` avec le même `--config` n'agissent que sur ce job, jamais sur la flotte en
+cours. Un `start` en mode service se rattache aussi : il devient une sous-flotte service de la flotte service en cours, démarre sur un de ses workers et tourne jusqu'à son arrêt ; envoyez-lui des requêtes avec `fleetmux request --config <stub> -`. Une flotte en mode task ne prend pas le travail d'une autre : si seule une flotte task tourne, `start` démarre une flotte à part, ou refuse si cette flotte task tourne dans le même répertoire de flotte. Passez `--no-join` pour démarrer une flotte à part ([design §19](docs/design.md)). Une flotte en cours d'arrêt (son Redis ne répond plus ou elle a reçu `stop`) n'est pas une cible, pas plus qu'une flotte du même répertoire de flotte avec le même `--name` (c'est la flotte que l'on redémarre) : `start` démarre alors une flotte à part.
 
 ## Référence complète
 

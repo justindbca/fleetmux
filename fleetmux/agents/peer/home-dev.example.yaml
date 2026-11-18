@@ -1,0 +1,7 @@
+# Home dev fleet roster (docs/distributed-development.md "Example rosters"): answers the field fleet's reports.
+# Start it there: fleetmux remote --host home --home <dir> start --mode service --roster <this file> ...
+# Add `writable: [<applet repository>]` to dev-1 for the repository it builds in.
+advisor: on
+workers:
+  - {name: dev-1, role: dev-peer.md}
+  - {name: review-1, role: ../reviewer.md}

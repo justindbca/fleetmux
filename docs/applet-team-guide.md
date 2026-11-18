@@ -6,10 +6,11 @@ workers, the applet project, its configuration, and the commands to run and veri
 
 Every item is tagged:
 
-- **[existing]** works in fleetmux today (roster keys, start flags, sub-fleets, channels).
-- **[proposed]** is part of the applet interface, version 1, not implemented yet. A roster with `applets:` is
-  rejected by a release without it. Do not present a proposed item as working until
-  `fleetmux applet list` exists in the release you run.
+- **[existing]** works in fleetmux today (roster keys, start flags, sub-fleets, channels, and the applet
+  interface, version 1). The applet items need a release in which `fleetmux applet list` exists; an older
+  release rejects a roster with `applets:` as a whole.
+- **[proposed]** is decided but not implemented yet (block addressing `file.yaml#block`, section 4.2). Do not
+  present a proposed item as working.
 
 Section numbers such as "section 29" refer to [design.md](design.md).
 
@@ -22,25 +23,25 @@ Shape A: the applet on a root fleet               one machine, one OS user
 root fleet "rollout" (service lifecycle)          <- the team
 +- supervisor            grants and takes back leases, rules on escalations
 +- daemon                the fleet's daemon + private Redis (Unix socket); watches the applet
-+- applet-rollout-1      the deterministic program                [proposed]
++- applet-rollout-1      the deterministic program                [existing]
 +- fix-1                 worker
 +- fix-2                 worker
 
-Shape B: the applet on a named sub-fleet
+Shape B: the applet on a service sub-fleet of the machine's root fleet
 root fleet (service lifecycle)
 +- supervisor            root supervisor: rules on access requests, talks to channels
-+- lead-1                a worker slot; it becomes the supervisor of the team below
-+- sub-fleet "rollout"   (named, service, autostart)            <- the team
-   +- supervisor         = lead-1's session: grants and takes back leases
++- worker-N              a root worker (idle, or one the root adds); it becomes the supervisor of the team below
++- sub-fleet "rollout"   (attached by `fleetmux start`, service)  <- the team
+   +- supervisor         = worker-N's session: grants and takes back leases
    +- daemon             the team's own daemon + private Redis; watches the applet
-   +- applet-rollout-1                                            [proposed]
+   +- applet-rollout-1                                            [existing]
    +- fix-1, fix-2       workers
 ```
 
 | Choose | When |
 |---|---|
 | Shape A | Default. One team on its own: one fleet, one roster, the fewest moving parts. |
-| Shape B | The machine already runs a root fleet for other work and the team should sit under it, or several teams share one root (one set of channels, one root supervisor for `access` requests). |
+| Shape B | The machine already runs a root fleet for other work and the team should sit under it, or several teams share one root (one set of channels, one root supervisor for `access` requests). The team starts with `fleetmux start` as in shape A; while the root runs, that start attaches to it as a service sub-fleet. The root roster needs no `subfleets:` entry. |
 
 The applet code is the same for both. Changing shape later is a move (applets.md 2.1): remove the `applets:` row
 from one roster, add it to the other; no fleet is restarted.
@@ -49,17 +50,18 @@ Fixed facts you must design around:
 
 | Fact | Tag | Consequence |
 |---|---|---|
-| The host runs in service mode: a root fleet started with `--lifecycle service`, or a sub-fleet entry with `mode: service`. | [proposed] | A task-lifecycle fleet cannot host an applet. |
-| The host's own daemon starts, watches and restarts the applet. | [proposed] | No watcher to set up, no system service. |
-| When every worker is busy, the fleet wakes or adds a worker for a lease, up to `hot_add_max`. | [proposed] | Size the roster for the normal load, not for the peak. |
-| A fix handed back by a leased worker is reviewed by the fleet in another slot. | [proposed] | The applet has no review code. A team that fixes things needs room for 2 workers (declared or addable). |
+| The host runs in service mode: a root fleet started with `--lifecycle service`, or a sub-fleet entry with `mode: service`. | [existing] | A task-lifecycle fleet cannot host an applet. |
+| The host's own daemon starts, watches and restarts the applet. | [existing] | No watcher to set up, no system service. |
+| When every worker is busy, the fleet wakes or adds a worker for a lease, up to `hot_add_max`. | [existing] | Size the roster for the normal load, not for the peak. |
+| A fix handed back by a leased worker is reviewed by the fleet in another slot. | [existing] | The applet has no review code. A team that fixes things needs room for 2 workers (declared or addable). |
 | Channels are declared on a root roster only. | [existing] | Shape B: on the root, never in the team roster. |
-| Shape B: the team's supervisor is the root worker named in `supervisor_slot`, and it must be an official Claude Code session. | [existing] | The root fleet's workers run `--worker-cli claude`. |
+| Shape B: the team's supervisor is a root worker that runs the official Claude Code CLI: an idle one, or one the root adds. | [existing] | The root fleet's workers run `--worker-cli claude`. `--supervisor-model` on the team's start picks its model. |
 | Shape B: team workers run `claude` (default) or `pi` only; one CLI per team; a `pi` team uses one `pi_model`. | [existing] | opencode and dsh workers cannot be team workers. |
 | Shape B: `clear_after_result: true` is rejected in a sub-fleet entry. | [existing] | Use `fresh_after_result: true` if needed. |
-| Limits (defaults): 12 agents in the whole tree; in shape B also 3 workers per sub-fleet, 3 live sub-fleets per fleet, depth 2. | [existing] | Hot-added workers count. Raise limits only in the root roster's `limits:` block. |
+| Limits (defaults): 12 agents in the whole tree, depth 2. An attached team has no default cap on its workers or on live sub-fleets. | [existing] | Hot-added workers count. Set limits only in the root roster's `limits:` block. |
 | Sub-fleets are not supported on the wezterm backend. | [existing] | Shape B needs the `fleetmux` or `cmux` backend. |
-| A night roster's `subfleets:` and `applets:` blocks must equal the day roster's. | [existing] / [proposed] | The team does not change at night; only worker profiles may. |
+| A night roster's `subfleets:` and `applets:` blocks must equal the day roster's. | [existing] | The team does not change at night; only worker profiles may. Shape B: the team's start takes no `--night-roster`. |
+| Shape B: a start option that cannot apply to a sub-fleet refuses the start. | [existing] | For example a non-Claude `--supervisor-cli`, Codex profiles, opencode / dsh options. The message names each one; nothing is started. |
 
 ## 2. Decisions, in order
 
@@ -82,8 +84,7 @@ Rules:
   Do not create a reviewer role or a reviewer worker.
 - `hot_add_max` is a cost ceiling. `0` means "never add". It can be changed while the fleet runs
   (`fleetmux applet set <name> hot_add_max <n>`, or edit the roster row).
-- More than 3 workers in shape B: raise `limits.child_workers_max` and `limits.max_agents_total` in the root
-  roster, or use shape A.
+- Shape B: a root roster `limits:` block applies to the team too (`child_workers_max`, `max_agents_total`).
 
 ### 2.2 Which CLI and model for each seat
 
@@ -91,7 +92,7 @@ Rules:
 |---|---|---|---|
 | Host supervisor, shape A | `pi`, `codex`, `claude` (the pair with the worker CLI must be `verified` in the CLI pair table) | Leave unset: the release's default pair (the first usable model of the supervisor ranking) | It decides who gets a lease and for how long; errors here cost the most, and the default ranking puts the strongest model first. |
 | Root supervisor, shape B | as above | Leave unset | It only rules on rare `access` requests and operator input. |
-| `lead-1` = team supervisor, shape B | official `claude` only | The strongest Claude model you have (`--worker-model`, or a roster `profile`) | It grants the leases. |
+| Team supervisor, shape B | official `claude` only | The strongest Claude model you have (`--supervisor-model` on the team's start) | It grants the leases. |
 | Declared worker | shape A: the worker CLI of the pair; shape B: `claude` or `pi` | Leave unset: the first usable model of the worker ranking; `pi` + a cheaper model when the fixes are small and frequent | Fix quality decides how many attempts and review rounds a job needs. |
 | Worker the fleet adds for a lease or a review | not configurable per worker | The host's default worker CLI and the first usable model of the default worker chain; the role file of `hot_add_like` | It must work without anyone choosing. |
 
@@ -117,31 +118,34 @@ entry or their roster row.
 | `split` | map | roster-level | `check_minutes`, `window_minutes`, `min_calls`, `min_distinct`, `restore_model` | `{check_minutes: 0}` | Team workers should not be nudged to split long tasks (leased slots are exempt anyway). |
 
 Roster top-level keys **[existing]**: `workers` (required), `limits`, `handoff`, `advisor` (`on` / `off`, default
-`off`; keep `off` for a team), `subfleets`, `tabs`, `split`, `max_busy`, `channels` (root only) - and
-**[proposed]** `applets`.
+`off`; keep `off` for a team), `subfleets`, `tabs`, `split`, `max_busy`, `channels` (root only),
+`applets`.
 
 A row the fleet adds for a lease has only `name` and `role`. To give added workers other settings, edit the row
 after it appears; the change applies to the slot's next generation (section 16).
 
-### 2.4 Shape B only: the sub-fleet entry in the root roster **[existing]**
+### 2.4 Shape B only: how the team joins the root **[existing]**
 
-| Key | Type | Default | Allowed | Set it to |
-|---|---|---|---|---|
-| `name` | string | required | `[a-z][a-z0-9-]{0,30}`, not a worker name | the team's name, e.g. `rollout` |
-| `supervisor_slot` | string | required | a root worker; one sub-fleet per worker | `lead-1` |
-| `supervisor_role` | path | required | existing file | `roles/team-supervisor.md` (section 4.4) |
-| `roster` | path | required | existing, valid roster | `team.yaml` |
-| `autostart` | bool | `false` | | `true` (the team comes up with the fleet and is relaunched if its daemon dies) |
-| `mode` | string | `service` | `service`, `task` | `service` (required for applets) |
-| `worker_cli` | string | `claude` | `claude`, `pi` | per 2.2 |
-| `worker_model` | string | fleet default | a Claude `--model` value | optional |
-| `pi_model` / `pi_thinking` | string | none | required / optional when `worker_cli: pi` | per 2.2 |
-| `timeouts` | map | none | `stall`, `stall_window`, `request`: positive seconds | leave unset (no global request deadline, section 43); set per message `timeout_s` in the applet instead |
-| `max_busy` | int | `0` (no cap) | >= 0 | unset, or `2` for a `pi` team on a small local model |
-| `drain_s` | number | `600` | > 0 | at least the longest step the applet cannot interrupt |
-| `fresh_after_result` | bool | `false` | | `false`: leases already start and end in a clean session |
-| `worker_domains` | list | parent's | domain names of the worker kit; `[]` = none | `[]` unless the team needs the root's domain skills |
-| `clear_after_result`, `claude_hook_delivery` | | | retired values are rejected | do not set |
+The team needs no entry in the root roster. While the root runs, the team's own `fleetmux start` attaches to it
+(design.md section 19): the root declares the team as a service sub-fleet at run time, gives it a supervisor and
+keeps it up until `fleetmux stop --config <stub>` takes it down.
+
+| Start option of the team | Effect in shape B |
+|---|---|
+| `--lifecycle service`, `--name rollout` | Required. The name becomes the sub-fleet's name (lower case, other characters as `-`). |
+| `--roster`, `--roles` | The team's roster (with its `applets:` block, without `channels:`) and role files. |
+| `--worker-model`, `--worker-cli pi` with `--pi-model` / `--pi-thinking` | The team workers' CLI and model. |
+| `--supervisor-model` | The Claude model of the team's supervisor. |
+| `--request-timeout`, `--max-busy`, stall and handoff settings, `--worker-kit`, `--worker-domains`, `--supervisor-split` | Apply to the team, not to the root. The root's kit, domains and supervisor split are not inherited. |
+| Binaries, Redis / cmux directories, `--runs-dir`, `--host`, `--security` | The root's own values are used; the start says so on stderr. |
+| Options that cannot apply to a sub-fleet | The start is refused and nothing is started (section 1, fixed facts). |
+
+The start prints a join stub path (`--config`) and the team's own `config.json` path. Use the stub for
+`request`, `result`, `status`, `logs`, `operator`, `pause`, `resume`, `stop` and `fleetmux applet ...`. Use the
+team's `config.json` for any other command.
+
+A roster `subfleets:` entry in the root roster (design.md section 29) still works for a team that must come up
+with the root on every start; the options above then go into the entry's keys.
 
 ### 2.5 Channels, timeouts, night roster
 
@@ -150,7 +154,7 @@ after it appears; the change applies to the slot's next generation (section 16).
 | Channels **[existing]** | Need a human to approve deletions or see alerts away from the terminal -> add `channels:` to the **root** roster (`[{type, account, push?}]`, at most 8; credentials live in `~/.fleetmux/config/`, never in the roster). Otherwise none: the operator command works without any channel. |
 | Request deadline | Leave the fleet-wide one unset. Give each lease message its own `timeout_s` from an applet parameter. |
 | Lease term | `ttl_s` about the time a normal job takes x 1.5; `ttl_max_s` about the longest job you would still let run unattended. Start from 1800 / 7200 and adjust the parameters from audit data (`held_s` in `applet.lease.released`). A lease does not expire while its fix is under review; afterwards its end is at least `renew_margin_s` away. |
-| Review bounds **[proposed]** | `review: {max_rounds: 3, timeout_s: 1800}` in the applet row. Raise `timeout_s` when a review must read a large change. |
+| Review bounds **[existing]** | `review: {max_rounds: 3, timeout_s: 1800}` in the applet row. Raise `timeout_s` when a review must read a large change. |
 | Idle reclaim | Leave the service default (`worker_idle_reclaim_min`, 30 minutes): it is what puts lease-added workers to sleep. |
 | Night roster **[existing]** | Only if workers should run cheaper models at night: `--night-roster` with the same worker names and the same `subfleets:` / `applets:` blocks. |
 | Advisor | `off`. |
@@ -170,7 +174,7 @@ after it appears; the change applies to the slot's next generation (section 16).
 | Situation | Needed | Not needed |
 |---|---|---|
 | Applet <-> fleet, fleet <-> agents, parent <-> sub-fleet | Nothing. Each fleet's Redis listens only on a Unix socket (`--port 0`, permissions 700) under the run's runtime directory. | No IP, no port, no hostname, no firewall rule. |
-| Outside caller on the **same machine** enqueues work | The fleet home (shape A) or the team's `config.json` path (shape B) for `fleetmux applet send` | No network. |
+| Outside caller on the **same machine** enqueues work | The fleet home (shape A) or the team's join stub (shape B: the `--config` path the start printed) for `fleetmux applet send` | No network. |
 | Outside caller on **another machine** enqueues work | SSH to the fleet's machine, then the same command. A VPN or overlay network (for example Tailscale) is only the way SSH reaches the machine. | Do not expose Redis; do not write an HTTP front end unless the applet's own project needs one, and then it is that project's responsibility. |
 | The applet installs or tests on **remote hosts** | SSH host aliases in the OS user's `~/.ssh/config` (host name or overlay IP, user, key) and the host list in the applet's YAML (`targets:` block). Non-interactive key auth; no password prompts. | No inbound port on the fleet's machine. |
 | A leased worker must write on a remote host | Roster `writable: ["host:/path"]` for that worker **[existing]**, same SSH aliases. | |
@@ -193,6 +197,31 @@ after it appears; the change applies to the slot's next generation (section 16).
 - An applet that manages other machines does so from one home machine; do not run two copies of the same applet
   against the same targets.
 - No launchd, cron or systemd for the fleet or the applet, on any machine. The fleet's own processes watch each other.
+- **Stay inside the framework.** Every mechanism an applet needs uses what fleetmux provides. A launchd item, a cron
+  job, a resident script outside the fleet, or a background process that bypasses the daemon is outside the
+  framework and is not allowed. If one is unavoidable, it needs the operator's explicit approval and must be
+  recorded as a stopgap that names the framework fix. When the framework lacks a capability, extend the framework
+  instead of working around it.
+- **Run under the daemon, visible in the fleet window.** An applet runs under its host's daemon and is shown in the
+  daemon area's tab bar with its concrete state ([applet-interface.md](applet-interface.md) section 2.6).
+  Acceptance of an applet includes seeing its tab and state in the fleet window. `fleetmux applet list` showing
+  `up` alone does not count.
+
+### 3.5 Programs on the user's machine
+
+- **Find programs with fleetmux's resolver, not your own.** Use `fleetmux.discover.search_path()` (the
+  interactive login shell's `PATH`, then the process `PATH`) as the `PATH` for `shutil.which` and for the programs
+  you run. From an applet's own environment, ask the release interpreter:
+
+  ```bash
+  "$FLEETMUX_APPLET_PYTHON" -c 'from fleetmux import discover; print(discover.search_path())'
+  ```
+
+- **Log the absolute path** of every program the applet runs.
+- **Change nothing on the machine.** Do not edit shell, ssh or system configuration, and do not install or
+  upgrade programs. Report what is missing and stop.
+- **Use the user's agent CLIs as they are.** pi is required; codex, claude and opencode are used only when present
+  and at their `deps.yaml` minimum. Rules and rationale: design.md §50.3.
 
 ## 4. Starter project (copy, then fill in)
 
@@ -228,7 +257,7 @@ team:
   workers:                                  # [existing keys]
     - {name: fix-1, role: roles/fixer.md}
     - {name: fix-2, role: roles/fixer.md}
-  applets:                                  # [proposed]
+  applets:                                  # [existing]
     - name: applet-rollout-1
       command: ["{python}", "-m", "rollout.applet"]
       cwd: .
@@ -282,7 +311,7 @@ code:
 
 ### 4.4 Role files (minimal content)
 
-`roles/supervisor.md` (shape B: the same text as `roles/team-supervisor.md`, named in `supervisor_role`):
+`roles/supervisor.md` (the same text in both shapes):
 
 ```
 This fleet is the team "rollout". Its applet applet-rollout-1 runs the release train; you do not run it.
@@ -321,9 +350,10 @@ fleetmux start --lifecycle service --name rollout \
 # bin/status.sh
 . "$(dirname "$0")/env.sh"
 fleetmux status                    # the fleet, its workers, applets and leases (JSON)
-fleetmux applet list               # [proposed]
-fleetmux applet leases             # [proposed]
-fleetmux applet reviews            # [proposed]
+fleetmux applet list               # [existing]
+fleetmux applet leases             # [existing]
+fleetmux applet reviews            # [existing]
+fleetmux applet notices applet-rollout-1   # full text of the applet's notices
 fleetmux logs --limit 50           # audit
 
 # bin/stop.sh      (the applet gets host.draining, then SIGTERM)
@@ -337,15 +367,15 @@ fleetmux start --resume auto --allow-development-v2
 # any other shell: load the environment first
 . bin/env.sh
 
-# enqueue work for the applet                                                   [proposed]
+# enqueue work for the applet                                                   [existing]
 echo '{"kind": "branch", "ref": "feat/example"}' | fleetmux applet send applet-rollout-1 -
 
-# restart only the applet after changing its code                               [proposed]
+# restart only the applet after changing its code                               [existing]
 fleetmux applet restart applet-rollout-1
 
-# detach the applet while the fleet runs: delete its row under applets: in rollout.yaml   [proposed]
+# detach the applet while the fleet runs: delete its row under applets: in rollout.yaml   [existing]
 # attach it again (here or on another fleet): add the row back
-# raise the worker ceiling while the fleet runs                                 [proposed]
+# raise the worker ceiling while the fleet runs                                 [existing]
 fleetmux applet set applet-rollout-1 hot_add_max 2
 ```
 
@@ -353,16 +383,17 @@ fleetmux applet set applet-rollout-1 hot_add_max 2
 
 | Item | Shape B |
 |---|---|
-| `rollout.yaml` | Two roster blocks. `fleet` (root roster): `workers: [{name: lead-1}]` and `subfleets: [{name: rollout, supervisor_slot: lead-1, supervisor_role: roles/team-supervisor.md, roster: rollout.yaml#team, autostart: true, mode: service, drain_s: 900, worker_domains: []}]`; `channels:` go here. `team`: as in 4.2, without `channels:`. |
-| `bin/start.sh` | `--roster "rollout.yaml#fleet" --worker-cli claude`; add `--allow-unsandboxed-pi` only when the team's `worker_cli` is `pi`. |
-| Commands about the team | Need the team's config: add to `bin/env.sh` the function `team_cfg() { fleetmux status \| python3 -c 'import json,sys; print(next((v["run"] + "/config.json" for v in json.load(sys.stdin).get("subfleets", {}).values() if v.get("name") == "rollout"), ""))'; }` and pass `--config "$(team_cfg)"` to every `fleetmux applet ...`, `fleetmux logs` and `fleetmux status` about the team. |
+| `rollout.yaml` | One roster block, as in 4.2, without `channels:` (channels go in the root roster). The root roster needs no `subfleets:` entry. |
+| `bin/start.sh` | The shape A start (`--lifecycle service --name rollout --roster "rollout.yaml#team" --roles roles`) while the root runs; add `--supervisor-model` for the team supervisor. Keep the printed stub path, for example in `bin/env.sh` as `TEAM_CFG`. The root needs `--allow-unsandboxed-pi` only when the team's workers run `pi`. |
+| Commands about the team | Pass `--config "$TEAM_CFG"` (the join stub) to every `fleetmux applet ...`, `fleetmux logs`, `fleetmux status`, `fleetmux request` and `fleetmux stop` about the team. `stop` takes only the team down, never the root. |
+| After a trial | `fleetmux stop --config "$TEAM_CFG"` takes the team down. Its applet state stays under `<fleet home>/subfleets/rollout/applets/`; delete it with `fleetmux applet clear-state applet-rollout-1 --config <the team's config.json> --yes` when the next trial must start clean. |
 | `access` escalations | Go to the root supervisor through `report_up`. |
-| Supervisor rotation of the team | Is a down/up of the sub-fleet: leases end, the applet starts again (applets.md open question 2). Set `drain_s` to cover the longest uninterruptible step. |
+| Supervisor rotation of the team | Is a down/up of the sub-fleet: leases end, the applet starts again (applets.md open question 2). An attached team drains for up to 600 s (the default `drain_s`); a team whose longest uninterruptible step runs longer uses a roster `subfleets:` entry with its own `drain_s` (section 2.4). |
 
 ## 5. Checklist with proofs
 
 Do the steps in order. Each has a command and the output that proves it. Stop at the first step whose proof fails.
-The commands are for shape A; for shape B add `--config "$(team_cfg)"` as in 4.6.
+The commands are for shape A; for shape B add `--config "$TEAM_CFG"` as in 4.6.
 
 | # | Step | Command | Proof |
 |---|---|---|---|
@@ -374,13 +405,13 @@ The commands are for shape A; for shape B add `--config "$(team_cfg)"` as in 4.6
 | 6 | Deterministic steps pass their tests without a fleet | `python3 -m pytest -q tests` | Exit 0. |
 | 7 | The fleet starts | `bin/start.sh` | Exit 0; prints the run directory. |
 | 8 | Agents are ready | `. bin/env.sh; fleetmux status` | The supervisor, `fix-1` and `fix-2` are listed; workers `idle`; no slot is `held`. Keep this shell for the steps below. |
-| 9 | The applet is up | `fleetmux applet list` | `applet-rollout-1`, `state: up`, heartbeat age < 60 s, `restarts: 0`. |
+| 9 | The applet is up and visible | `fleetmux applet list`, then look at the fleet window | `applet-rollout-1`, `state: up`, heartbeat age < 60 s, `restarts: 0`; and in the daemon area's tab bar a tab `applet-rollout-1 up` whose header shows the phase, the heartbeat age and the open leases. The list alone does not count. |
 | 10 | A lease round trip works | enqueue one small real job (4.5), then `fleetmux applet leases --all` | One lease with `state: released`, `messages` >= 1. |
 | 11 | The fix was reviewed in another slot | `fleetmux applet reviews --all` | One review for that job: `verdict: pass`, and `reviewer` is a different slot from `fixer`. |
 | 12 | Exclusivity holds | while a lease is active: `echo '{"id":"probe-1","to":"fix-1","payload":{},"reply":{"required":["x"]}}' \| fleetmux request -` | Result `rejected`, reason `slot_leased`. |
 | 13 | A worker is added when none is free | keep both workers busy with direct requests (`for w in fix-1 fix-2; do echo '{"id":"busy-'$w'","to":"'$w'","payload":{},"instruction":"Run: sleep 240. Then reply.","reply":{"required":["done"]}}' \| fleetmux request - & done`), then enqueue one job; `fleetmux logs --limit 200 \| grep applet.worker_added` | One event naming `fix-3`; `fleetmux status` lists `fix-3` with `applet_added_for`. |
 | 14 | The applet survives a kill | `kill -KILL <pid from step 9>`; wait 60 s; repeat step 9 | `state: up`, `restarts: 1`; `fleetmux applet leases` shows no lease left from before the kill; the interrupted job continues or is redone. |
-| 15 | Detach and attach work while the fleet runs | delete the row under `applets:`; wait 90 s; `fleetmux applet list`; `pgrep -fl "rollout.applet"`; `fleetmux status`; then put the row back and repeat step 9 | After the delete: no applet listed, no process, the workers still listed and none restarted (same labels as before). After the add: `state: up`. |
+| 15 | Detach and attach work while the fleet runs | delete the row under `applets:`; wait 90 s; `fleetmux applet list`; `pgrep -fl "rollout.applet"`; `fleetmux status`; then put the row back and repeat step 9 | After the delete: no applet listed, no process, no applet tab in the window, the workers still listed and none restarted (same labels as before). After the add: `state: up` and the tab is back. |
 | 16 | Stop is clean | `bin/stop.sh`, then `pgrep -fl "rollout.applet"` | No process. |
 | 17 | Resume works | `bin/resume.sh`, then steps 8-9 | Same proofs. |
 | 18 | Nothing is exposed | `lsof -nP -iTCP -sTCP:LISTEN \| grep -E "redis\|python"` | No Redis listener; no applet listener except, if the project has one, `127.0.0.1`. |
@@ -405,6 +436,6 @@ pass, the team is in service.
 | Job state only in Redis | Lost when the host goes down, or on a move | Write it under `FLEETMUX_APPLET_STATE`. |
 | Asking the worker "did it pass?" | Unreliable verdicts | Run the check in the applet. |
 | `applet.notify` for every step | Supervisor context fills; rate limit refuses | Use `applet.audit`; notify only on events the supervisor must know. |
-| Shape B: a `pi` team without `--allow-unsandboxed-pi` on the root | The team's `up` is refused by the program | Add the flag to `bin/start.sh`. |
+| Shape B: a `pi` team without `--allow-unsandboxed-pi` on the root | The team's start is refused by the root | Start the root with the flag. |
 | Shape B: team roster with `channels:` | Whole roster rejected | Declare channels on the root roster. |
 | Hard-coded absolute home paths in rosters or prompts | Break on another machine | Paths relative to the roster, or `~`. |

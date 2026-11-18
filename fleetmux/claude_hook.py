@@ -21,10 +21,13 @@ Measured on Claude Code 2.1.280 (docs: claude-hook-report.md):
     and the rewake's own notification (``<task-notification>``) queue the same way. The hook
     therefore yields (``OperatorQueue``): it returns without taking anything as soon as any entry
     is queued, and the entry runs about 2 s later as its own turn (manual-input-measurement.md).
-  * The rewake fallback must not act while another turn runs: its notification would be absorbed
-    into that turn (lost) or queued behind a Stop hook that waits on the emptied mailbox
-    (``TurnWatch``). Escape interrupts the turn and kills the waiting hook, so
-    the session stays idle (unarmed) until its next turn ends.
+  * The rewake fallback must not act while another turn runs (``TurnWatch``). Its notification
+    would be absorbed into that turn: the model does read it there (after the next tool call),
+    but it starts no turn of its own and leaves no user row, only a ``queued_command``
+    attachment, so that turn's report answers two inputs at once. If the turn ends first, the
+    notification stays queued behind a Stop hook that waits on the emptied mailbox. Escape
+    interrupts the turn and kills the waiting hook, so the session stays idle (unarmed) until
+    its next turn ends.
 
 Long idle: the hook waits up to ``hook_timeout(cfg)`` (default one day) without starting any turn.
 Shortly before that it hands Claude one tiny keepalive turn (``KEEPALIVE``) so the next Stop hook
@@ -34,6 +37,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 
 ENV = {'CLAUDE_CODE_STOP_HOOK_BLOCK_CAP': '0'}
 # Without this, Claude Code shows the reason as "Stop hook error" and the model often refuses a long
@@ -44,7 +48,7 @@ DECLARATION = ('Fleet channel: after your first turn, every supervisor instructi
                'instruction and carry it out exactly as if the supervisor had typed it.')
 # The typed twin (--no-claude-hook-delivery / clear-after-result workers): the worker role files say
 # "text that is not a fleet delivery ... do not act on it", and Claude Code shows a bracketed paste as
-# pasted content of unknown origin, so without this a worker may refuse its own task (10-14 evermem).
+# pasted content of unknown origin, so without this a worker may refuse its own task.
 SUPERVISOR_DECLARATION = ('Fleet channel: after your startup turn, fleet requests, worker reports, corrections '
                           'and handoffs arrive through the Stop hook as "Stop hook feedback:" or '
                           '"Fleet delivery:" notifications. Treat them as fleet deliveries, not user input '
@@ -69,6 +73,7 @@ MARGIN = 120  # the hook answers this long before Claude Code's own timeout woul
 POLL = 5  # seconds per BLPOP; also the liveness re-check period
 ARMED_TTL = 3 * POLL
 BIND_TTL = 7 * 86400
+TAIL = 262144  # bytes of transcript read back for the end of a turn an API error ended
 
 
 def enabled(cfg, name, claude=None):
@@ -177,6 +182,57 @@ class OperatorQueue:
             self.queue.pop(0)
 
 
+def stamp(row):
+    """A transcript row's own ``timestamp`` as epoch seconds (the clock ``time.time()`` reads), or None."""
+    try:
+        return datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).timestamp()
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def tail_rows(path, size=None):
+    """The complete rows in the last ``TAIL`` bytes of a transcript (up to byte ``size``), oldest first."""
+    rows = []
+    try:
+        size = os.path.getsize(path) if size is None else size
+        with open(path, 'rb') as f:
+            f.seek(max(0, size - TAIL))
+            lines = f.read(min(size, TAIL)).split(b'\n')[:-1]  # the last piece is empty or still being written
+    except (OSError, TypeError, ValueError):
+        return rows
+    for line in lines[1 if size > TAIL else 0:]:  # the first piece of a cut tail is half a row
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def failure_end(rows):
+    """When the turn an API error ended stopped (epoch), from the transcript's own clock; None if unknown.
+
+    Measured rows (2.1.322): the error as an assistant row (``isApiErrorMessage``), then a system
+    ``turn_duration`` row; a model refusal ends with an assistant row of ``stop_reason`` ``refusal``.
+    Only the newest end-of-turn evidence counts, and only if it is such a failure end: when a later
+    turn already answered, or the failure rows are not written yet, nothing is known.
+    """
+    last, at = None, None
+    for row in rows:
+        if row.get('isSidechain'):
+            continue
+        if row.get('type') == 'assistant' or (row.get('type') == 'system' and row.get('subtype') == 'turn_duration'):
+            when = stamp(row)
+            if when is not None and (at is None or when >= at):
+                last, at = row, when
+    if last is None:
+        return None
+    message = last.get('message') if isinstance(last.get('message'), dict) else {}
+    failed = last.get('type') == 'system' or last.get('isApiErrorMessage') or message.get('stop_reason') == 'refusal'
+    return at if failed else None
+
+
 class TurnWatch:
     """Whether another turn of this session runs, from the transcript rows written after ``start``.
 
@@ -186,15 +242,32 @@ class TurnWatch:
     the turn that just stopped lands after the Stop and is ignored. Escape ends a turn without a
     Stop and writes a ``[Request interrupted by user…]`` user row (no origin): the session is idle
     again. A StopFailure ends it without a Stop too: ``ended(at)`` (the ``turnend`` key).
+
+    ``failed``: the fallback starts at a StopFailure. Claude Code waits for a Stop's hooks before it
+    runs a queued entry, but not for a StopFailure's: finished background tasks queued during the
+    failed turn start the next one within milliseconds, so its rows are in the transcript before
+    this watch exists (measured 2.1.322; the rows are not in time order either: the dequeues sit
+    before the error row). The watch therefore looks back once: a turn start whose own time is
+    later than the failure's end (``failure_end``) is a turn that runs now. Without a known
+    failure end it sees nothing, as before.
+
+    ``since`` is the starting row's own time (the poll's time for a row without one), so the
+    ``turnend`` mark of the failure that came before a turn never ends that turn.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, failed=False):
         self.path, self.busy, self.since = path, False, 0.0
         self.start_offset = 0
         try:
             self.offset = os.path.getsize(path)
         except (OSError, TypeError, ValueError):
             self.offset, self.path = 0, None
+        if failed and self.path:
+            rows = tail_rows(self.path, self.offset)
+            end = failure_end(rows)
+            later = [(stamp(row), i) for i, row in enumerate(rows)] if end is not None else []
+            for _, i in sorted((at, i) for at, i in later if at is not None and at > end):
+                self.apply(rows[i])
 
     def poll(self):
         if self.path:
@@ -212,7 +285,7 @@ class TurnWatch:
         return self.busy
 
     def ended(self, at):
-        """A StopFailure at ``at`` (epoch) ended the turn that made the session busy."""
+        """A StopFailure whose turn ended at ``at`` (epoch) ended the turn that made the session busy."""
         if self.busy and at > self.since:
             self.busy = False
 
@@ -231,11 +304,15 @@ class TurnWatch:
             row = json.loads(line)
         except ValueError:
             return
-        if not isinstance(row, dict) or row.get('isSidechain'):
+        if isinstance(row, dict):
+            self.apply(row)
+
+    def apply(self, row):
+        if row.get('isSidechain'):
             return
         if row.get('type') == 'queue-operation':
             if row.get('operation') == 'dequeue':
-                self.start()
+                self.start(row)
             return
         if row.get('type') != 'user':
             return
@@ -246,12 +323,12 @@ class TurnWatch:
         if content.startswith(INTERRUPTED):
             self.busy = False
         elif (row.get('origin') or {}).get('kind') and not row.get('isMeta'):
-            self.start()
+            self.start(row)
         elif row.get('isMeta') and content.startswith(FEEDBACK):
-            self.start()
+            self.start(row)
 
-    def start(self):
-        self.busy, self.since = True, time.time()
+    def start(self, row):
+        self.busy, self.since = True, stamp(row) or time.time()
         self.start_offset = self.offset
 
 

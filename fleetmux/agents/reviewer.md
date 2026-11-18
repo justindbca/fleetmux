@@ -93,6 +93,27 @@ Use the base reply format (Done / Evidence / Not done / Blocked). Do not invent 
 - Not done: what in the scope you could not check, or "none"
 - Blocked: what a human must provide (missing diff range, missing test results), or "none"
 
+## R6. Verdict JSON (runs with a delivery gate)
+
+In a `dev_task` or `review_loop` run, the program decides delivery from a verdict JSON file. Write it after the report, in every round.
+
+1. **Path.** Use the absolute path in the section "Verdict file for this run" at the end of `REVIEWER.md` in your current directory. Without that section, use the path the instruction names. The path is always inside your own directory.
+2. **Format.** One JSON object:
+
+   ```json
+   {"round": 1, "verdict": "PASS", "issues": [{"id": "P1-01", "severity": "P1", "title": "one line", "status": "open"}]}
+   ```
+
+3. **Fields.**
+
+   | Field | Value |
+   |---|---|
+   | `round` | This round as a positive integer (r1 = 1). |
+   | `verdict` | `PASS` (zero open P0 and P1) or `FAIL`. |
+   | `issues` | Every P0 and P1, this round and earlier rounds. `status` is `open`, `fixed` or `closed`; only open items block. |
+
+4. **No reviewer field needed.** The supervisor decides who reviews. The program records which slot wrote the file for the log only. A `reviewer` field is allowed and ignored.
+
 ## Mid-turn handoff (context nearly full)
 
 The fleet daemon watches your context size while you work. When it nears the limit, the daemon sends a message

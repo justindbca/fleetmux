@@ -5,11 +5,26 @@ from types import SimpleNamespace
 
 import pytest
 
-from fleetmux import claude_hook, fleet
+from fleetmux import awake, claude_hook, fleet
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
 from test_claude_supervisor import make_fleet
 
 HOOK_CHANNEL = True
+
+
+def human_hold_passed():
+    """HUMAN_HOLD of awake time passed (the yield-wait deadline is awake time, fleetmux/awake.py)."""
+    later = lambda: time.time() + claude_hook.HUMAN_HOLD + 1  # noqa: E731
+    awake.reset(later, later)
+
+
+@pytest.fixture
+def live_parent(monkeypatch):
+    """claude_hook_next waits only while its parent (Claude Code) lives: `parent != 1`, and hook_session's
+    `os.getppid() != parent`. Here the hook runs inside pytest, so the tests that reach that wait pin a
+    live-looking parent; a pytest run reparented to init (nohup from a shell that exited) must not turn every
+    wait into an orphan exit."""
+    monkeypatch.setattr(fleet.os, 'getppid', lambda: 424242)
 
 
 @pytest.fixture
@@ -38,7 +53,7 @@ def stop_deadline(channel, monkeypatch, race=lambda r, k: None):
 
 
 @pytest.mark.parametrize('racer', ['delivery', 'armed', 'stopping', 'rewake_keepalive'])
-def test_stop_deadline_cannot_clobber_a_concurrent_owner(channel, monkeypatch, racer):
+def test_stop_deadline_cannot_clobber_a_concurrent_owner(channel, live_parent, monkeypatch, racer):
     f, k, thread, _ = channel
     expected = []
     def race(r, k):
@@ -52,7 +67,7 @@ def test_stop_deadline_cannot_clobber_a_concurrent_owner(channel, monkeypatch, r
     assert f.r.get(k['bind']) == expected[0]
 
 
-def test_stop_and_rewake_have_one_keepalive_winner(channel, monkeypatch):
+def test_stop_and_rewake_have_one_keepalive_winner(channel, live_parent, monkeypatch):
     f, k, thread, _ = channel
     mine = f.r.incr(k['rewake'])
     assert stop_deadline(channel, monkeypatch) == claude_hook.block(claude_hook.KEEPALIVE)
@@ -63,7 +78,8 @@ def test_stop_and_rewake_have_one_keepalive_winner(channel, monkeypatch):
 
 @pytest.mark.parametrize('with_model_row', [False, True])
 @pytest.mark.parametrize('prompt_hook', [False, True])
-def test_slash_without_stop_has_bounded_explicit_hold(channel, monkeypatch, with_model_row, prompt_hook):
+def test_slash_without_stop_has_bounded_explicit_hold(channel, live_parent, monkeypatch, with_model_row,
+                                                      prompt_hook):
     f, k, thread, transcript = channel
     transcript.write_text(json.dumps(dict(type='queue-operation', operation='enqueue', content='/status')) + '\n')
     # Exercise the actual Stop wait yielding to the queue, even if the CLI never calls UserPromptSubmit.
@@ -84,6 +100,7 @@ def test_slash_without_stop_has_bounded_explicit_hold(channel, monkeypatch, with
     mailbox = f.r.lrange(k['mailbox'], 0, -1)
     monkeypatch.setattr(fleet.runtime_v2, 'time', SimpleNamespace(time=lambda: time.time() + claude_hook.HUMAN_HOLD + 1,
                                                                monotonic=time.monotonic))
+    human_hold_passed()
     f.v2.renew_tui()
     assert f.agent('supervisor')['state'] == 'held'
     assert f.v2.bus.slot_state('supervisor')['status'] == 'uncertain'
@@ -101,7 +118,7 @@ def test_stop_rearm_rechecks_full_lease_identity(channel, monkeypatch, field, va
     assert not f.r.exists(k['bind'])
 
 
-def test_worker_stop_rearm_uses_worker_identity_not_supervisor(channel, monkeypatch):
+def test_worker_stop_rearm_uses_worker_identity_not_supervisor(channel, live_parent, monkeypatch):
     f, _, _, _ = channel
     f.setf('worker-1', generation=3, state='idle', thread='worker-session')
     f.v2.bus.register_slot('worker-1', 3, 'worker-session')
@@ -170,6 +187,7 @@ def test_unknown_slash_holds_even_without_delivery_but_not_another_generation(ch
     marker = f.r.get(k['yield_wait'])
     monkeypatch.setattr(fleet.runtime_v2, 'time', SimpleNamespace(time=lambda: time.time() + claude_hook.HUMAN_HOLD + 1,
                                                                monotonic=time.monotonic))
+    human_hold_passed()
     f.setf('supervisor', generation=1)
     f.v2.renew_tui()
     assert f.agent('supervisor')['state'] == 'idle'
@@ -204,7 +222,7 @@ def test_keepalive_consumption_cannot_delete_a_concurrent_delivery(channel, monk
     assert f.r.get(k['bind']) == delivery
 
 
-def test_yield_at_the_stop_deadline_still_gets_a_bounded_wait(channel, monkeypatch):
+def test_yield_at_the_stop_deadline_still_gets_a_bounded_wait(channel, live_parent, monkeypatch):
     f, k, _, _ = channel
     assert stop_deadline(channel, monkeypatch, lambda r, k: r.set(k['human'], 'queued slash')) is None
     assert f.r.exists(k['yield_wait'])

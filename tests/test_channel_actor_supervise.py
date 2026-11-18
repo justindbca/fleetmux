@@ -94,6 +94,7 @@ def config_path(f):
 def tick_parts(monkeypatch):
     """Run Fleet.tick's guarded segment table with every segment raising its own name; return the order."""
     f = object.__new__(fleet.Fleet)
+    f.v2 = None  # no v2 runtime: tick skips the daemon gap check
     logged = []
     f.log = lambda kind, **data: logged.append((kind, data))
 
@@ -104,7 +105,7 @@ def tick_parts(monkeypatch):
     for attr, name in (('roster_tick', 'roster'), ('advisor_tick', 'advisor'), ('write_result', 'result'),
                        ('sync_contract_files', 'contracts'), ('escalation_tick', 'escalations'),
                        ('waiting_tick', 'waiting'), ('relay_notices', 'notices'), ('apply_vetoes', 'vetoes'),
-                       ('channel_tick', 'channels')):
+                       ('channel_tick', 'channels'), ('job_tick', 'jobs')):
         setattr(f, attr, boom(name))
     monkeypatch.setattr(lifecycle_close, 'tick', boom('lifecycle'))
     monkeypatch.setattr(subfleet, 'tick', boom('subfleet'))
@@ -127,11 +128,12 @@ def tick_parts(monkeypatch):
 
 def test_tick_table_existing_segments_unchanged(monkeypatch):  # [基线]
     parts = tick_parts(monkeypatch)
-    assert parts[:12] == OLD_PARTS
+    assert [p for p in parts if p != 'jobs'][:12] == OLD_PARTS
+    assert parts[parts.index('jobs') + 1] == 'escalations'  # §58: a job's split is approved before escalations spawn it
 
 
 def test_tick_table_appends_channels_segment(monkeypatch):
-    parts = tick_parts(monkeypatch)
+    parts = [p for p in tick_parts(monkeypatch) if p != 'jobs']
     assert parts[:12] == OLD_PARTS
     assert parts[12:13] == ['channels']  # right after the old twelve (P8m's security segment may follow it)
     assert parts.count('channels') == 1  # a failing channel segment is one tick.error, the daemon goes on

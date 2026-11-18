@@ -10,7 +10,8 @@
 
 Resolution, per item: an explicit environment variable wins, else the path above. Data written under an older
 layout is moved here by ``fleetmux home migrate`` (fleetmux/home_migrate.py); until then the human-facing
-commands stop with one line saying so (``home_migrate.check``).
+commands stop with one line saying so (``home_migrate.check``), except for a separate fleet home set by
+``FLEETMUX_HOME`` / ``FLEETMUX_STATE``, which only gets a note.
 """
 import os
 from pathlib import Path

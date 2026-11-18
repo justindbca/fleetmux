@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fleetmux import fleet_config
+from fleetmux import fleet_config, session_env
 
 HERE = Path(__file__).resolve().parent
 PROMPT = HERE / 'agents' / 'advisor.md'
@@ -112,7 +112,8 @@ def run_claude(payload, *, cfg, run_dir, timeout=TIMEOUT):
     cwd.mkdir(parents=True, exist_ok=True)
     # Never self-update (fleet.CLAUDE_ENV; 2026-10-14 01:36 an isolated config's auto-update broke the install).
     done = subprocess.run(argv(cfg, run_dir), input=json.dumps(payload, ensure_ascii=False), capture_output=True,
-                          text=True, timeout=timeout, cwd=str(cwd), env=dict(os.environ, DISABLE_AUTOUPDATER='1'))
+                          text=True, timeout=timeout, cwd=str(cwd),
+                          env=session_env.environ(cfg, 'claude', dict(os.environ, DISABLE_AUTOUPDATER='1')))
     if done.returncode != 0:
         raise AdviceError('advisor exited ' + str(done.returncode) + ': ' + (done.stderr or done.stdout)[-500:])
     try:

@@ -17,11 +17,11 @@ from pathlib import Path
 import redis
 
 from fleetmux import advisor, claude_hook, clear_after_result, cli_pairs, contracts, tabs
-from fleetmux import dsh_adapter, fleet_config, opencode_adapter, pi_adapter
+from fleetmux import dsh_adapter, fleet_config, opencode_adapter, pi_adapter, session_env
 from fleetmux.message_bus import BusError, MessageBus, LUA_REBIND_CHECK, _json, _short, _request_id
 from fleetmux.presentation import mask_secrets, result_card, routing_card, sanitize_text
-from fleetmux import codex_queue, lifecycle_close, named_subfleet, subfleet, tui_cards
-from fleetmux import midturn, watchdog
+from fleetmux import applet_lease, codex_queue, lifecycle_close, named_subfleet, subfleet, tui_cards
+from fleetmux import awake, midturn, watchdog
 
 
 def v2_cli_problem(cfg):
@@ -197,6 +197,13 @@ STOP_FAILURE_RESUME = ('[Retried after an API error] Your previous turn on this 
                        'before it reported. Files you already wrote stay. Check your directory first and continue '
                        'from where it stopped; do not redo finished steps.\n\n')
 
+STOP_FAILURE_RESUME_SUPERVISOR = ('[Retried after an API error] Your previous turn on this message ended with an API '
+                                  'error before your decision was read; nothing from it was applied. Check the run '
+                                  'state, then answer this message again with the JSON format from AGENTS.md.\n\n')
+# Held watchdog backstop (§24): fleet.yaml#daemon_watch keys and their fallbacks when the file lacks them.
+HELD_WATCH = {'held_after_s': 300, 'held_realert_s': 1800,
+              'subfleet_stuck_after_s': 600, 'subfleet_check_s': 60}  # R3b: the parent watches its sub-fleets
+
 # Bridge faults that only echo a hold the daemon (or the delivery itself) already decided: not a lost link.
 # Any other bridge fault (its own Redis error, child crash, lease not renewed) means the link is gone and
 # the slot is restarted (§35); the pane says which of the two it is.
@@ -339,6 +346,27 @@ def tui_candidates(slot, purpose, text, mode='task'):
 def bus_for(cfg, r):
     return MessageBus(r, cfg.get('run_id') or Path(cfg['run']).name,
                       lease_ms=int(cfg.get('v2_lease_ms', 300000)))
+
+
+def held_watch_knobs():
+    """(knobs, problem): fleet.yaml#daemon_watch held_after_s / held_realert_s / subfleet_stuck_after_s /
+    subfleet_check_s (seconds > 0) over ``HELD_WATCH``;
+    a bad value -> the defaults and the problem text (audited as held_watch.config_rejected)."""
+    try:
+        block = fleet_config.block('daemon_watch') or {}
+    except (OSError, ValueError, KeyError) as exc:
+        return dict(HELD_WATCH), 'fleet.yaml#daemon_watch unreadable: ' + str(exc)[:200]
+    knobs, bad = dict(HELD_WATCH), []
+    for key in HELD_WATCH:
+        if key in block:
+            value = block[key]
+            if type(value) in (int, float) and value > 0:
+                knobs[key] = value
+            else:
+                bad.append(key)
+    if bad:
+        return dict(HELD_WATCH), 'fleet.yaml#daemon_watch: ' + ', '.join(bad) + ' must be seconds > 0'
+    return knobs, None
 
 
 def dumps(value):
@@ -550,6 +578,7 @@ class RuntimeV2:
     last_tick = None  # wall clock of the previous tick: a long gap = the daemon did not run (daemon_gap, §24)
     gap_before = False    # the previous tick also followed a daemon gap (daemon_gap)
     hb_grace_until = 0.0  # after a daemon gap, heartbeat_check waits this long for the bridges' next beat (§35)
+    gap_done = False      # Fleet.tick already ran daemon_gap for this loop pass (gap_tick): tick does not again
 
     def __init__(self, fleet):
         self.f = fleet
@@ -566,6 +595,8 @@ class RuntimeV2:
         self.startup_nudges = set()  # slots to re-ask for READY once, typed after the transaction
         self.pending_cursor = '0-0'
         self.stopfail_notices = []  # used-up API-error retries: tg / parent notices, sent outside any intent (tick)
+        self.held_notices = []  # (slot, text, detail): escalations decided inside an intent, sent by held_watch_tick
+        self.held_knobs_at, self.held_knobs_cache, self.pause_alerted = 0.0, None, ''
         self.renewed = {}
         self.cards_dirty, self.cards_refreshed = False, 0.0
         self.watchdog = watchdog.Watchdog(self)
@@ -642,8 +673,16 @@ class RuntimeV2:
             text = text[:task_head.start()] + text[task_head.end():]
         request_id = request_id or (self.context or {}).get('bound_request') or self.f.task().get('id') or 'notice'
         if not self.f.service and self.f.task().get('deadline'):
-            deadline_at = deadline_at or int(float(self.f.task()['deadline'])*1000)
+            # The hours budget is awake time (§35) and the tick ends the task when it runs out (budget_exhausted);
+            # the bus deadline is wall time shared with the bridges, so it does not carry the budget (a sleep
+            # longer than the time left would hold the slot).
+            deadline_at = deadline_at or NO_DEADLINE_MS
         deadline_at = deadline_at or int(time.time()*1000) + 3600000
+        if kind is None and slot == 'supervisor' and self.f.service and not head:
+            # Service mode: only a [Request <id>] prompt is bound to its request. Every other program message to
+            # the supervisor (a sub-fleet report or interface notice, a correction, an escalation note) is a
+            # notice: delivered even when the request id it inherited has ended (deliver drops the rest).
+            kind = 'followup'
         kind = kind or ('supervisor' if slot == 'supervisor' else 'worker')
         # Prompt instructions remain business content. Transport labels are metadata.
         # Only Pi has the fleet_decision tool; official CLIs keep the AGENTS.md wording.
@@ -846,7 +885,8 @@ class RuntimeV2:
             elif ev.get('thread') != info.get('thread'):
                 self.audit('event.stale_session', slot=slot)
             elif kind == 'startup':
-                if info.get('state') != 'starting':
+                late = self.startup_late(info, ev)
+                if info.get('state') != 'starting' and not late:
                     self.audit('startup.duplicate', slot=slot)
                     self.reply(ev, {'status': 'rejected', 'reason': 'startup belongs to an already settled or held runtime'})
                     return
@@ -887,6 +927,8 @@ class RuntimeV2:
                     self.f.setf(slot, state='idle', runtime_ready=1, idle_confirmed=1, bridge_available=0,
                                 current_profile=info.get('runtime_profile', ''), startup_retries=0)
                     self.reply(ev, {'status': 'ready'})
+                    if late:
+                        self.startup_late_lift(slot, late)
             elif kind == 'availability':
                 self.f.setf(slot, bridge_available=int(ev.get('idle') is True))
             elif kind == 'bridge_fault':
@@ -988,7 +1030,7 @@ class RuntimeV2:
             # Allocate correlation-derived IDs: stable if the event is replayed.
             # Original Fleet generates request/task IDs only in this effect plan;
             # persistence makes them stable after the plan is saved.
-        if kind not in ('operator_input', 'request', 'task', 'pause', 'resume', 'legacy_invalid'):
+        if kind not in ('operator_input', 'request', 'task', 'recheck', 'pause', 'resume', 'legacy_invalid'):
             self.reply(ev, {'status': 'rejected', 'reason': 'unsupported v2 event'})
             return
         if kind == 'legacy_invalid':
@@ -1050,6 +1092,8 @@ class RuntimeV2:
             'message_id': '', 'stream_id': '', 'consumer': '', 'lease_until': 0})
         self.effects.command('XACK', self.bus.inbox_key(env['slot']), self.bus.slot_group(env['slot']), env['stream_id'])
         self.f.setf(env['slot'], state='idle', idle_confirmed=1, request='', bridge_available=0)
+        if outcome == 'completed' and env['slot'] == 'supervisor' and self.f.agent('supervisor').get('stopfail_streak'):
+            self.f.setf('supervisor', stopfail_streak=0)  # §24: a settled decision ends a service StopFailure streak
         self.audit('committed', slot=env['slot'], message_id=env['message_id'],
                    delivery_id=env['delivery_id'], request_id=env['request_id'], detail=result)
 
@@ -1086,7 +1130,7 @@ class RuntimeV2:
         key = 'fx:req:' + rid
         req = self.f.r.hgetall(key) if self.f.service else {}
         if req and req.get('clock_paused_at'):
-            fields = midturn.resume_clock(req, time.time())
+            fields = midturn.resume_clock(req, awake.now())
             self.f.r.hset(key, mapping={k: fields[k] for k in ('clock_paused_at', 'clock_paused_ms')})
 
     def midturn_clear(self, slot, resume=True):
@@ -1665,7 +1709,7 @@ class RuntimeV2:
         """Redis-only gate; typing happens later in clear_tick, never inside a Stop hook."""
         info = self.f.agent(slot)
         self.f.setf(slot, state='clearing', idle_confirmed=0, bridge_available=0, clear_required=1,
-                    clear_phase='waiting', clear_deadline=time.time() + float(self.f.cfg.get('clear_timeout', 20)),
+                    clear_phase='waiting', clear_deadline=awake.deadline(self.f.cfg.get('clear_timeout', 20)),
                     clear_hook_pid=hook_pid or '', clear_token=digest(self.context['intent_id'] + ':' + slot),
                     clear_old_thread=info.get('thread', ''), clear_idle_since=0)
         self.audit('clear.waiting', slot=slot, generation=info.get('generation'), hook_pid=hook_pid)
@@ -1696,7 +1740,7 @@ class RuntimeV2:
         if info.get('state') not in ('idle', 'clearing', 'held'):
             self.audit('clear.rejected', slot=slot, error='slot has another lifecycle owner; resume required')
             return
-        if info.get('state') == 'clearing' and time.time() >= float(info.get('clear_deadline') or 0):
+        if info.get('state') == 'clearing' and awake.passed(info.get('clear_deadline') or 0):
             self.hold(slot, 'clear confirmation deadline expired')
             return
         if (lease.get('status') != 'idle' or lease.get('session_id') != info.get('thread')
@@ -1716,7 +1760,7 @@ class RuntimeV2:
                     state='clearing', clear_phase='confirmed', clear_required=1, clear_conflict=0,
                     clear_hook_pid=ev.get('hook_pid') or '', clear_idle_since=0, idle_confirmed=0, bridge_available=0,
                     clear_deadline=info.get('clear_deadline') if info['state'] == 'clearing'
-                        else time.time() + float(self.f.cfg.get('clear_timeout', 20)),
+                        else awake.deadline(self.f.cfg.get('clear_timeout', 20)),
                     watch_state='idle', stall_escapes=0, watch_since=0, quiet_since=0, bg_wait='')
         self.audit('slot_rebound', slot=slot, generation=ev['generation'], old_session=info['thread'],
                    session_id=ev['thread'], fence=fence + 1)
@@ -1732,7 +1776,7 @@ class RuntimeV2:
             info = self.f.agent(slot)
             if not self.clear_enabled(slot) or info.get('state') != 'clearing':
                 continue
-            if now >= float(info.get('clear_deadline') or 0):
+            if now >= float(info.get('clear_deadline') or 0):  # now: awake time (the caller passes awake.now())
                 self.transaction('clear-timeout-' + uuid.uuid4().hex,
                                  lambda slot=slot: self.hold(slot, 'clear confirmation deadline expired'))
                 continue
@@ -1803,16 +1847,20 @@ class RuntimeV2:
         self.audit('stop_failure.failed', slot=slot, request_id=env['request_id'], error=error)
 
     def api_error_retry(self, slot, ev):
-        """Task-mode Claude hook-channel worker (§24): StopFailure ended the turn of its in-flight delivery, so
-        its execution has stopped. Commit it as not adopted and queue the same instruction again at the head
-        of this slot's queue (``replay`` attempt, capped by max_attempts). Only this slot is held until the
-        backoff ends (``tick``); the fleet and the supervisor go on. Used up: held, the supervisor told."""
-        info = self.f.agent(slot) if slot in self.f.workers else {}
+        """Task-mode Claude hook-channel worker or supervisor (§24): StopFailure ended the turn of its in-flight
+        delivery, so its execution has stopped. Commit it as not adopted and queue the same message again at the
+        head of this slot's queue (``replay`` attempt, capped by max_attempts). Only this slot is held until the
+        backoff ends (``tick``); the fleet goes on. Used up: held; a worker's supervisor is told, a supervisor is
+        escalated upwards (``held_escalate``: parent fleet / root channels). The advisor takes §27's fault branch
+        (held, its consultation falls back, restarted in place): a consultation is never re-run."""
+        from fleetmux.fleet import REQ
+        supervisor, is_advisor = slot == 'supervisor', slot == advisor.SLOT
+        info = self.f.agent(slot) if slot in self.f.names and (slot in self.f.workers or supervisor or is_advisor) else {}
         env = ev.get('delivery')
-        if (not info or not self.hooked(slot) or slot == advisor.SLOT
+        if (not info or not (self.hooked(slot) or is_advisor)
                 or ev.get('run_id') != self.bus.run_id or ev.get('generation') != int(info.get('generation', -1))
                 or ev.get('thread') != info.get('thread')):
-            self.audit('stop_failure.ignored', slot=slot or '', error='not this session of a hook-channel worker')
+            self.audit('stop_failure.ignored', slot=slot or '', error='not this session of a hook-channel agent')
             return
         if not isinstance(env, dict) or env.get('slot') != slot or env.get('session_id') != ev.get('thread'):
             self.audit('stop_failure.ignored', slot=slot, error='no matching delivery')
@@ -1822,9 +1870,17 @@ class RuntimeV2:
         except (BusError, ValueError, KeyError) as exc:
             self.audit('stop_failure.rejected', slot=slot, error=str(exc))
             return
-        if (lease.get('status') not in ('received', 'uncertain', 'expired') or msg.get('kind') not in ('worker', 'continuation')
+        error = ' '.join(' '.join(str(ev.get(k) or '') for k in ('error', 'text')).split()) or 'Claude StopFailure'
+        if is_advisor:
+            if lease.get('status') in ('received', 'uncertain', 'expired'):
+                self.hold(slot, 'API error: ' + error[:200], pause=False)  # §27: advisor_fault, never a pause
+                self.audit('stop_failure.advisor', slot=slot, message_id=env['message_id'], level='warn', error=error[:300])
+            return
+        kinds = ('supervisor', 'followup') if supervisor else ('worker', 'continuation')
+        if (lease.get('status') not in ('received', 'uncertain', 'expired') or msg.get('kind') not in kinds
                 or msg['body'].get('purpose') == 'handoff' or info.get('state') not in ('busy', 'held')):
-            self.audit('stop_failure.ignored', slot=slot, error='not an in-flight worker instruction')
+            self.audit('stop_failure.ignored', slot=slot, error='not an in-flight ' + ('supervisor message' if supervisor
+                       else 'worker instruction'))
             return
         self.context['authorization'] = {self.bus.lease_key(slot): {
             k: str(lease[k]) for k in ('current_delivery', 'generation', 'session_id', 'fence', 'status')}}
@@ -1832,36 +1888,40 @@ class RuntimeV2:
             k: str(msg[k]) for k in IDENTITY if k != 'request_id'}
         self.context['stop_gate'] = dict(inbox=self.bus.inbox_key(slot), group=self.bus.slot_group(slot),
                                          stream_id=env['stream_id'], consumer=env['consumer'])
-        error = ' '.join(' '.join(str(ev.get(k) or '') for k in ('error', 'text')).split()) or 'Claude StopFailure'
         self.release(env, {'stop_failure': error[:4000]}, 'failed')  # not adopted, never a report
         self.midturn_clear(slot)
-        if self.f.service:
-            return self.service_stop_failure(slot, env, info, error, bool(ev.get('refusal')))
+        refusal = bool(ev.get('refusal'))
+        if self.f.service and not (supervisor and not self.f.r.hgetall(REQ + env['request_id'])):
+            return self.service_stop_failure(slot, env, info, error, refusal)
+        # task mode, or a service supervisor's message with no live request behind it (a note): re-sent, not lost
         cap, attempt, now = int(self.f.cfg['max_attempts']), int(msg.get('replay') or 1), time.time()
+        lost = session_env.route_closed(self.f, slot, info)  # applet route port closed: no attempt spent, held
         label, short = self.f.label(slot), error[:200]
         self.f.setf(slot, state='held', idle_confirmed=0, bridge_available=0, stopfail_at=now,
                     stopfail_g=info.get('generation', '0'), stopfail_retry_at=0)
-        if attempt < cap:
+        adopted = supervisor and subfleet.adopted(self.f.cfg, slot, info.get('generation'))
+        if supervisor and refusal and adopted:
+            # The session refused: it takes no more work. The parent owns this pane, so no new session here: held,
+            # not re-sent, and the parent fleet's supervisor decides (it can take the slot back / rotate it).
+            text = (label + ' 模型拒答（' + short + '）；子 fleet 监工槽已扣下、不重投到同一会话，已上报父 fleet。')
+            self.audit('execution.held', slot=slot, message_id=env['message_id'], level='error',
+                       error='model refusal: ' + short, detail={'refusal': True, 'paused': False})
+            self.audit('stop_failure.refused', slot=slot, message_id=env['message_id'], level='error')
+            self.held_notices.append((slot, 'model refusal (' + short + '); the refused message was not re-sent to '
+                                      'that session, and the sub-fleet cannot replace a pane its parent owns',
+                                      {'reason': 'refusal', 'refusal': True}))
+        elif attempt < cap or lost:
             wait = STOP_FAILURE_BACKOFF[min(attempt, len(STOP_FAILURE_BACKOFF)) - 1]
-            body = msg['body'].get('text') or ''
-            self.queue_index += 1
-            mid = 'm-' + digest(self.context['intent_id'] + ':' + str(self.queue_index))[:32]
-            again = dict(msg['body'], text=body if body.startswith(STOP_FAILURE_RESUME) else STOP_FAILURE_RESUME + body)
-            self.effects.hset(self.bus.msg_key(mid), dict(run_id=self.bus.run_id, slot=slot, message_id=mid,
-                body=_json(again), request_id=msg['request_id'], kind=msg['kind'], status='queued',
-                deadline_at=msg['deadline_at'], created_at=int(now*1000), attempt=0, replay=attempt + 1,
-                stopfail_of=env['message_id']))
-            retained = {k: msg[k] for k in ('midturn_splits', 'continues', 'midturn_instruction', 'original_kind') if k in msg}
-            if retained:
-                self.effects.hset(self.bus.msg_key(mid), retained)
-            self.effects.lpush(self.bus.pending_key(slot), mid)  # ahead of anything queued meanwhile
-            self.audit('queued', slot=slot, message_id=mid, request_id=msg['request_id'], detail=again)
-            self.f.setf(slot, stopfail_retry_at=now + wait)
+            mid = self.requeue_after_stop_failure(slot, env, msg, attempt + (not lost), now, supervisor)
+            self.f.setf(slot, stopfail_retry_at=awake.deadline(wait))
+            if supervisor and refusal:
+                self.f.setf(slot, fresh_pending=1, stopfail_fresh=1)  # §37: the retry starts a fresh session
             text = label + ' API 错误（' + short + '），' + str(wait) + ' 秒后自动重试第 ' + str(attempt) + ' 次；只扣该槽，其他槽照常。'
             self.audit('execution.held', slot=slot, message_id=env['message_id'], level='warn', error='API error: ' + short,
                        detail={'retry_in_s': wait, 'attempt': attempt + 1, 'max_attempts': cap, 'paused': False})
             self.audit('stop_failure.retry', slot=slot, message_id=env['message_id'], delivery_id=env['delivery_id'],
-                       level='warn', detail={'requeued': mid, 'attempt': attempt + 1, 'retry_in_s': wait})
+                       level='warn', detail={'requeued': mid, 'attempt': attempt + 1, 'retry_in_s': wait,
+                                             'refusal': refusal})
         else:
             text = (label + ' API 错误（' + short + '），已重试 ' + str(attempt - 1) + ' 次（max-attempts ' + str(cap)
                     + '）仍失败；该槽已扣下、不再派活，其他槽照常。恢复后在该窗格正常结束一个回合即放行。')
@@ -1869,17 +1929,48 @@ class RuntimeV2:
                        detail={'attempt': attempt, 'max_attempts': cap, 'paused': False})
             self.audit('stop_failure.exhausted', slot=slot, message_id=env['message_id'], delivery_id=env['delivery_id'],
                        level='error', detail={'attempt': attempt, 'max_attempts': cap})
-            if self.f.task().get('status') == 'running':
-                self.f.queue('supervisor', '[' + label + ' report]\nAPI ERROR: ' + label + ' failed ' + str(attempt)
-                             + ' attempt(s) (max-attempts ' + str(cap) + ') on an API error: ' + short + '. Its '
-                             'instruction was NOT re-run again; it may be partly done. The slot is held (no new work) '
-                             'until its session ends a normal turn; the other workers go on. Dispatch the work '
-                             'elsewhere, or reply BLOCKED if a human is needed.\n\nReply with the JSON format from AGENTS.md.')
-            self.stopfail_notices.append(text)
+            if supervisor:
+                # A supervisor cannot be told about itself: escalated upwards outside this intent (held_watch_tick).
+                # Its message is not dropped: its turns are decisions nobody else can make, so it keeps being retried
+                # at the longest backoff and the run goes on as soon as the API answers again.
+                wait = STOP_FAILURE_BACKOFF[-1]
+                self.requeue_after_stop_failure(slot, env, msg, attempt + 1, now, supervisor)
+                self.f.setf(slot, stopfail_retry_at=awake.deadline(wait))
+                text += ' 监工消息保留，' + str(wait) + ' 秒后再试，已上报。'
+                self.held_notices.append((slot, 'API error retries used up (' + str(attempt) + ' of max-attempts '
+                                          + str(cap) + '): ' + short + '; its message is retried every ' + str(wait)
+                                          + ' s until the API answers', {'reason': 'stop_failure_exhausted'}))
+            else:
+                if self.f.task().get('status') == 'running':
+                    self.f.queue('supervisor', '[' + label + ' report]\nAPI ERROR: ' + label + ' failed ' + str(attempt)
+                                 + ' attempt(s) (max-attempts ' + str(cap) + ') on an API error: ' + short + '. Its '
+                                 'instruction was NOT re-run again; it may be partly done. The slot is held (no new work) '
+                                 'until its session ends a normal turn; the other workers go on. Dispatch the work '
+                                 'elsewhere, or reply BLOCKED if a human is needed.\n\nReply with the JSON format from AGENTS.md.')
+                self.stopfail_notices.append(text)
         card = routing_card(text, kind='notice', slot=label, severity='warn')
         card['metadata']['event_id'] = 'ui-stopfail-' + digest(slot + ':' + env['message_id'])[:32]
         self.ui(slot, card)
-        self.ui('supervisor', card)
+        if not supervisor:
+            self.ui('supervisor', card)
+
+    def requeue_after_stop_failure(self, slot, env, msg, replay, now, supervisor=False):
+        """The same message again, at the head of the slot's queue, with the API-error note in front (§24)."""
+        lead = STOP_FAILURE_RESUME_SUPERVISOR if supervisor else STOP_FAILURE_RESUME
+        body = msg['body'].get('text') or ''
+        self.queue_index += 1
+        mid = 'm-' + digest(self.context['intent_id'] + ':' + str(self.queue_index))[:32]
+        again = dict(msg['body'], text=body if body.startswith(lead) else lead + body)
+        self.effects.hset(self.bus.msg_key(mid), dict(run_id=self.bus.run_id, slot=slot, message_id=mid,
+            body=_json(again), request_id=msg['request_id'], kind=msg['kind'], status='queued',
+            deadline_at=msg['deadline_at'], created_at=int(now*1000), attempt=0, replay=replay,
+            stopfail_of=env['message_id']))
+        retained = {k: msg[k] for k in ('midturn_splits', 'continues', 'midturn_instruction', 'original_kind') if k in msg}
+        if retained:
+            self.effects.hset(self.bus.msg_key(mid), retained)
+        self.effects.lpush(self.bus.pending_key(slot), mid)  # ahead of anything queued meanwhile
+        self.audit('queued', slot=slot, message_id=mid, request_id=msg['request_id'], detail=again)
+        return mid
 
     def service_stop_failure(self, slot, env, info, error, refusal):
         """Service mode (§24): the StopFailure ended the turn, so its request fails now (never re-sent here; the
@@ -1889,7 +1980,7 @@ class RuntimeV2:
         from fleetmux import fleet as legacy
         label, short, now = self.f.label(slot), error[:200], time.time()
         cap = int(self.f.cfg.get('service_stopfail_max') or SERVICE_STOPFAIL_MAX)
-        streak = int(info.get('stopfail_streak') or 0) + 1
+        streak = int(info.get('stopfail_streak') or 0) + (not session_env.route_closed(self.f, slot, info))
         what = '模型拒答' if refusal else 'API 错误'
         if self.f.r.hgetall(legacy.REQ + env['request_id']):
             self.publish(env['request_id'], 'failed', worker=label,
@@ -1900,7 +1991,7 @@ class RuntimeV2:
         detail = {'streak': streak, 'max': cap, 'refusal': refusal, 'paused': False}
         if streak < cap:
             wait = STOP_FAILURE_BACKOFF[min(streak, len(STOP_FAILURE_BACKOFF)) - 1]
-            self.f.setf(slot, stopfail_retry_at=now + wait)
+            self.f.setf(slot, stopfail_retry_at=awake.deadline(wait))
             text = (label + ' ' + what + '（' + short + '），该条请求已判失败、未重投；' + str(wait) + ' 秒后放行该槽'
                     + ('，下一条换新会话' if refusal else '') + '。只扣该槽，其他槽照常（连续第 ' + str(streak)
                     + ' 次，上限 ' + str(cap) + '）。')
@@ -1922,6 +2013,8 @@ class RuntimeV2:
         hook of the same session waits again (a normal turn ended there: the API answers again)."""
         if info.get('stopfail_g') != info.get('generation') or info.get('link_lost') == '1':
             return
+        if session_env.route_closed(self.f, slot, info):
+            return  # applet route port closed: stays held, nothing re-delivered until it answers
         due = float(info.get('stopfail_retry_at') or 0)
         armed = None
         if now >= float(info.get('stopfail_at') or 0) + claude_hook.ARMED_TTL:  # a stale flag expires by then
@@ -1931,20 +2024,24 @@ class RuntimeV2:
                 armed = None
         turn = (isinstance(armed, dict) and str(armed.get('generation')) == info.get('generation')
                 and armed.get('session_id') == info.get('thread'))
-        if not turn and not (due and now >= due):
+        if not turn and not (due and awake.passed(due)):
             return
         self.f.setf(slot, state='idle', idle_confirmed=1, stopfail_at='', stopfail_retry_at='', stopfail_g='')
         self.audit('stop_failure.released', slot=slot, level='warn',
                    detail={'reason': 'a normal turn ended in the same session' if turn else 'backoff over',
                            'retry': bool(self.bus.r.llen(self.bus.pending_key(slot)))})
 
-    def publish(self, rid, status, **fields):
+    def publish(self, rid, status, replace=False, **fields):
         from fleetmux import fleet as legacy
         if self.effects is None:
-            return self.transaction('pub-' + digest(rid)[:32], lambda: self.publish(rid, status, **fields))
-        # Tombstones are retained past public RESULT_TTL, so expiry never authorizes a rerun.
+            return self.transaction('pub-' + digest(rid)[:32] + ('-replace' if replace else ''),
+                                    lambda: self.publish(rid, status, replace=replace, **fields))
+        # Tombstones are retained past public RESULT_TTL, so expiry never authorizes a rerun. ``replace`` (a delivery
+        # gate recheck of a blocked job) is the one deliberate second result.
         tombstone = self.prefix + ':public:' + digest(rid)
-        if self.f.r.get(tombstone):
+        if self.f.r.get(tombstone) and not replace:
+            return
+        if applet_lease.withhold(self.f, rid, status, fields):  # a fix reply waits for its review (applets.md 6)
             return
         req = self.f.r.hgetall(legacy.REQ + rid)
         if self.f.service:  # plan F': a [blocked] question about a request that is now terminal is moot
@@ -1953,10 +2050,10 @@ class RuntimeV2:
             if moot:
                 self.f.save_escalations({k: v for k, v in esc.items() if k not in moot})
                 self.audit('blocked.moot', request_id=rid, detail={'tasks': moot, 'status': status})
-        now = time.time()
-        req = midturn.resume_clock(req, now)
+        now, awake_now = time.time(), awake.now()  # the request's clock is awake seconds (fleetmux/awake.py)
+        req = midturn.resume_clock(req, awake_now)
         rec = dict(id=rid, status=status, at=now,
-                   elapsed_s=round(midturn.effective_age(req, now), 1),
+                   elapsed_s=round(midturn.effective_age(req, awake_now), 1),
                    clock_paused_ms=int(req.get('clock_paused_ms') or 0), **fields)
         raw = dumps(rec)
         self.f.r.set(tombstone, raw)
@@ -1983,6 +2080,7 @@ class RuntimeV2:
                 info = self.f.agent(slot)
                 delivered = (info.get('request') == rid
                              or self.context.get('bound_slot') == slot and self.context.get('bound_request') == rid)
+                delivered = delivered and not applet_lease.skip_fresh(self.f, slot)  # leased: one session per lease
                 if self.clear_enabled(slot) and delivered:
                     self.begin_clear(slot, hook_pid=self.context.get('clear_hook_pid'))
                 elif delivered and self.slot_cfg(slot).get('fresh_after_result') is True:
@@ -2045,6 +2143,11 @@ class RuntimeV2:
             prior = self.f.r.hgetall(legacy.SERVICE)
             self.f.pause(slot + ': ' + reason)
             self.handoff_pause_arm(slot, mid, prior)
+            # §24 held watchdog: this hold owns the pause only when the run was not paused before; held_watch_tick
+            # may lift it later (same fx:service.at, never past a brake), never anyone else's pause.
+            self.f.setf(slot, hold_pause=dumps({'at': self.f.r.hget(legacy.SERVICE, 'at'), 'message_id': mid or '',
+                        'generation': int(self.f.agent(slot).get('generation') or 0)})
+                        if prior.get('paused') != '1' else '')
 
     def handoff_pause_arm(self, slot, mid, prior):
         """Mark a paused hold of this slot's own handoff delivery as the owner of the pause (handoff_resume_tick).
@@ -2102,6 +2205,36 @@ class RuntimeV2:
                                 (mark.get('label') or slot) + ' 交接超时的暂停已自动解除：老一代已关闭、执行已确认停止，'
                                 '新一代 ' + label + ' 已 READY，恢复派工。', mark['hid'])
 
+    def startup_late(self, info, ev):
+        """The mark of a READY that came after this generation's startup deadline set the slot ``dead`` (a sleep
+        the §35 deadline shift did not cover), else None. Only a clean READY counts."""
+        try:
+            mark = json.loads(info.get('startup_timeout') or '{}')
+        except ValueError:
+            return None
+        if (info.get('state') != 'dead' or not isinstance(mark, dict)
+                or mark.get('generation') != str(info.get('generation', '0')) or info.get('launch_ready', '1') != '1'
+                or ev.get('failed') or ev.get('aborted') or not ready_reply(ev.get('text', ''))):
+            return None
+        return mark
+
+    def startup_late_lift(self, slot, mark):
+        """The slot is READY after all: drop the mark, and lift the pause its startup timeout set when that pause is
+        still the only one (fx:service.at unchanged since, the run live); a later pause stays with its owner."""
+        from fleetmux.fleet import SERVICE
+        self.f.setf(slot, startup_timeout='')
+        service = self.f.r.hgetall(SERVICE)
+        mine = bool(mark.get('at')) and service.get('paused') == '1' and service.get('at') == mark['at']
+        self.audit('startup.late_ready', slot=slot, level='warn',
+                   detail={'generation': mark['generation'], 'paused_at': mark.get('at') or '', 'lifts_pause': mine})
+        if mine and self.f.running():
+            label = self.f.label(slot)
+            self.pause_owner_resume(slot, '', {'source': 'startup_timeout', 'label': label,
+                                               'pause_reason': service.get('reason', ''), 'paused_at': mark['at']},
+                                    label + ' became READY after its startup deadline (the machine probably slept); '
+                                    'the pause its startup timeout set is lifted and dispatch resumes.',
+                                    'startup:' + mark['at'])
+
     def pause_owner_resume(self, slot, mid, detail, text, card_key):
         """Shared tail of the owner-lifted pauses (handoff hold, dialog wait): never past a brake / budget line;
         else resume, audit execution.auto_resumed and tell the slot and the supervisor."""
@@ -2110,7 +2243,7 @@ class RuntimeV2:
         state = self.f.r.hgetall(BRAKE)
         budget = self.f.brake_budget()
         over = budget and brake.trips(self.f.brake_card(budget), brake.counters(
-            state, brake.read_quota(self.f.cfg.get('quota_file'))))
+            state, self.f.quota_reading()))
         if state.get('tripped') or state.get('paused_by') or over:
             self.audit('execution.auto_resume_refused', slot=slot, message_id=mid, level='warn',
                        error='brake tripped or budget over the line; resume stays with the operator',
@@ -2178,7 +2311,8 @@ class RuntimeV2:
         starting), so once a human answers in the pane the turn ends and settles normally."""
         if self.f.agent(slot).get('midturn_id') and not self.f.agent(slot).get('midturn_wait_at'):
             self.f.setf(slot, midturn_wait_at=time.time())
-        self.f.setf(slot, prompt_wait=scope, prompt_wait_at=time.time(), prompt_route='user', watch_state='prompting')
+        self.f.setf(slot, prompt_wait=scope, prompt_wait_at=time.time(), prompt_route='user', watch_state='prompting',
+                    prompt_class=kind or 'unread')  # §24 held watchdog: a delete dialog is only ever escalated
         self.audit('execution.prompt_wait', slot=slot, level='error', error=reason,
                    detail={'scope': scope, 'screen': screen, 'route': 'user', 'dialog_class': kind or 'unread'})
         card = routing_card(self.f.label(slot) + ' 停在确认框等人答，已暂停派工；屏幕见 ' + screen + '。',
@@ -2710,10 +2844,10 @@ class RuntimeV2:
                          + ' attempt(s) used (max-attempts ' + str(cap) + ')')
         else:
             # A fresh timeout window: the downtime does not count against the replay.
-            resumed = midturn.resume_clock(req, time.time())
+            resumed = midturn.resume_clock(req, awake.now())
             paused_ms = int(resumed.get('clock_paused_ms') or 0)
             self.f.r.hset(REQ + rid, mapping={'replay': attempt, 'status': 'routing', 'worker': '',
-                'created': time.time() - paused_ms / 1000, 'clock_paused_at': '', 'clock_paused_ms': paused_ms})
+                'created': awake.now() - paused_ms / 1000, 'clock_paused_at': '', 'clock_paused_ms': paused_ms})
             self.f.route(rid, spec)
             self.audit('request.replayed', request_id=rid, attempt=attempt)
 
@@ -2735,8 +2869,10 @@ class RuntimeV2:
             return
         msg = self.bus.message(mids[0])
         # A consultation (kind advisor) is bound to its ticket, never to a request: its own deadline ends it (§27).
+        # A program notice to the supervisor is kind followup (queue): only request-bound messages are dropped.
         if (self.f.service and msg['kind'] not in ('followup', 'advisor') and not self.f.r.hgetall(REQ + msg['request_id'])
-                and not self.f.r.hgetall(named_subfleet.OP + msg['request_id'])):  # §29: an open sub-fleet op
+                and not self.f.r.hgetall(named_subfleet.OP + msg['request_id'])  # §29: an open sub-fleet op
+                and not self.f.r.hgetall(applet_lease.OP + msg['request_id'])):  # an open applet op (applets.md 3)
             self.transaction('drop-' + msg['message_id'], lambda: self.cancel_queued(slot, msg, 'already terminal'))
             return
         if msg.get('kind') == 'continuation':
@@ -2840,7 +2976,7 @@ class RuntimeV2:
         if (mark.get('run_id') != self.bus.run_id or mark.get('slot') != slot
                 or str(mark.get('generation')) != info.get('generation')
                 or mark.get('session_id') != info.get('thread')
-                or time.time() < mark['deadline']):
+                or not awake.passed(mark['deadline'])):  # awake time: written by the hook (awake.of)
             return
         def hold_unconfirmed():
             # A concurrent Stop/block may already have resolved the boundary.
@@ -2929,6 +3065,12 @@ class RuntimeV2:
             self.f.setf(slot, quiet_since=0, **floor)
             slots.append(slot)
         self.audit('daemon.gap', level='warn', detail={'gap_s': round(now - last, 1), 'slots': slots})
+
+    def gap_tick(self):
+        """daemon_gap at the start of Fleet.tick, before its parts (the applets part judges heartbeats), once per
+        loop pass: a second call in the same pass would read the first as the previous tick (gap_before)."""
+        self.daemon_gap(time.time())
+        self.gap_done = True
 
     def cancel_queued(self, slot, msg, reason):
         r = self.effects or self.bus.r
@@ -3174,9 +3316,9 @@ class RuntimeV2:
         from fleetmux.fleet import RESUME_CLIS
         slot = 'supervisor'
         info = self.f.agent(slot)
-        if (info.get('state') != 'held' or self.f.paused() or not self.hooked(slot)
+        if (info.get('state') != 'held' or self.f.paused() or not self.hooked(slot) or info.get('stopfail_at')
                 or not subfleet.adopted(self.f.cfg, slot, info.get('generation'))):
-            return
+            return  # a StopFailure hold (§24) is stopfail_tick's: its message is already queued again
         pane = info.get('pane')
         alive = (bool(pane) and self.f.mgr.get_pane_status(pane) is not None
                  and self.f.mgr.has_cli_process(pane, RESUME_CLIS))
@@ -3206,6 +3348,210 @@ class RuntimeV2:
         self.audit('adopted.reattached', slot=slot, level='warn', pane=pane,
                    message_id=(msg or {}).get('message_id', ''))
 
+    # ------------------------------------------------------------------ §24 held watchdog backstop
+    def held_knobs(self):
+        """fleet.yaml#daemon_watch held_after_s / held_realert_s, re-read at most every 30 s (hot, like the file)."""
+        if self.held_knobs_cache is None or time.monotonic() - self.held_knobs_at >= 30:
+            knobs, problem = held_watch_knobs()
+            if problem and (self.held_knobs_cache is None or self.held_knobs_cache[1] != problem):
+                self.audit('held_watch.config_rejected', level='error', error=problem)
+            self.held_knobs_cache, self.held_knobs_at = (knobs, problem), time.monotonic()
+        return self.held_knobs_cache[0]
+
+    def held_watch_tick(self):
+        """§24 held watchdog: the daemon, not an outside session, acts on a slot held (or waiting on a user dialog)
+        for ``held_after_s`` awake seconds with no session progress, and on a run paused that long.
+
+        Per held episode, once: recover when the turn is proven stopped (``stop_proof``: settled like the
+        StopFailure event that never arrived) or, for a sub-fleet's adopted supervisor, by lifting the pause its own
+        hold set (``adopted_held_tick`` then takes it back in its session). A pause is lifted only when this hold
+        owns it (``hold_pause``: same fx:service.at) and never past a brake (``pause_owner_resume``). A user dialog
+        (above all a delete dialog), a delete dialog on the held pane's screen, or anything not recovered:
+        escalated (``held_escalate``), again after ``held_realert_s``. Runs outside any intent (screen, files)."""
+        from fleetmux.fleet import SERVICE
+        notices, self.held_notices = self.held_notices, []
+        for slot, text, detail in notices:
+            self.f.setf(slot, held_alert_at=awake.now(), held_tried=1)
+            self.held_escalate(slot, text, detail)
+        knobs = self.held_knobs()
+        after, realert = float(knobs['held_after_s']), float(knobs['held_realert_s'])
+        busy = False
+        for slot in self.f.names:
+            if slot == advisor.SLOT:
+                continue  # §27: advisor_tick restarts a held advisor in place; its holds never pause
+            info = self.f.agent(slot)
+            dialog = bool(info.get('prompt_wait')) and info.get('prompt_route') == 'user'
+            held = info.get('state') == 'held'
+            if not held and not dialog:
+                if info.get('held_since') or info.get('held_alert_at'):
+                    self.f.setf(slot, held_since='', held_at='', held_alert_at='', held_tried='')
+                continue
+            busy = True
+            if not info.get('held_since'):
+                self.f.setf(slot, held_since=awake.now(), held_at=time.time())
+                continue
+            since = (awake.since_wall(float(info.get('prompt_wait_at') or time.time())) if dialog
+                     else awake.since(float(info['held_since'])))
+            if since < after:
+                continue
+            if (held and info.get('stopfail_at') and info.get('stopfail_retry_at')
+                    and not awake.passed(float(info['stopfail_retry_at']))):
+                continue  # a StopFailure backoff: stopfail_tick releases it on schedule
+            if not dialog and self.f.last_activity(info) > float(info.get('held_at') or 0) + 1:
+                self.f.setf(slot, held_since=awake.now(), held_at=time.time())  # the session moved: a new episode
+                continue
+            if info.get('held_alert_at') and awake.since(float(info['held_alert_at'])) < realert:
+                continue
+            detail = {'held_s': int(since), 'paused': self.f.paused(), 'state': info.get('state', '')}
+            if dialog:
+                kind = info.get('prompt_class') or 'unread'
+                why = ('a delete confirmation dialog waits for the user; deleting is the user\'s alone, nothing is '
+                       'pressed' if kind == 'delete' else 'a confirmation dialog waits for the user; nothing is pressed')
+                self.f.setf(slot, held_alert_at=awake.now(), held_tried=1)
+                self.held_escalate(slot, why, dict(detail, reason='dialog', dialog_class=kind))
+                continue
+            kind = self.screen_dialog_class(slot, info)
+            if kind == 'delete':
+                self.f.setf(slot, held_alert_at=awake.now(), held_tried=1)
+                self.held_escalate(slot, 'held with a delete confirmation dialog on its screen; deleting is the '
+                                   'user\'s alone, nothing is pressed', dict(detail, reason='dialog', dialog_class='delete'))
+                continue
+            recovered = None
+            if info.get('held_tried') != '1':
+                self.f.setf(slot, held_tried=1)
+                recovered = self.held_recover(slot, info)
+            if recovered and not self.f.paused():
+                continue
+            self.f.setf(slot, held_alert_at=awake.now())
+            reason = (recovered + '; the run stays paused (not this hold\'s pause, or a brake)') if recovered else (
+                'held (' + str(self.bus.r.hget(self.bus.msg_key(self.bus.slot_state(slot).get('message_id') or '-'),
+                                               'uncertain_reason') or info.get('stopfail_at') and 'API error retries '
+                                               'used up' or 'execution state unconfirmed')[:300]
+                + ') with no progress, and the program could not prove its turn stopped')
+            self.held_escalate(slot, reason, dict(detail, reason='not_recovered' if not recovered else 'paused'))
+        service = self.f.r.hgetall(SERVICE)
+        if (not busy and service.get('paused') == '1' and service.get('at') and service['at'] != self.pause_alerted
+                and awake.since_wall(float(service['at'])) >= after):
+            self.pause_alerted = service['at']
+            self.held_escalate('supervisor', 'the run has been paused for ' + str(int(awake.since_wall(float(
+                service['at'])))) + ' s (' + str(service.get('reason') or '')[:200] + ') with no held slot; the '
+                'program does not lift a pause it did not set', {'reason': 'paused', 'paused': True}, pause_only=True)
+
+    def screen_dialog_class(self, slot, info):
+        """R4: the bottom of a held pane's screen; 'delete' means no key may be pressed there (§24 delete class)."""
+        read = getattr(self.f.mgr, 'capture_output', None)
+        if not read or not info.get('pane'):
+            return None
+        try:
+            screen = read(info['pane'], 200) or ''
+            return watchdog.dialog_class(self.watchdog.cache.get(self.audit), None, screen) if screen.strip() else None
+        except Exception as exc:  # a failed look never takes the daemon down; it only means no recovery by keys
+            self.audit('held_watch.capture_failed', slot=slot, level='warn', error=str(exc)[:300])
+            return None
+
+    def stop_proof(self, slot, info, lease):
+        """What proves the held delivery's turn ended: the StopFailure hook's ``turnend`` mark, or an API-error end
+        in the session's transcript, after that delivery was received. None: unproven (never re-sent then)."""
+        mid = lease.get('message_id')
+        if not mid or not lease.get('current_delivery') or not self.hooked(slot):
+            return None
+        received = float(self.bus.r.hget(self.bus.msg_key(mid), 'received_at') or 0)
+        received = received / 1000.0 if received > 1e11 else received
+        try:
+            mark = float(self.bus.r.get(self.hook_keys(slot, int(info.get('generation') or 0))['turnend']) or 0)
+        except (TypeError, ValueError):
+            mark = 0.0
+        if mark and mark >= received:
+            return 'turnend'
+        try:
+            ended = claude_hook.failure_end(claude_hook.tail_rows(info.get('transcript') or ''))
+        except (OSError, ValueError):
+            ended = None
+        if ended and float(ended) >= received:
+            return 'transcript'
+        return None
+
+    def held_recover(self, slot, info):
+        """One recovery attempt for a stuck held slot. Returns what was done, or None."""
+        lease = self.bus.slot_state(slot)
+        proof = self.stop_proof(slot, info, lease)
+        done = None
+        if proof:
+            msg = self.bus.message(lease['message_id'])
+            ev = dict(kind='stop_failure', agent=slot, generation=int(info.get('generation') or 0), run_id=self.bus.run_id,
+                      thread=info.get('thread'), error='held watchdog: the turn ended with an API error (' + proof
+                      + ') and no StopFailure event arrived', text='', refusal=False,
+                      delivery={x: msg[x] for x in IDENTITY if x in msg})
+            self.transaction('held-proof-' + uuid.uuid4().hex, lambda: self.api_error_retry(slot, ev))
+            if self.f.agent(slot).get('stopfail_at'):
+                done = 'settled as an API error (' + proof + ') and its message queued again'
+                self.audit('held_watch.recovered', slot=slot, level='warn', message_id=lease['message_id'],
+                           detail={'proof': proof})
+        adopted = slot == 'supervisor' and subfleet.adopted(self.f.cfg, slot, info.get('generation'))
+        if (done or adopted) and self.f.paused() and self.hold_pause_lift(slot):
+            if not done:
+                done = 'its own pause lifted; the adopted supervisor is taken back in its session'
+                self.audit('held_watch.resumed_owned_pause', slot=slot, level='warn')
+        return done
+
+    def hold_pause_lift(self, slot):
+        """Lift the pause this slot's hold set (``hold_pause``), when nobody paused again since; never past a brake."""
+        from fleetmux.fleet import SERVICE
+        info = self.f.agent(slot)
+        try:
+            mark = json.loads(info.get('hold_pause') or '{}')
+        except ValueError:
+            mark = {}
+        service = self.f.r.hgetall(SERVICE)
+        if not mark or service.get('paused') != '1' or str(service.get('at')) != str(mark.get('at')):
+            return False
+        label = self.f.label(slot)
+        self.transaction('held-resume-' + uuid.uuid4().hex, lambda: self.pause_owner_resume(
+            slot, mark.get('message_id') or '', {'reason': 'held watchdog', 'paused_at': mark.get('at')},
+            label + ' 被扣住且无进展，daemon 已自行放开它自己设下的暂停（§24 held watchdog）。', 'held-' + str(mark.get('at'))))
+        if self.f.paused():
+            return False
+        self.f.setf(slot, hold_pause='')
+        return True
+
+    def held_escalate(self, slot, text, detail, pause_only=False):
+        """Report a stuck slot / run upwards through the existing paths: a sub-fleet -> its parent fleet's
+        supervisor (``subfleet-notices``, kind ``held``); a root fleet -> its supervisor (task mode, not about
+        itself) and, for a managed run, the tg / parent channels (``lifecycle_close.notify``)."""
+        from fleetmux import fleet as legacy
+        label = self.f.label(slot)
+        self.audit('held_watch.escalated', slot=slot, level='error', error=text[:300], detail=detail)
+        whole = ('the run' if pause_only else label) + ': ' + text
+        parent = self.f.cfg.get('parent_config')
+        if parent:
+            try:
+                folder = Path(legacy.load(parent)['run']) / 'subfleet-notices'
+                folder.mkdir(parents=True, exist_ok=True)
+                legacy.save(folder / ('held-' + uuid.uuid4().hex[:12] + '.json'), dict(
+                    detail, kind='held', origin_run=str(self.f.run_dir), task=self.f.cfg.get('task_id'), slot=slot,
+                    label=label, text=text))
+            except Exception as exc:  # a notice never takes the daemon down
+                self.audit('held_watch.notify_failed', slot=slot, level='error', error=str(exc)[:300])
+        elif (not pause_only and slot != 'supervisor' and not self.f.service
+              and self.f.task().get('status') == 'running'):
+            self.f.queue('supervisor', '[' + label + ' report]\nHELD: ' + text + '. Held for ' + str(detail.get('held_s', 0))
+                         + ' s. Check that slot, then dispatch its work elsewhere, or reply BLOCKED if a human is '
+                         'needed.\n\nReply with the JSON format from AGENTS.md.')
+        if not parent and lifecycle_close.managed(self.f):
+            from fleetmux import lifecycle
+            try:
+                policy = lifecycle.get_mode(self.f.cfg['lifecycle'])
+            except ValueError:
+                policy = {}
+            try:
+                lifecycle_close.notify(self.f, 'slot_held', '[fleet ' + lifecycle_close.fleet_name(self.f) + '] ' + whole
+                                       + ' run: ' + self.f.cfg['run'], policy)
+            except Exception as exc:
+                self.audit('held_watch.notify_failed', slot=slot, level='error', error=str(exc)[:300])
+        card = routing_card(whole, kind='notice', slot=label, severity='warn')
+        card['metadata']['event_id'] = 'ui-heldwatch-' + digest(slot + ':' + str(time.time()))[:32]
+        self.ui('supervisor', card)
+
     def resume_fallback(self):
         """A resumed session that did not say READY in time (``expire`` marks it): a fresh generation instead."""
         for slot in self.f.workers:
@@ -3229,9 +3575,12 @@ class RuntimeV2:
             self.f.refresh_history()  # history page "Cards" view; reload only, no focus change
 
     def tick(self):
-        from fleetmux.fleet import REQ, REQQ
-        now = time.time()
-        self.daemon_gap(now)
+        from fleetmux.fleet import REQ, REQQ, SERVICE, task_deadline as legacy_deadline
+        now = time.time()  # the bus (lease_until / deadline_at, written by the bridges)
+        awake_now = awake.now()  # request timeouts, startup deadlines and the task budget: awake seconds (§35)
+        if not self.gap_done:
+            self.daemon_gap(now)
+        self.gap_done = False
         # Timeouts and cancellation effects use the same intent machinery as results.
         def expire():
             if self.f.service:
@@ -3241,7 +3590,7 @@ class RuntimeV2:
                     if not req:
                         continue
                     limit = request_limit(json.loads(req['spec']), self.f.cfg)  # None: no wall-clock deadline
-                    if limit is not None and midturn.effective_age(req, now) >= limit:
+                    if limit is not None and midturn.effective_age(req, awake_now) >= limit:
                         # §43: a stale answer, not a fault. Only the worker executing it is held (its late
                         # answer is never applied); the fleet keeps dispatching. The supervisor is never held
                         # for it: its routing decision on a finished request is skipped (dispatch.unknown_request).
@@ -3253,15 +3602,16 @@ class RuntimeV2:
                         self.publish(rid, 'timeout', worker=req.get('worker') or 'supervisor',
                                      error='no valid answer within ' + str(int(limit)) + ' s')
             task = self.f.task()
-            if task.get('status') == 'running' and now >= float(task['deadline']):
+            if task.get('status') == 'running' and awake_now >= legacy_deadline(task, awake_now):
                 self.finish('budget_exhausted', 'time budget exhausted')
             for slot in self.f.names:
                 info = self.f.agent(slot)
                 state = self.f.r.hgetall(self.bus.lease_key(slot))
                 if (info.get('state') == 'starting' and info.get('advice_hold') != '1'  # held for its first advisor sheet
+                        and not session_env.held(self.f, slot, info)  # held by its launch wait for the route port
                         # a dialog before READY waits for a human (plan F B-2b): not a dead start
                         and info.get('prompt_wait') != 'startup-g' + str(info.get('generation', '0'))
-                        and now >= float(info.get('startup_deadline') or 0)):
+                        and awake_now >= float(info.get('startup_deadline') or 0)):
                     if info.get('resume_generation') == info.get('generation') and slot in self.f.workers:
                         self.f.setf(slot, resume_failed=1)  # a resumed session: a fresh generation next (tick)
                         continue
@@ -3269,7 +3619,14 @@ class RuntimeV2:
                     if slot == advisor.SLOT:  # §27: restarted in place by advisor_tick, never blocks the task
                         self.audit('advisor.startup_timeout', slot=slot, level='error')
                     else:
+                        prior = self.f.r.hgetall(SERVICE)
                         self.finish('blocked', slot + ' startup timed out before READY')
+                        # A late READY of this generation revives the slot; it lifts the pause only when this
+                        # timeout set it (not paused before) and nothing paused again since (startup_late).
+                        if self.f.service:  # a task run ended blocked: nothing for a late READY to undo
+                            ours = prior.get('paused') != '1'
+                            self.f.setf(slot, startup_timeout=dumps({'generation': str(info.get('generation', '0')),
+                                        'at': self.f.r.hget(SERVICE, 'at') if ours else ''}))
                 elif state.get('current_delivery') and state.get('status') not in ('uncertain', 'expired'):
                     mid = state['message_id']
                     deadline = int(self.f.r.hget(self.bus.msg_key(mid), 'deadline_at'))
@@ -3300,8 +3657,9 @@ class RuntimeV2:
         self.transaction('tick-' + uuid.uuid4().hex, expire)
         self.stopfail_notify()
         self.resume_fallback()
+        self.held_watch_tick()  # before adopted_held_tick: it may lift the pause that held an adopted supervisor
         self.adopted_held_tick()
-        self.clear_tick(now)
+        self.clear_tick(awake_now)  # clear_deadline is awake time
         self.renew_tui()
         self.render_cards()
         self.watchdog.tick(now)  # screen / keys / kill / spawn: side effects, outside any Redis intent
@@ -3377,14 +3735,17 @@ class RuntimeV2:
             else:
                 self.recover()  # no start_all, no Redis shutdown
             self.f.midturn_probe.start()
-            while not self.f.stopping:
+            from fleetmux import applet_host
+            while not self.f.stopping or applet_host.stop_wait(self.f):  # root host: applet leases end first
                 self.bus.r.set('fx:daemon:beat', str(time.time()))
                 self.step()
                 self.f.midturn_apply()
                 self.f.pump()
                 self.f.tick()  # Fleet.tick: roster reload, result.json, sub-fleets, then this tick
             if self.f.explicit_stop:
-                children_stopped = subfleet.stop_children(self.f)  # descendants first, panes taken back
+                from fleetmux import applet_host
+                applets_stopped = applet_host.stop_all(self.f)  # host.draining, SIGTERM, grace, SIGKILL (applets.md 2)
+                children_stopped = subfleet.stop_children(self.f) and applets_stopped  # descendants first, panes taken back
                 all_stopped = all([self.retire(slot, 'explicit fleet stop') for slot in self.f.names]) and children_stopped
                 all_stopped = tabs.stop_all(self.f) and all_stopped  # companion tabs close with the fleet (§31)
                 if all_stopped:

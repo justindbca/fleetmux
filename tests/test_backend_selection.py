@@ -43,14 +43,14 @@ def test_unusable_flag_reports_the_reason(monkeypatch):
     assert name == 'wezterm' and why == 'missing: wezterm-mux-server'
 
 
-def test_no_flag_follows_design_5(monkeypatch):
+def test_no_flag_follows_design_33_3(monkeypatch):
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)  # this host's cmux binary must not decide it
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: None)
-    assert fleet.resolve_backend(None, platform='darwin') == ('cmux', None)
+    assert fleet.resolve_backend(None, platform='darwin') == ('fleetmux', None)
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'no cmux' if name == 'cmux' else None)
-    monkeypatch.setattr(base, 'cmux_installed', lambda: False)  # a Mac with cmux installed stays on cmux
-    assert fleet.resolve_backend(None, platform='darwin') == ('wezterm', None)  # WezTerm is usable
-    assert fleet.resolve_backend(None, platform='linux') == ('fleetmux', None)  # Linux never probes cmux (M3: fleetmux)
+    monkeypatch.setattr(base, 'cmux_installed', lambda: False)
+    assert fleet.resolve_backend(None, platform='darwin') == ('fleetmux', None)  # not WezTerm either
+    assert fleet.resolve_backend(None, platform='linux') == ('fleetmux', None)
 
 
 def _parse(argv):

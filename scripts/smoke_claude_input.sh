@@ -47,7 +47,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 echo "smoke claude input in $TMP"
-(cd "$TMP" && "$PY" "$FLEET" start --lifecycle smoke --supervisor-cli claude \
+(cd "$TMP" && "$PY" "$FLEET" start --no-view --lifecycle smoke --supervisor-cli claude \
     --supervisor-model "${SUPERVISOR_MODEL:-opus}" --worker-cli pi --workers 2 --allow-development-v2 \
     --allow-unsandboxed-pi --pi-model "$PI_MODEL" --redis-runtime-dir "$TMP/r" --name smoke-claude-input) \
   || { echo "FAIL setup: start refused or failed" >&2; exit 4; }

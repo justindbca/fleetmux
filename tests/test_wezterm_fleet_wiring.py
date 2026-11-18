@@ -13,7 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fleetmux import fleet, lifecycle_close, subfleet  # noqa: E402
+from fleetmux import fleet, fleet_superpowers_hot, lifecycle_close, subfleet  # noqa: E402
+from test_fleet import FakeRedis  # noqa: E402
 
 
 # ---- 1. all_gone is backend-neutral ------------------------------------------------------------------
@@ -66,6 +67,9 @@ def _run_self(backend, ok, why=''):
     cfg = {} if backend is None else {'backend': backend}
     return SimpleNamespace(mgr=mgr, cfg=cfg, v2=None, stopping=True, start_all=lambda: started.append(1),
                            capture_terminal_theme=lambda: None, wall_chains_load=lambda: None,  # §23 chains -> Redis
+                           builtin_applets=lambda: None,  # relay.enabled: the built-in relay applet (off here)
+                           r=FakeRedis(),  # run() loads the fleet-superpowers hot blocks into Redis
+                           quota_source=lambda: Path(__file__).parent / 'no-such-quota.json',  # nothing to ingest
                            log=lambda kind, **data: logged.append((kind, data))), started, logged
 
 
@@ -84,6 +88,7 @@ def test_run_on_cmux_keeps_going_after_a_failed_ping():
         me, started, logged = _run_self(backend, False)
         fleet.Fleet.run(me)
         assert started == [1] and logged == []
+        assert me.r.get(fleet_superpowers_hot.key('models')) is not None  # hot blocks loaded on the way
 
 
 def test_run_continues_when_the_session_is_up():
@@ -153,35 +158,36 @@ def test_start_with_a_subfleets_roster_is_refused_on_wezterm(tmp_path, monkeypat
     assert spawned == [] and not any('--unixsocket' in argv for argv in ran)  # nothing provisioned
 
 
-# ---- 4. default backend: a Mac with cmux installed stays on cmux (core review, production safety) ------
+# ---- 4. default backend: fleetmux on macOS too, never a silent cmux / WezTerm run (design §33.3) ------
 
-def test_mac_with_cmux_installed_defaults_to_cmux_even_when_it_does_not_answer(monkeypatch):
+def test_mac_with_cmux_installed_defaults_to_fleetmux(monkeypatch):
     from fleetmux.backends import base
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)
-    monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'cmux not available: run this inside a cmux terminal'
-                        if name == 'cmux' else None)  # ssh / Terminal.app with WezTerm installed
-    assert base.default_backend('darwin') == 'cmux'
+    monkeypatch.setattr(base, 'unavailable_reason', lambda name: None)
+    assert base.default_backend('darwin') == 'fleetmux'
+    assert fleet.resolve_backend(None, platform='darwin') == ('fleetmux', None)
+
+
+def test_mac_without_a_usable_fleetmux_is_refused_not_moved_to_cmux(monkeypatch):
+    from fleetmux.backends import base
+    monkeypatch.setattr(base, 'cmux_installed', lambda: True)
+    monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'fleetmux backend not available: no fleetmux binary'
+                        if name == 'fleetmux' else None)  # cmux and WezTerm both usable
     assert fleet.resolve_backend(None, platform='darwin') == (
-        'cmux', 'cmux not available: run this inside a cmux terminal')
+        'fleetmux', 'fleetmux backend not available: no fleetmux binary')
 
 
-def test_wezterm_is_the_default_only_without_cmux_or_off_macos(monkeypatch):
-    from fleetmux.backends import base
-    monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'no cmux' if name == 'cmux' else None)
-    monkeypatch.setattr(base, 'cmux_installed', lambda: False)
-    assert base.default_backend('darwin') == 'wezterm'
-    monkeypatch.setattr(base, 'cmux_installed', lambda: True)
-    assert base.default_backend('linux') == 'fleetmux'  # M3 py-switch: off macOS the default is fleetmux
-
-
-def test_start_without_backend_where_cmux_does_not_answer_gives_the_cmux_reason(tmp_path, monkeypatch):
+def test_start_without_backend_where_fleetmux_is_missing_gives_the_fleetmux_reason(tmp_path, monkeypatch):
     from test_pi import mock_start
     from fleetmux import cmux_manager
     from fleetmux.backends import base
     args, ran = mock_start(tmp_path, monkeypatch)
+    monkeypatch.setattr(fleet, 'resolve_backend', fleet.resolve_backend.__wrapped__)  # the real default rule
     monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)
-    monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: False)
+    monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)  # cmux would work: it is still not chosen
+    monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'fleetmux backend not available: no fleetmux binary'
+                        if name == 'fleetmux' else None)
     with pytest.raises(SystemExit) as exc:
         fleet.main(args)
-    assert str(exc.value).startswith('cmux not available') and not any('--unixsocket' in a for a in ran)
+    assert str(exc.value).startswith('fleetmux backend not available') and not any('--unixsocket' in a for a in ran)

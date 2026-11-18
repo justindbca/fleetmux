@@ -1,6 +1,6 @@
 # fleetmux applet interface (developer reference)
 
-Status: **proposed, interface version 1, not implemented.** Everything on this page is new unless a row says
+Status: **interface version 1, implemented.** Everything on this page is new unless a row says
 *existing*. A roster that contains `applets:` is rejected as a whole by releases that do not implement this page
 (the roster parser refuses unknown top-level keys).
 
@@ -65,7 +65,7 @@ applets:
 
 | Field | Type | Default | Allowed values | Example | Meaning |
 |---|---|---|---|---|---|
-| `name` | string | required | `^applet-[a-z][a-z0-9]*(-[a-z0-9]+)*-[0-9]+$`, at most 48 characters, unique in the roster, not a worker or sub-fleet name | `applet-rollout-1` | Identity everywhere: Redis keys, audit, status, tab title. |
+| `name` | string | required | `^applet-[a-z][a-z0-9]*(-[a-z0-9]+)*-[0-9]+$`, at most 48 characters, unique in the roster, not a worker or sub-fleet name, not a built-in applet name (`applet-relay-1`, applets.md section 1.4) | `applet-rollout-1` | Identity everywhere: Redis keys, audit, status, log directory. |
 | `command` | list of strings | required | non-empty; run with no shell; placeholders `{python}` (the release's Python), `{state}`, `{run}` are substituted | `["{python}", "-m", "rollout.applet"]` | The program. One process; it may start children it stops itself. |
 | `cwd` | string | the roster's directory | an existing directory; relative paths resolve against the roster's directory; `~` expanded | `..` | Working directory. |
 | `env` | map string -> string | `{}` | names must not start with `FLEETMUX_` | `{LOG_LEVEL: info}` | Extra environment. |
@@ -73,12 +73,15 @@ applets:
 | `autostart` | bool | `true` | | `true` | Start whenever the host comes up. `false`: start only on `fleetmux applet start`. |
 | `interface` | int | `1` | versions the release supports | `1` | Interface version the applet was written for. A mismatch refuses the start (`applet.config_error`). |
 | `heartbeat_s` | number | `10` | > 0 | `10` | How often the applet must write its heartbeat. |
-| `stale_after_s` | number | `60` | > `heartbeat_s` | `60` | Heartbeat older than this with a live process = stalled (restart). |
+| `stale_after_s` | number | `60` | > `heartbeat_s` | `60` | Heartbeat older than this with a live process = stalled (restart). After a host daemon gap (the machine slept) the age counts from the wake, not from the last beat. |
 | `stop_grace_s` | number | `30` | > 0 | `30` | Seconds between SIGTERM and SIGKILL. |
 | `detach_wait_s` | number | `60` | >= 0 | `60` | On a detach or a root host stop: how long the host waits for the applet to release its leases before it revokes them. |
+| `durable_state` | bool | `true` | | `false` | `false`: `FLEETMUX_APPLET_STATE` is a directory inside the host run (section 2.2), archived with the run; nothing is kept under the fleet home. Use it for applets loaded from a saved workflow. |
+| `session_env` | map | none | exactly `port` (int 1-65535: the loopback port the applet serves), `vars` (non-empty map of variable name to one-line string) and `clis` (non-empty list; every name must be in `fleet.yaml#session_env.verified_clis`, shipped `[claude]`). At most one applet per roster routes a given CLI. Any error refuses the whole roster. | `{port: 17890, vars: {HTTPS_PROXY: "http://127.0.0.1:17890"}, clis: [claude]}` | Environment the fleet sets on the agent sessions of the listed CLIs (distributed-development.md, session environment). The fleet first removes inherited `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in both cases, then sets `vars`, then sets `NO_PROXY` and `no_proxy` to the applet's `NO_PROXY` value plus `127.0.0.1,localhost,::1`. A session of a listed CLI does not start while `127.0.0.1:<port>` is closed. |
 | `lease` | map | see 1.2 | | | Lease policy bounds for this applet. |
 | `review` | map | see 1.3 | | | Bounds of the fix reviews the host runs for this applet. |
 | `notify` | map | `{max_per_hour: 6}` | `max_per_hour` integer >= 0 | `{max_per_hour: 6}` | Cap on `applet.notify` ops (each costs the supervisor a turn). |
+| `waits` | map | `request_lease` and `renew`: `lease.decision_wait_s` + 60; `send`: `lease.prepare_timeout_s` + `lease.ttl_max_s` + `review.timeout_s` + 60; `release` and `notify`: 60 | keys `request_lease`, `renew`, `send`, `release`, `notify`; numbers > 0 (seconds) | `{send: 3600}` | Local bound of each SDK call when the call passes no `wait_s` (section 7): the op door and the wait for the result together. The defaults let the host answer first while it runs. Passed as `FLEETMUX_APPLET_WAITS`. |
 
 ### 1.2 `lease` fields
 
@@ -111,7 +114,7 @@ The applet's own values that should change while the fleet runs belong in its pa
 
 | Moment | What happens |
 |---|---|
-| Host supervisor is READY, or a row is added to a running host | For each `autostart` entry, in roster order: the process is started in its own terminal tab of the host's workspace, titled with the applet name, after the daemon's tab. It is started and watched by the **host's own daemon**, on a root host and on a sub-fleet host alike. It is not a child process of the daemon. |
+| Host daemon tick (after start or resume, or a row added to a running host) | For each `autostart` entry, in roster order: the process is started as a background process in its own session and process group, with stdout and stderr in `$FLEETMUX_APPLET_RUN/applet.log`. It is shown as a tab in the host's daemon area (section 2.6). It does not wait for the host supervisor's READY. It is started and watched by the **host's own daemon**, on a root host and on a sub-fleet host alike. A daemon exit does not take it down. |
 | Host daemon dies | The applet keeps running, unwatched: nobody restarts it if it exits, ops stay `pending`, messages are not delivered, lease clocks keep running. |
 | Host daemon is back (`daemon --resume`; brought back by the parent daemon for a sub-fleet, by the supervisor or an operator for a root fleet, design.md section 29 / section 36) | The host Redis is the same, so leases and applet keys survive. An applet whose pid is alive and whose heartbeat is fresh is adopted without a restart. One that is gone has its leases ended (`applet_down`) and is started again (counted as one crash). Pending ops are processed; resend with the same `id` if unsure. Leases past their end expire. A lease message that was in flight follows the resume rules of design.md section 17: it is stopped and delivered again when `replay` allows, else answered `timeout`; a worker that cannot be reattached starts its next generation (`worker.rotated`). |
 | Row removed (detach) | Section 1. |
@@ -120,6 +123,17 @@ The applet's own values that should change while the fleet runs belong in its pa
 | Host comes up again | A sub-fleet host has a fresh Redis (the previous run's files are archived); a resumed root host keeps its own. The applet is started again and must rely only on what it kept under `FLEETMUX_APPLET_STATE`. |
 
 No launchd, cron, systemd or other system facility is involved, and an applet must not install one.
+
+Two rules apply to every applet before any other design choice:
+
+1. **Stay inside the framework.** Every mechanism an applet needs uses what fleetmux provides. A launchd item, a
+   cron job, a resident script outside the fleet, or a background process that bypasses the daemon is outside the
+   framework and is not allowed. If one is unavoidable, it needs the operator's explicit approval and must be
+   recorded as a stopgap that names the framework fix. When the framework lacks a capability, extend the framework
+   instead of working around it.
+2. **Run under the daemon, visible in the fleet window.** An applet runs under its host's daemon and is shown in the
+   daemon area's tab bar with its concrete state (section 2.6). Acceptance of an applet includes seeing its tab and
+   state in the fleet window. `fleetmux applet list` showing `up` alone does not count.
 
 ### 2.2 Environment
 
@@ -130,14 +144,19 @@ No launchd, cron, systemd or other system facility is involved, and an applet mu
 | `FLEETMUX_APPLET_CONFIG` | `<run>/config.json` (root host) or `<parent run>/sub/rollout/config.json` (sub-fleet host) | The host's run config; what `--config` takes for every `fleetmux` command about this host. |
 | `FLEETMUX_APPLET_REDIS` | `/.../redis.sock` | Unix socket of the host's private Redis. There is no TCP port. |
 | `FLEETMUX_APPLET_TOKEN` | 32 hex characters | Proves ops come from this applet instance. New on every start. Never log it. |
-| `FLEETMUX_APPLET_STATE` | `<fleet home>/applets/applet-rollout-1/` | Durable directory owned by the applet. Survives restarts, detach and attach, host down/up and run archiving. Fleets that share a fleet home (a root and its sub-fleets) share it, so it follows a move between them. fleetmux creates it, keeps the owner record `host.json` in it, and never deletes or copies it. |
+| `FLEETMUX_APPLET_STATE` | `<fleet home>/applets/applet-rollout-1/` | Durable directory owned by the applet. Survives restarts, detach and attach, host down/up and run archiving. Fleets that share a fleet home (a root and its sub-fleets) share it, so it follows a move between them. Exception: on a service sub-fleet that `fleetmux start` attached to a root, it is `<fleet home>/subfleets/<sub-fleet name>/applets/<name>/`, so a trial on an attached sub-fleet never leaves state for a root applet of the same name. fleetmux creates it, keeps the owner record `host.json` in it, and never copies it; it deletes it only on `fleetmux applet clear-state <name> --yes`. With `durable_state: false`: `<host run>/applets/<name>/state/`, archived with the run. |
 | `FLEETMUX_APPLET_RUN` | `<host run>/applets/applet-rollout-1/` | Per-run scratch and logs; archived with the run. |
+| `FLEETMUX_APPLET_HEARTBEAT_S` | `10` | The entry's `heartbeat_s`: how often to write the heartbeat (section 2.4). |
+| `FLEETMUX_APPLET_STALE_AFTER_S` | `60` | The entry's `stale_after_s`: the SDK stops (`run` exits `0`) when the host Redis has been unreachable this long (section 2.1). |
+| `FLEETMUX_APPLET_STOP_GRACE_S` | `30` | The entry's `stop_grace_s`. On a stop the SDK's `run` waits at most half of it for the host to confirm that the open leases are released (section 2.4). |
+| `FLEETMUX_APPLET_WAITS` | `{"notify": 60, "release": 60, "renew": 660, "request_lease": 660, "send": 9360}` | The entry's `waits` (section 1.1) as a JSON object. The SDK uses the same defaults when it is unset and exits `78` when it is malformed. |
 | `FLEETMUX_APPLET_PARAMS_FILE` / `FLEETMUX_APPLET_PARAMS_BLOCK` | `/abs/rollout.yaml` / `applet` | From `params`; unset when the entry has none. |
 | `FLEETMUX_APPLET_SDK` | `<release>` | Directory containing the release's `fleetmux` package; also prepended to `PYTHONPATH` (section 2.3). |
+| `FLEETMUX_APPLET_PYTHON` | `<release>/.venv/bin/python` | The release's interpreter (what `{python}` stands for). The SDK runs `fleetmux request` with it, never with the applet's own interpreter (section 2.3). |
 | `FLEETMUX_APPLET_WORKERS` | `fix-1,fix-2` | The `eligible` slots at start (informational; the supervisor picks, and the host may add workers). |
 | `FLEETMUX_HOME`, `FLEETMUX_STATE` | | *Existing* (contracts.md section 5), same values as the host's. |
 
-argv is exactly `command` after placeholder substitution. stdin is closed. stdout and stderr go to the tab and to
+argv is exactly `command` after placeholder substitution. stdin is closed. stdout and stderr go to
 `$FLEETMUX_APPLET_RUN/applet.log`.
 
 ### 2.3 Interpreter and dependencies
@@ -145,7 +164,7 @@ argv is exactly `command` after placeholder substitution. stdin is closed. stdou
 | The applet | `command` | How it imports `fleetmux.applet` |
 |---|---|---|
 | Is Python and needs only the standard library and what the release already ships (`redis`, `PyYAML`) | `["{python}", "-m", "<package>.applet"]` with `cwd` = the project root | `{python}` is the release's own interpreter; the package is already importable. |
-| Is Python and has its own third-party packages | `[".venv/bin/python", "-m", "<package>.applet"]` (the project's own virtual environment, created by the project) | The host sets `FLEETMUX_APPLET_SDK` to the directory that contains the running release's `fleetmux` package and prepends it to `PYTHONPATH`, so the SDK always matches the host. The project's environment must provide `redis`. `fleetmux.applet` imports nothing else from the release. |
+| Is Python and has its own third-party packages | `[".venv/bin/python", "-m", "<package>.applet"]` (the project's own virtual environment, created by the project) | The host sets `FLEETMUX_APPLET_SDK` to the directory that contains the running release's `fleetmux` package and prepends it to `PYTHONPATH`, so the SDK always matches the host. The project's environment must provide `redis`, and `PyYAML` when the applet calls `params()`. `fleetmux.applet` imports nothing else from the release; its ops run `fleetmux request` as a child process of the release's interpreter `FLEETMUX_APPLET_PYTHON`, so the rest of the release never loads in the applet's environment. |
 | Is not Python | any executable | Implements section 3 directly with a Redis client; `fleetmux request` and `fleetmux applet ...` are available as commands. |
 
 fleetmux never installs packages for an applet and never modifies its environment.
@@ -154,19 +173,20 @@ fleetmux never installs packages for an applet and never modifies its environmen
 
 | Signal | Meaning for the applet |
 |---|---|
-| SIGTERM | Stop: finish or checkpoint the current step, release leases, exit `0` within `stop_grace_s`. The only stop signal. |
+| SIGTERM | Stop: finish or checkpoint the current step, release leases, exit `0` within `stop_grace_s`. The only stop signal. The SDK sets `stopping`: a lease call that is waiting returns `stopping` at once (its `fleetmux request` child is killed), and later calls return it without sending anything. The SDK's `run` does the release: after the last step it sends queued audit records (at most a quarter of `stop_grace_s`), releases every open lease with `force` and waits up to half of `stop_grace_s` until the host records each one ended, then exits `0`. A `fleetmux request` child still running at either bound is killed. |
 | SIGKILL | Sent after `stop_grace_s`. The applet must be able to resume from `FLEETMUX_APPLET_STATE` after it. |
 | SIGINT, SIGHUP | Never sent. Do not rely on them. |
 
 Heartbeat: every `heartbeat_s` the applet writes `hb_at` (Unix seconds) and `pid` into the hash `fx:applet:<name>`
-(section 3.1). The SDK does this on a background thread.
+(section 3.1). The SDK does this on a background thread. The host measures the age of the beat in awake time
+(design.md section 35): the time the machine slept is no silence.
 
 | Exit code | Name | The host then |
 |---|---|---|
 | `0` | done | Does not restart it until the next host up or `fleetmux applet start`. State `exited`. |
 | `75` | restart me | Restarts at once; not counted as a crash. Use after a self-update or a parameter change that needs a new process. |
 | `78` | config error | Does not restart. State `config_error`; the reason is the last stderr line. |
-| any other, or a signal | crash | Its leases are ended (`applet_down`) and it is restarted at once by the host daemon. The third crash or stall within 3600 s -> state `crashloop`, no more restarts until `fleetmux applet start`. There is no backoff: two fast restarts, then stop and say so. |
+| any other, or a signal | crash | Its leases are ended (`applet_down`) and it is restarted at once by the host daemon. The third crash or stall within 3600 s of awake time (design.md section 35) -> state `crashloop`, no more restarts until `fleetmux applet start`. A crash within two heartbeat periods of awake time after the machine woke from a sleep is restarted but not counted (`applet.exit_after_wake`): the sleep broke it (a timed-out health check, a stopped child, a dropped connection). There is no backoff: two fast restarts, then stop and say so. |
 
 ### 2.5 Parameters (one YAML, blocks, hot values in Redis)
 
@@ -178,7 +198,7 @@ loaded into the host Redis at start and written back to the same block on a time
 | Start | applet (SDK `Params`) | Read block `FLEETMUX_APPLET_PARAMS_BLOCK` from the file; `HSET fx:applet:<name>:params <key> <JSON value>` for every key listed in the block's `hot:` list. |
 | Run | applet | Read hot keys from the hash on every use; cold keys from the loaded block. |
 | Change | operator, or the supervisor through an approved escalation | `fleetmux applet param <name> <key> <json>` -> `HSET` + audit `applet.param_changed`. |
-| Write-back | applet (SDK) | Every `writeback_s` (a key of the same block, default 300) rewrite only the changed hot keys of that block in the YAML, atomically (`os.replace`). |
+| Write-back | applet (SDK) | Every `writeback_s` (a key of the same block, default 300) rewrite only the changed hot keys of that block in the YAML, atomically (`os.replace`). Each changed key becomes one line `key: <value in flow style>` and keeps its trailing comment; a key not yet in the block is added at the block's end; every other line of the file, comments included, stays byte for byte. The block must be block style (one key per line); otherwise write-back fails and the file is not changed. |
 
 The host Redis does not outlive a host down/up, so the YAML is the durable copy; at most `writeback_s` of changes
 can be lost on a kill.
@@ -187,6 +207,30 @@ When the host roster is a block of the same file, the host daemon writes that fi
 `hot_add_max`). One rule serialises the writers: every writer, SDK and daemon, takes an exclusive `flock` on
 `<file>.lock`, reads the file again, changes only its own block or row, and replaces the file atomically. A
 writer never writes back a copy it read before taking the lock.
+
+### 2.6 The applet tab in the fleet window
+
+An applet runs under its host's daemon, so the fleet window shows it where it shows the daemon: one tab per applet
+in the tab row of the daemon area (the lower-left group: history, control, then the applet tabs). The host daemon
+opens, renames and closes these tabs (`fleetmux/applet_view.py`); the roster has nothing to declare.
+
+| Moment | What the window shows |
+|---|---|
+| Row declared (load, hot load, daemon start or resume) | A tab is opened right after the control tab (several applets in roster order). |
+| State changes | The tab title is `<name> <state>`, for example `applet-relay-1 up`. An abnormal state (`stalled`, `exited`, `crashloop`, `config_error`) gets a leading `! `, for example `! applet-relay-1 crashloop`. |
+| Tab open | A fixed header, redrawn every second: the state, the phase text the applet publishes (`phase`), the heartbeat age, the pid, restarts and crashes, the open lease count and when the state last changed (`state_at`). Below it, a live tail of `applet.log`. The viewer draws on the terminal's alternate screen, so a resize never leaves a copy of the header in the scrollback: the tab's text (`pane.read`) holds the header once, at the top. |
+| Row removed (unload, detach) | The tab stays while the detach drains (title `<name> stopping`) and is closed when the row is gone. |
+| Tab closed by hand | It is opened again within 5 seconds while the row exists. |
+
+- **Read-only.** The tab runs a viewer (`python -m fleetmux.applet_view <config.json> <name>`), not the applet.
+  The viewer only reads `fx:applet:<name>`, `fx:applet:<name>:leases` and the log file. Keys typed into the tab,
+  Ctrl-C included, are read and dropped; the applet's own stdin is `/dev/null`. Act on an applet with the commands
+  of section 5.
+- **Where.** A root host's applet tabs are in the root page. A named or attached sub-fleet host's applet tabs are
+  in that sub-fleet's own daemon area, which the root window shows when the sub-fleet's card in the sidebar is
+  selected. On the WezTerm backend, which has no history pane, the tab is opened as a tab of its own.
+- **Identity.** The tabs carry the pane metadata `applet: <name>`; they are not roster `tabs:` (design.md
+  section 31) and are not counted as companion tabs.
 
 ## 3. Wire protocol
 
@@ -198,14 +242,15 @@ keys below**. The applet never writes any `fx:*` key except those marked *applet
 
 | Key | Type | Written by | Content |
 |---|---|---|---|
-| `fx:applet:<name>` | hash | the host daemon writes `state`, `started_at`, `restarts`, `crashes`, `token_sha256`, `interface`, `paused`, `hot_add_max`; fields `pid`, `hb_at`, `phase` are *applet-writable* | `state` (`declared` / `starting` / `up` / `stalled` / `stopping` / `exited` / `crashloop` / `config_error`), `pid`, `started_at`, `hb_at`, `restarts`, `crashes` (JSON list of times), `interface`, `token_sha256`, `phase` (free text <= 200 characters shown in status), `paused` (`0`/`1`), `hot_add_max` |
+| `fx:applet:<name>` | hash | the host daemon writes `state`, `state_at`, `started_at`, `restarts`, `crashes`, `token_sha256`, `interface`, `paused`, `hot_add_max`, `detaching`; fields `pid`, `hb_at`, `phase` are *applet-writable* | `state` (`declared` / `starting` / `up` / `stalled` / `stopping` / `exited` / `crashloop` / `config_error`), `state_at` (wall time of the last `state` write), `pid`, `started_at`, `hb_at`, `restarts`, `crashes` (JSON list of times), `interface`, `token_sha256`, `phase` (free text <= 200 characters shown in status), `paused` (`0`/`1`), `hot_add_max`, `detaching` (`1` from the row's removal until the detach ends or is cancelled; absent otherwise; the lease gate refuses `applet.lease.request` with `applet_detaching` while it is set) |
 | `fx:applet:<name>:leases` | set | host | Ids of leases not yet ended. |
 | `fx:applet:<name>:lease:<lease_id>` | hash | host | The lease record (3.3). Kept 7 days after it ends. |
 | `fx:applet:<name>:review:<review_id>` | hash | host | A fix review (3.9): `id`, `job`, `lease`, `message`, `fixer`, `reviewer`, `round`, `state` (`waiting` / `running` / `done`), `verdict`, `reason`, `started_at`, `ended_at`. Kept 7 days after it ends. |
 | `fx:applet:<name>:events` | stream | host | Host -> applet events (3.6), capped at about 1000 entries. Read with `XREAD`. |
+| `fx:applet:<name>:notices` | list | host | The last 50 notices in full (3.7), oldest first: `applet.notify` texts and the notices of `delete` / `human` escalations. Each item is JSON `{id, at, job, text}`; an escalation notice also has `class`. Read with `fleetmux applet notices <name>`. |
 | `fx:applet:<name>:inbox` | list | `fleetmux applet send` (anyone with the socket) | JSON items for the applet from outside callers (3.8). The applet `BLPOP`s and must persist an item before acting on it. |
 | `fx:applet:<name>:params` | hash | *applet-writable*; also `fleetmux applet param` | Hot parameters, JSON-encoded values (2.5). |
-| `fx:applet:<name>:esc:<op id>` | hash | host | An open or answered escalation (3.7). |
+| `fx:applet:<name>:esc:<op id>` | hash | host | An open or answered escalation (3.7): `id`, `applet`, `class`, `what`, `why`, `job`, `options` (JSON), `paths` (JSON), `status` (`awaiting` / `awaiting_human` / `ruled` / `timeout`), `created`, `decision`, `choice`, `by`, `note`. Kept 7 days after it is ruled or timed out. |
 | `fx:agent:<slot>` (*existing*) | hash | host | Gains `applet_lease` (lease id or empty), `applet_lease_holder`, `applet_lease_until`; `applet_review` (review id or empty) while the slot reviews a fix; `applet_added_for` (applet name) on a row the host added for a lease or a review. The slot's `state` keeps its existing values (`idle`, `busy`, `held`, ...). |
 | `fx:result:<id>` (*existing*) | string (JSON) | host | Answer to every op and every message, by its `id`. |
 
@@ -218,7 +263,9 @@ Submit `{"kind": "request", "spec": <op>}` on the host bus (the SDK does this; f
 `fleetmux request - --config "$FLEETMUX_APPLET_CONFIG" < op.json`). The host recognizes an op by its `op` field and
 handles it in its own branch: it does not enter the request queue and is not subject to `--request-timeout` (the
 same pattern as `subfleet.up`, design.md section 29). Resending an op with the same `id` is safe: an unfinished one answers
-`in_progress`, a finished one answers `duplicate` and the first result stays in `fx:result:<id>`.
+`in_progress`, a finished one answers `duplicate` and the first result stays in `fx:result:<id>`. These two, and an
+`id` that breaks the request id rule, are answers of the bus door itself (`status` `in_progress`, or `rejected` with a
+`reason` text that starts with the code `duplicate` / `invalid`); every other answer is at `fx:result:<id>`.
 
 Common fields of every op:
 
@@ -235,7 +282,7 @@ Common fields of every op:
 | `applet.lease.request` | program gate, then the supervisor | 3.3 |
 | `applet.lease.renew` | program gate, then the supervisor | 3.4 |
 | `applet.lease.release` | program | 3.4 |
-| `applet.escalate` | the supervisor (delete class: the human owner only) | 3.7 |
+| `applet.escalate` | the supervisor (classes `delete` and `human`: the human owner only) | 3.7 |
 | `applet.notify` | program (rate limit) | 3.7 |
 | `applet.audit` | program | 3.7 |
 
@@ -244,7 +291,7 @@ Common answer shape at `fx:result:<id>` (*existing* envelope: `id`, `status`, `a
 | `status` | Meaning | Extra fields |
 |---|---|---|
 | `ok` | Done / granted / approved. | per op |
-| `rejected` | Refused. | `by`: `program` or `supervisor`; `reason` (stable code, table in 3.9); `note` (text); `retry_after_s` (optional) |
+| `rejected` | Refused. | `by`: `program`, `supervisor`, or `operator` (a lease request still waiting for the supervisor was revoked with `fleetmux applet revoke`); `reason` (stable code, table in 3.9); `note` (text); `retry_after_s` (optional) |
 | `timeout` | Nobody decided within `decision_wait_s`. | |
 | `in_progress` | Same id resent while open. | `op_status`: `awaiting` or `approved` |
 
@@ -311,14 +358,26 @@ Lease record (`fx:applet:<name>:lease:<id>`; all values strings, JSON where note
 | `slot` | Worker slot (stable across generations). |
 | `added` | `1` when the host added this worker for the lease. |
 | `state` | `requested`, `denied`, `granted`, `active`, `renew_requested`, `released`, `expired`, `revoked`. |
-| `requested_at`, `granted_at`, `active_at`, `expires_at`, `ended_at` | Unix seconds. `expires_at` is set when the lease becomes `active`. |
+| `requested_at`, `granted_at`, `active_at`, `expires_at`, `ended_at` | Awake seconds of the host fleet: Unix seconds minus the time the machine slept (`fx:clock`, design.md section 35; equal to Unix seconds until the first sleep). `expires_at` is set when the lease becomes `active`. Without the SDK, compare with `time() - slept_s`, where `slept_s` is read from `fx:clock` and grows by the sleep since its `wall` / `mono` point. |
 | `ttl_s`, `renewals` | Current term; renewals received. |
 | `paths` | JSON list actually granted. |
 | `granted_by` | Label of the supervisor generation that decided. |
 | `messages`, `last_message`, `last_status` | Count, id and result status of messages sent under the lease. |
-| `end_reason` | For `revoked`: `supervisor`, `operator`, `host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`, `prepare_failed`. For `denied`: the rejection reason. |
+| `end_reason` | For `revoked`: `supervisor`, `operator`, `host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`, `prepare_failed`. For `denied`: the rejection reason, or the cause when a request still waiting for the supervisor is ended (table below). |
 | `last_review` | JSON `{id, verdict, round, message}` of the last fix review under this lease; empty when none. |
 | `outcome` | JSON the applet passed at release. |
+
+A request still waiting for the supervisor (`requested`) has no term yet: only `decision_wait_s` limits the wait.
+These causes end it before the decision. The record becomes `denied` with the cause as `end_reason`, and the
+request is answered `rejected`:
+
+| Cause (`end_reason`) | Answer `by` | Answer `reason` |
+|---|---|---|
+| `supervisor` (decision `revoke`) | `supervisor` | `supervisor` |
+| `operator` (`fleetmux applet revoke`) | `operator` | `supervisor` |
+| `host_down` | `program` | `host_draining` |
+| `applet_down` | `program` | `applet_not_up` |
+| `applet_detached` | `program` | `applet_detaching` |
 
 `granted` -> `active`: the host wakes or adds the worker when needed, starts a **clean session** in the slot (design.md section 37 `fresh`; skipped for a session
 that has done no work), writes the lease section into the worker's rule file (section 4), issues the `paths` as
@@ -401,7 +460,7 @@ Each stream entry has one field `data` holding a JSON object with `type`, `at` (
 | `message.result` | `lease`, `id`, `status`, `review` (verdict, when the message carried `fix`) | A message of this lease got its final result (also at `fx:result:<id>`). |
 | `escalation.ruled` | `id`, `decision`, `choice` (index into `options`, or null), `by` (`supervisor` / `root` / `human`), `note` | An escalation was answered. |
 | `control` | `action` (`pause` / `resume`), `by`, `note` | The supervisor or an operator paused or resumed the applet. |
-| `host.draining` | `reason` (`stop`, `down`, `rotate`, `detach`), `deadline_at` | The host is going down or the applet is being detached. Checkpoint, release leases, expect SIGTERM. |
+| `host.draining` | `reason` (`stop`, `down`, `rotate`, `detach`), `deadline_at` (awake seconds, as the lease times) | The host is going down or the applet is being detached. Checkpoint, release leases, expect SIGTERM. |
 | `host.paused` / `host.resumed` | `reason` | The host fleet stopped or resumed delivering. Lease clocks keep running. |
 
 Read from the id saved in `FLEETMUX_APPLET_STATE`, or from `0-0` after a host restart (the stream is new then).
@@ -417,27 +476,45 @@ Read from the id saved in `FLEETMUX_APPLET_STATE`, or from `0-0` after a host re
 
 | Field | Type | Required | Allowed | Meaning |
 |---|---|---|---|---|
-| `class` | string | yes | `plan`, `scope`, `access`, `delete` | `plan`: change of plan / target / order. `scope`: wider lease scope. `access`: writing outside the host workspace, network, installs, credentials. `delete`: removing or moving files or directories. |
+| `class` | string | yes | `plan`, `scope`, `access`, `delete`, `human` | `plan`: change of plan / target / order. `scope`: wider lease scope. `access`: writing outside the host workspace, network, installs, credentials. `delete`: removing or moving files or directories. `human`: any other step that only the human owner may approve (for example a deploy that waits for the user). |
 | `what`, `why` | string | yes | <= 2000 characters each | The request and its reason. |
 | `job` | string | no | | Related job. |
 | `options` | list of strings | no | <= 5 | Choices the applet can execute. Give them whenever the applet must act on the answer: an approval then names one by index (`choice`), which is the only part of a ruling a program should branch on. `note` is for people and logs. |
 | `paths` | list of absolute paths | when `class` is `access` or `delete` | | What would be written, removed or moved. |
+| `wait_s` | number | no | >= 10; larger than 86400 is clipped to 86400 | How long the escalation stays open. Without it the escalation has no deadline. When it passes unruled, the host answers `timeout` (`reason` `no_decision`) and records `status: timeout`. A value below 10 is refused `invalid`. |
 
 | `class` | Who rules | Path |
 |---|---|---|
 | `plan`, `scope` | host supervisor | `[applet escalation] ...` -> decision key `applet` (3.5). |
 | `access` | root supervisor | Sub-fleet host: the host supervisor forwards it with the existing `report_up` (design.md section 46); the root's ruling comes back down. It cannot approve it itself. Root host: the host supervisor is the root supervisor and rules on it in its decision. Either way the applet gets `escalation.ruled` with `by: root`. |
-| `delete` | the human owner only | Never shown to a supervisor for approval, on any host. Recorded as `awaiting_human`, pushed on the root fleet's channels (design.md section 53, push kind `escalation`) and shown in `status`. Answered only by `fleetmux applet answer <op id> approve\|reject` (section 5) or the channel's two-step approval. |
+| `delete`, `human` | the human owner only | One path for both classes. Never shown to a supervisor for approval, on any host; a supervisor ruling on it is refused through the correction path. Recorded as `awaiting_human` and sent on the crash-loop notice path as one line: `[applet escalation <op id>] needs the human owner: <applet> (<class>, job <job>): <first line of `what`> Answer with ...` (only the first line of `what`; `why` and `paths` are not in it). With `options`, the answer hint reads `approve --choice <n>` and lists the options on the same line. The hint names the host's config (`--config <host run>/config.json`), so it works from a shell whose `FLEETMUX_HOME` points elsewhere. Root host: a notice card in the supervisor column and a channel push (when the root runs channels). Sub-fleet host: a notice card in the sub-fleet supervisor column only, no channel push, and nothing reaches the root. The full notice (the whole `what`, `why`, options, paths and the answer command) is also kept in the applet's notices list (`fleetmux applet notices <name>`), so the owner can read it where the card shows one line. Listed with all fields by `fleetmux applet status <name>` (`--config` of the host), not in the `fleetmux status` tree. Answered only by `fleetmux applet answer <op id> approve\|reject` (section 5), which the host applies only while the record is still `awaiting_human`; the ruling has `by: human`. The channel's two-step approval is not built yet for either class. |
 
-Answer: `ok` with `decision` (`approve` / `revise`), `choice` and `note`, or `rejected` with `by` and `note`. `revise` means "not as asked": the applet does nothing on this escalation and may send a new one. The applet executes
-only what an `approve` covers. An escalation stays open with no deadline unless the op carries `wait_s`.
+The op itself never holds the applet: the ruling arrives at `fx:result:<id>` and as `escalation.ruled`, however
+long it takes. The SDK's `escalate(..., wait=False)` returns the op id at once and the applet claims the ruling in a
+later round (section 7); this is the normal way for a `human` escalation, which may wait for hours. A host that does
+not know a class (for example `human` on a host older than that class) refuses the op `rejected`, `by` `program`,
+`reason` `invalid`.
+
+Answer: `ok` with `decision` (`approve` / `revise`), `choice`, `by` and `note`, or `rejected` with `by`, `reason`
+`supervisor` and `note`. `revise` means "not as asked": the applet does nothing on this escalation and may send a new one. The applet executes
+only what an `approve` covers. An escalation stays open with no deadline unless the op carries `wait_s`; then
+an unruled escalation is answered `timeout` with `reason` `no_decision`.
+
+An approval changes nothing by itself; the applet carries it out. In particular an approved `scope` escalation
+does not widen the open lease (its `paths` and `purpose` stay as granted). To use the wider scope, release the
+lease and request a new one with the approved `purpose` and `paths`, and name the escalation id in its `context`
+so the supervisor can see what was approved. A renewal cannot change the scope.
 
 `applet.notify` - `{"text": "<= 1000 characters", "job": "..."}`: queues one line `[applet <name>] <text>` for the
 host supervisor (information only, no answer expected). Over `notify.max_per_hour` -> `rejected`, `rate_limited`.
+The audit record `applet.notified` keeps only the first 300 characters. The host keeps the full text of the last
+50 notices in `fx:applet:<name>:notices` (the same list keeps `delete` / `human` escalation notices); read them with
+`fleetmux applet notices <name> [--last <n>]` (section 5).
 
 `applet.audit` - `{"event": "batch.bounced", "detail": {...}}`: writes one audit record `applet.event` with
 `applet`, `event` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`) and `detail` (<= 4000 characters as JSON). Costs no model
-turn. Use it freely; use `notify` sparingly.
+turn. Use it freely; use `notify` sparingly. Each op is one submit through the door (section 3.2); the SDK sends
+audit records from a background thread, so the caller does not wait for it (section 7).
 
 ### 3.8 Messages to the leased worker, and its replies
 
@@ -459,7 +536,7 @@ fields:
 | `to` | string | yes | | Must be the lease's `slot`. |
 | `lease` | string | yes | | A `granted` or `active` lease of this applet. |
 | `applet`, `token` | string | yes | | As in ops. |
-| `fix` | map | no | none | Marks this message as the one whose reply **hands back a fix**. With it, an `ok` reply is reviewed by the host before the result is published (3.9). Without it the reply is plain work or information and is never reviewed. Keys: `dir` (required; absolute path inside the lease's `paths` or the worker's directory), `base` (required; the revision the change starts from), `head` (a revision, or `null` = the state of `dir` when the worker replies), `files` (optional list, relative to `dir`, to narrow the scope). |
+| `fix` | map | no | none | Marks this message as the one whose reply **hands back a fix**. With it, an `ok` reply is reviewed by the host before the result is published (3.9). Without it the reply is plain work or information and is never reviewed. Keys: `dir` (required; absolute path inside the lease's `paths` or the worker's directory), `base` (required; the revision the change starts from), `head` (a revision, or `null` = the state of `dir` when the worker replies), `files` (optional list, relative to `dir`, to narrow the scope; absent or `[]` = not narrowed, the whole change in `dir` is reviewed). |
 
 Refusals (`rejected`, `by: program`): `bad_token`, `lease_not_active` (ended or unknown), `wrong_slot`,
 `host_paused`, `invalid` (a `fix` whose `dir` is outside the lease), `review_cap` (a `fix` for a job that used up
@@ -475,7 +552,7 @@ Result at `fx:result:<id>` (*existing* envelope, plus `lease`, and `review` for 
 | `status` | Meaning | What the applet should do |
 |---|---|---|
 | `ok` | `result` holds the worker's JSON with the required keys. For a `fix` message, `review` holds the verdict. | Verify by its own checks; a worker saying "fixed" proves nothing. Use a fix only when its `review.verdict` is `pass`. |
-| `blocked` | The worker says it cannot proceed without a decision (`result.blocked` = one sentence). Not sent to the supervisor automatically. | Escalate (`applet.escalate`) or release. Never answer the question yourself by widening scope. |
+| `blocked` | The worker says it cannot proceed without a decision (`result.blocked` = one sentence; a split proposal comes as `result.proposal`). Not sent to the supervisor automatically. | Escalate (`applet.escalate`) or release. Never answer the question yourself by widening scope. |
 | `invalid` | The reply did not satisfy `reply` after the correction rounds. | Resend or release. |
 | `timeout` | `timeout_s` passed. The slot is held (design.md section 43) and the lease is revoked (`slot_held`). | Request a new lease. |
 | `stalled` | The watchdog judged the turn dead (design.md section 24). If the slot could be rotated the lease continues (`worker.rotated` follows); if the stop could not be confirmed the slot is held and the lease is revoked (`slot_held`, `lease.ended` follows). | Wait for the event that follows; resend under the same lease, or request a new one. |
@@ -542,7 +619,8 @@ You may also write inside: <paths>
 ### 4.2 Message framing
 
 Every delivery starts with a line the program writes (a supervisor or another sender cannot forge the start of a
-delivery, design.md section 46):
+delivery, design.md section 46). The v2 transport binds the `[Request <id>]` header as metadata, so the worker sees the lease
+line first; on the legacy transport the lease line follows `[Request <id>]`:
 
 ```
 [Applet lease L-3fa9c210 | applet-rollout-1 | message 3 | term ends 14:32]
@@ -564,28 +642,32 @@ worker is not started; it is returned to the applet as `blocked` with the propos
 | Situation at the end | What the worker experiences |
 |---|---|
 | Idle | Nothing is sent (no wasted turn). The lease section and the path grants are removed; the slot's next work starts in a clean session (design.md section 37), so nothing from the lease carries over. |
-| A turn is running (expiry, revoke, forced release) | One Escape (the fleet's only accepted stop, design.md section 17). The unanswered message is published `lease_ended`. Then as the idle row. If the stop cannot be confirmed, the slot follows the existing hold rules. |
+| A turn is running (expiry, revoke, forced release) | One Escape (the fleet's only accepted stop, design.md section 17). The unanswered message is published `lease_ended`. Then as the idle row. Whether the stop took effect is not checked yet. |
 | The slot rotated during the lease | The handoff note carries a "Lease" block (holder, id, purpose, paths, term end, the message in flight); the new generation's start prompt repeats it; the unanswered message is delivered again under the existing replay rules. |
 
 ## 5. Commands
 
 All take `--config <host config.json>` (the applet's `FLEETMUX_APPLET_CONFIG`); without it they act on the
-current run of the fleet home, which is the host when the host is a root fleet. Output is one JSON line; exit code
+current run of the fleet home, which is the host when the host is a root fleet. A service sub-fleet that
+`fleetmux start` attached to a root also takes its join stub: `--config <stub>` resolves to the sub-fleet's own
+config.json. Output is one JSON line; exit code
 `0` ok, `2` rejected, `3` pending (the same convention as `fleetmux operator`).
 
 | Command | Purpose |
 |---|---|
 | `fleetmux applet list` | Applets of this host: name, state, pid, heartbeat age, restarts, open leases, `phase`. |
 | `fleetmux applet status <name>` | The hash `fx:applet:<name>` + its leases + open escalations. |
-| `fleetmux applet start <name>` / `stop <name>` / `restart <name>` | Operator control of the process of a declared row. `start` clears `crashloop` / `config_error`. Attach and detach are roster edits (section 1), not commands. |
+| `fleetmux applet start <name>` / `stop <name>` / `restart <name>` | Operator control of the process of a declared row. `start` clears `crashloop` / `config_error`. `stop` waits until the process has ended, at most the row's `stop_grace_s` plus 5 s, and returns the final state: exit `0` with `{"state": "exited", "stopped": true}`, or exit `3` (`pending`, `"stopped": false`) when the process has not ended in that time. `stop --no-wait-exit` returns the daemon's first answer (`"state": "stopping"`) at once. Attach and detach are roster edits (section 1), not commands. |
 | `fleetmux applet pause <name>` / `resume <name>` | Sets `paused`; emits `control`. |
 | `fleetmux applet leases [--all]` | Open (or all kept) lease records. |
 | `fleetmux applet revoke <lease id> --note <text>` | Operator revoke. |
 | `fleetmux applet send <name> <file or ->` | Append one JSON item to the applet's inbox. |
 | `fleetmux applet param <name> <key> <json>` | Change one hot parameter of the applet's own block. |
+| `fleetmux applet clear-state <name> [--yes]` | Delete the applet's state directory (`FLEETMUX_APPLET_STATE`). Without `--yes` it is a dry run: it lists the files (`files`), removes nothing (`removed: []`) and exits `0`; with `--yes` it deletes them and lists what it removed. A non-zero exit means a real refusal or error, never a dry run. `--yes` is refused (exit `2`) while a live process owns the directory (`host.json`); the dry run still lists and says so in `note`. Works while the host is down. Nothing ever runs it automatically. |
 | `fleetmux applet set <name> hot_add_max <n>` | Change the worker ceiling while the fleet runs; written back to the roster row. |
+| `fleetmux applet notices <name> [--last <n>]` | The full text of the kept notices (3.7), oldest first: `applet.notify` texts and `delete` / `human` escalation notices, each with `id`, `at`, `job`, `text` (an escalation notice also `class`). Use it to read a notice that the audit line or the one-line card cuts short. |
 | `fleetmux applet reviews [--all]` | Running (or all kept) fix reviews: id, job, lease, fixer, reviewer, round, verdict. |
-| `fleetmux applet answer <op id> approve\|reject [--choice <n>] [--note <text>]` | The human owner's answer to a `delete` escalation. Agents' rule files forbid running it. |
+| `fleetmux applet answer <op id> approve\|reject [--choice <n>] [--note <text>]` | The human owner's answer to a `delete` or `human` escalation. When the escalation has `options`, `approve` needs `--choice <n>`; the notice card shows the command with the option list. Agents' rule files forbid running it. |
 | `fleetmux status` (*existing*) | The tree gains, per fleet that hosts applets, `applets: [{name, state, phase, leases}]`; each slot gains `applet_lease: {id, holder, until}`, `applet_review` and `applet_added_for` when set. |
 | `fleetmux logs` (*existing* reader) | Shows the audit events of section 6 with the rest of the host's audit. |
 
@@ -602,7 +684,9 @@ current run of the fleet home, which is the host when the host is a root fleet. 
 | `applet.review.started` / `.passed` / `.failed` / `.unavailable` | `applet`, `review`, `job`, `lease`, `message`, `fixer`, `reviewer`, `round`, `findings` (count), `capped`, `reason` |
 | `applet.message.sent` / `applet.message.result` | `applet`, `lease`, `id`, `status` |
 | `applet.escalated` / `applet.ruled` | `applet`, `id`, `class`, `decision`, `by` |
-| `applet.notified` / `applet.param_changed` / `applet.paused` / `applet.resumed` | `applet`, ... |
+| `applet.notified` / `applet.param_changed` / `applet.paused` / `applet.resumed` | `applet`, ... (`applet.notified`: `id`, `text` cut to 300 characters) |
+| `applet.decision_late` | `id`, `decision`, `applet`, `lease`, `state`, `end_reason`: the supervisor answered an op that was already closed (for example a lease request denied `no_decision`); nothing is applied |
+| `applet.decision_unknown` | `id`, `decision`: the supervisor answered an id the host does not know |
 | `applet.event` | `applet`, `event`, `detail` (the applet's own events, e.g. `batch.bounced`, `batch.merged`) |
 
 ## 7. Python SDK surface (`fleetmux.applet`)
@@ -618,14 +702,20 @@ class Applet:
     name: str
     state_dir: "pathlib.Path"      # FLEETMUX_APPLET_STATE (durable)
     run_dir: "pathlib.Path"        # FLEETMUX_APPLET_RUN (per run)
-    stopping: "threading.Event"    # set on SIGTERM or host.draining
+    stopping: "threading.Event"    # set on SIGTERM or host.draining (the heartbeat thread watches the
+                                   # events stream; seen within heartbeat_s, events() not needed)
+    waits: "dict[str, float]"      # local bound of request_lease, renew, send, release, notify without wait_s
+                                   # (FLEETMUX_APPLET_WAITS; defaults 660, 660, 9360, 60, 60)
 
     @classmethod
-    def from_env(cls) -> "Applet":
-        """Build from the environment. Exits 78 when a variable is missing or the interface version differs."""
+    def from_env(cls, env: "dict | None" = None, *, start: bool = True) -> "Applet":
+        """Build from the environment (`env`, default `os.environ`). Exits 78 when a variable is missing, the
+        interface version differs or the host Redis cannot be reached. `start=True` also calls `start()`:
+        the SIGTERM handler, the first heartbeat and the heartbeat thread. Pass `start=False` in tests."""
 
     def params(self) -> "Params":
-        """The applet's parameter block (section 2.5)."""
+        """The applet's parameter block (section 2.5). Exits 78 when the params file cannot be read or parsed, has
+        no such block, or the block is not a mapping. Without a `params` entry: an empty block (defaults only)."""
 
     def set_phase(self, text: str) -> None:
         """Short free text shown in `fleetmux status` (what the applet is doing now)."""
@@ -635,21 +725,58 @@ class Applet:
                       context: "dict | None" = None, wait_s: "float | None" = None) -> "Lease":
         """Ask the supervisor for a worker. Blocks until granted; if no worker is free the host wakes or
         adds one. Raises LeaseDenied (with .by, .reason, .note, .retry_after_s) when refused or not
-        decided in time."""
+        decided in time. `wait_s`: local bound (default `waits['request_lease']`); past it LeaseDenied
+        `no_answer`: the request may still be open and granted later, `leases()` finds it."""
 
     def leases(self) -> "list[Lease]":
         """Open leases of this applet as the host records them (use after a restart to re-attach)."""
 
     def escalate(self, *, cls: str, what: str, why: str, job: "str | None" = None,
                  options: "list[str]" = (), paths: "list[str]" = (),
-                 wait_s: "float | None" = None) -> "Ruling":
-        """Hand a decision to the supervisor (or, for cls='delete', the human owner). Blocks until ruled."""
+                 wait_s: "float | None" = None, op_id: "str | None" = None,
+                 wait: bool = True) -> "Ruling | str":
+        """Hand a decision to the supervisor (or, for cls='delete' and cls='human', the human owner) and wait for
+        the ruling. Returns a Ruling (its `id` is the op id) for approve, revise and reject. Raises Rejected: a
+        program refusal (`reason` from section 9); `no_decision` when `wait_s` passed (the host's timeout, or,
+        when no host answers, locally `ESCALATE_GRACE_S` (60 s) after `wait_s`; the escalation may then still be
+        open); `stopping`. Without `wait_s` it waits until ruled or stopping. `op_id`: the op id (default: a new
+        one); save it before the call to re-attach after a restart.
 
-    def notify(self, text: str, *, job: "str | None" = None) -> None:
-        """One information line to the supervisor. Rate limited; costs a model turn."""
+        `wait=False`: do not wait for the ruling. Returns the op id (str) as soon as the host has opened the
+        escalation (at most `ESCALATE_ACCEPT_S`, 10 s, after the door answered; normally at once). Raises Rejected
+        only for a program refusal (for example `invalid` from a host that does not know the class: a host older
+        than the `human` class answers `human` with `by` `program`, `reason` `invalid`) and `stopping`. Repeating
+        the call with the same `op_id` is safe: an open, ruled or timed-out escalation is not opened again and no
+        second notice is sent; the id is returned. An op id is used once: a refused id gives the same refusal
+        again, and an id whose record and result are past their kept time is Rejected `duplicate`; ask again
+        under a new id. Claim the ruling in a later round with `escalations()` and
+        `Escalation.ruling()`. An SDK that has `wait` exports `ESCALATE_NO_WAIT = True`; test it with
+        `getattr(fleetmux.applet, 'ESCALATE_NO_WAIT', False)` before using `wait=False` (an older SDK raises
+        TypeError for the keyword)."""
+
+    def escalations(self) -> "list[Escalation]":
+        """Escalations of this applet the host keeps (3.1), open and answered, oldest first. Use in a later round
+        or after a restart to claim a ruling: read `Escalation.status` first (`awaiting` / `awaiting_human`: not
+        ruled yet; `ruled`: `Escalation.ruling(wait_s=0)` returns it at once; `timeout`: `ruling()` raises
+        `no_decision`). Calling `escalate` again with the same `op_id` also works. Records and results live in the
+        host Redis: they survive an applet restart and a host daemon restart, not a host down/up (2.5) or a move
+        to another host; there, an `op_id` missing from this list is sent again."""
+
+    def message_result(self, msg_id: str, *, wait_s: "float | None" = None) -> "Reply | None":
+        """The result of a message sent earlier with this id (`Lease.send(msg_id=...)`). Read it back after a
+        restart instead of sending the message again (a resent `fix` costs another review round). Waits at most
+        `wait_s` (None: until the result comes); None when the host has no result by then. Raises as `send`."""
+
+    def notify(self, text: str, *, job: "str | None" = None, wait_s: "float | None" = None) -> None:
+        """One information line to the supervisor. Rate limited; costs a model turn. `wait_s`: local
+        bound (default `waits['notify']`); past it Rejected `no_answer`."""
 
     def audit(self, event: str, **detail) -> None:
-        """One audit record (`applet.event`). Free; use for every state change of the applet's own work."""
+        """One audit record (`applet.event`); use for every state change of the applet's own work. Returns at
+        once: records are submitted in order by a background thread (one `fleetmux request` child process each),
+        best effort. Never raises for a refused or failed submit or a stop (logged to stderr). Raises ValueError
+        only for a malformed `event` or a `detail` over 4000 characters as JSON, before any I/O. On a stop `run`
+        waits at most a quarter of `stop_grace_s` for queued records."""
 
     def events(self, *, block_s: float = 5.0) -> "Iterator[Event]":
         """Host events in order (section 3.6). Remembers its position in state_dir."""
@@ -659,7 +786,10 @@ class Applet:
 
     def run(self, step: "Callable[[Applet], float | None]") -> "NoReturn":
         """Main loop helper: call `step` until `stopping`; `step` returns seconds to sleep.
-        Exits 0 on stop; an uncaught exception exits 1 (a crash)."""
+        On stop: writes back parameters, sends queued audit records (bounded), releases every open lease (force) and waits up to half of
+        `stop_grace_s` for the host to record them ended, then exits 0. A `stopping` refusal (Rejected or
+        LeaseDenied) that leaves `step` is a stop too. Any other uncaught exception exits 1 (a crash); a
+        `sys.exit` from `step` keeps its code. Neither releases leases."""
 
 
 class Lease:
@@ -672,19 +802,29 @@ class Lease:
 
     def send(self, payload: dict, *, instruction: str, required: "list[str]",
              allowed: "list[str] | None" = None, timeout_s: "float | None" = None,
-             replay: bool = True, fix: "dict | None" = None) -> "Reply":
+             replay: bool = True, fix: "dict | None" = None, msg_id: "str | None" = None,
+             wait_s: "float | None" = None) -> "Reply":
         """Send one message to the leased worker and wait for its result.
         fix={"dir", "base", "head", "files"} marks the message that hands back a fix: the host then has
-        another slot review it and the reply carries .review. Raises LeaseEnded when the lease is over."""
+        another slot review it and the reply carries .review. Raises LeaseEnded when the lease is over,
+        Rejected when the program refuses the message or the applet is stopping. `msg_id`: the message id
+        (default: a new one; the rule of 3.1); save it before the call to read the result back after a restart
+        (`Applet.message_result`). The Reply carries it as `.id`. `wait_s`: local bound (default
+        `waits['send']`; keep it above `timeout_s`, plus the review's `timeout_s` for a `fix` message); past it
+        Rejected `no_answer`: the message may still run, read it back with `message_result`."""
 
-    def renew(self, *, need_s: float, progress: str, why: "str | None" = None) -> bool:
-        """Ask for more time. True when granted (expires_at updated); False when denied or unanswered."""
+    def renew(self, *, need_s: float, progress: str, why: "str | None" = None,
+              wait_s: "float | None" = None) -> bool:
+        """Ask for more time. True when granted (expires_at updated); False when denied, unanswered
+        within `wait_s` (default `waits['renew']`) or stopping."""
 
-    def release(self, outcome: "dict | None" = None, *, force: bool = False) -> None:
-        """Give the worker back. Call as soon as the job is done; a later job requests a new lease."""
+    def release(self, outcome: "dict | None" = None, *, force: bool = False,
+                wait_s: "float | None" = None) -> None:
+        """Give the worker back. Call as soon as the job is done; a later job requests a new lease.
+        `wait_s`: local bound (default `waits['release']`); past it Rejected `no_answer`."""
 
     def remaining_s(self) -> float:
-        """Seconds until expiry by the local clock."""
+        """Awake seconds until expiry (the host fleet's clock, read from fx:clock; a sleep does not count)."""
 
     def __enter__(self) -> "Lease": ...
     def __exit__(self, *exc) -> None:
@@ -692,6 +832,7 @@ class Lease:
 
 
 class Reply:
+    id: str                # the message id
     status: str            # ok / blocked / invalid / timeout / stalled / lease_ended
     result: "dict | None"  # the worker's JSON for ok / blocked
     worker: str            # label of the generation that answered, e.g. fix-1.2
@@ -709,10 +850,31 @@ class Review:
 
 
 class Ruling:
+    id: str                # the escalation's op id
     decision: str          # approve / revise / reject
     choice: "int | None"   # index into the options the applet gave; branch on this, not on note
     by: str                # supervisor / root / human
     note: str
+
+
+class Escalation:
+    id: str
+    cls: str               # plan / scope / access / delete / human
+    job: str
+    what: str
+    why: str
+    options: "list[str]"
+    paths: "list[str]"
+    status: str            # awaiting / awaiting_human / ruled / timeout
+    created: float
+
+    def ruling(self, *, wait_s: "float | None" = None) -> "Ruling":
+        """The ruling (at once when answered). Waits at most `wait_s` (None: until ruled). Raises Rejected as
+        `escalate` does (`no_decision`, `stopping`). `wait_s=0` on an escalation that is still open also raises
+        `no_decision`, the same as a host timeout: read `status` first to tell them apart."""
+
+
+ESCALATE_NO_WAIT: bool   # True: `escalate` takes `wait` (absent in an older SDK)
 
 
 class Params:
@@ -817,7 +979,24 @@ if __name__ == "__main__":
 `max_active`, `max_renewals`, `renew_pending`, `worker_limit` (the worker ceiling or a fleet limit is reached; never
 sent only because workers are busy), `review_cap`, `invalid`, `lease_not_active`, `wrong_slot`, `slot_leased`,
 `message_in_flight`, `rate_limited`, `duplicate`, `no_decision` (supervisor did not answer in time),
-`supervisor` (the supervisor's own refusal; read `note`).
+`supervisor` (the supervisor's own refusal, or with `by: operator` an operator's revoke of a request still waiting;
+read `note`).
+
+The SDK adds two local reasons, both with `by: program`:
+
+- `stopping`: the applet's `stopping` event is set. A call made after that sends nothing; a call still waiting
+  returns at once and its `fleetmux request` child is killed (the op may or may not have reached the host). It
+  arrives as `LeaseDenied` from `request_lease` and as `Rejected` from `Lease.send`, `Lease.release`,
+  `escalate` (also with `wait=False`), `Escalation.ruling`, `message_result` and `notify`; `Lease.renew`
+  returns `False`; `audit` never raises it (section 7). The lease release that `run` makes on a stop does not use
+  it; it waits for the host, bounded (section 2.4).
+- `no_answer`: the call's local bound (`wait_s`, default from `waits`, section 1.1) passed without an answer
+  from the host, for example while the host daemon is down. It arrives as `LeaseDenied` from `request_lease` and
+  as `Rejected` from `Lease.send`, `Lease.release` and `notify`; `Lease.renew` returns `False`. The op may still
+  be processed later: a lease request may still be granted (`leases()`), a message may still run
+  (`message_result`).
+
+`no_decision` also comes from the SDK itself when `escalate` passes its local deadline (section 7).
 
 ## 10. Compatibility promises
 

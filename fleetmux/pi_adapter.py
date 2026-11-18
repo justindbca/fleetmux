@@ -96,12 +96,16 @@ def argv(cfg, name, generation, prompt, cwd, *, label):
 
 
 DAEMON_WATCH = {'check_interval_s': 120, 'stale_after_s': 120, 'realert_after_s': 600}
+HELD_KEYS = ('held_after_s', 'held_realert_s', 'subfleet_stuck_after_s', 'subfleet_check_s')  # runtime_v2.HELD_WATCH: the daemon's held watchdog
 
 
 def daemon_watch():
     """§36 knobs of the supervisor's daemon watchdog: fleet.yaml#daemon_watch over the defaults, seconds > 0."""
     from fleetmux import fleet_config
-    knobs = dict(DAEMON_WATCH, **(fleet_config.block('daemon_watch') or {}))
+    block = fleet_config.block('daemon_watch') or {}
+    # HELD_KEYS are the daemon's own held / sub-fleet watchdog (§24, runtime_v2.held_watch_knobs), not the
+    # extension's: allowed here, never exported.
+    knobs = dict(DAEMON_WATCH, **{k: v for k, v in block.items() if k not in HELD_KEYS})
     if set(knobs) != set(DAEMON_WATCH) or any(type(v) not in (int, float) or v <= 0 for v in knobs.values()):
         raise ValueError('fleet.yaml#daemon_watch takes ' + ', '.join(DAEMON_WATCH) + ' as seconds > 0')
     return knobs

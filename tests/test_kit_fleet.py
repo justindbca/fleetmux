@@ -15,12 +15,12 @@ from fleetmux import cmux_manager, fleet, kit as kitmod, roster
 ROSTER = """workers:
   - name: worker-1
     role: roles/worker-1.md
-  - name: memx-1
+  - name: alfa-1
 subfleets:
   - name: mem
-    supervisor_slot: memx-1
+    supervisor_slot: alfa-1
     supervisor_role: roles/mem-sup.md
-    roster: memx_roster.yaml
+    roster: alfa_roster.yaml
 """
 
 
@@ -32,7 +32,7 @@ def kit_with_fleet(root, name='demo', read_only=True):
     (d / 'roles' / 'worker-1.md').write_text('role one\n')
     (d / 'roles' / 'mem-sup.md').write_text('sub-fleet supervisor\n')
     (d / 'roles' / 'extract.md').write_text('extract role\n')
-    (d / 'memx_roster.yaml').write_text('workers:\n  - name: extract-1\n    role: roles/extract.md\n')
+    (d / 'alfa_roster.yaml').write_text('workers:\n  - name: extract-1\n    role: roles/extract.md\n')
     if read_only:  # like a hashed kit version
         for path in sorted(d.rglob('*'), reverse=True) + [d]:
             os.chmod(path, 0o555 if path.is_dir() else 0o444)
@@ -70,12 +70,12 @@ def test_new_start_copies_the_fleet_and_runs_like_roster(monkeypatch, tmp_path, 
     run, cfg = started(tmp_path)
     copy = (run / 'fleet-config').resolve()
     assert sorted(p.relative_to(copy).as_posix() for p in copy.rglob('*')) == [
-        'memx_roster.yaml', 'roles', 'roles/extract.md', 'roles/mem-sup.md', 'roles/worker-1.md', 'roster.yaml']
+        'alfa_roster.yaml', 'roles', 'roles/extract.md', 'roles/mem-sup.md', 'roles/worker-1.md', 'roster.yaml']
     assert cfg['roster'] == str(copy / 'roster.yaml')
-    assert cfg['workers'] == ['worker-1', 'memx-1']
+    assert cfg['workers'] == ['worker-1', 'alfa-1']
     assert cfg['worker_roles'] == {'worker-1': str(copy / 'roles' / 'worker-1.md')}
     (sub,) = cfg['subfleets']  # the sub-roster's relative paths resolve inside the copy
-    assert sub['name'] == 'mem' and sub['roster'] == str(copy / 'memx_roster.yaml')
+    assert sub['name'] == 'mem' and sub['roster'] == str(copy / 'alfa_roster.yaml')
     assert sub['supervisor_role'] == str(copy / 'roles' / 'mem-sup.md')
     assert roster.load_entries(sub['roster'])[1] == {'extract-1': str(copy / 'roles' / 'extract.md')}
     assert cfg['kit_fleet'] == {'name': 'demo', 'kit': str(kit.resolve()),
@@ -94,8 +94,9 @@ def test_new_start_equals_roster_on_the_copy(monkeypatch, tmp_path, kit):
     copy = run / 'fleet-config' / 'roster.yaml'
     assert roster.advisor(copy.read_bytes()) is True and not (run / 'roster.yaml').exists()
     fleet.main(argv + ['--worker-kit', str(kit), '--roster', str(copy)])
-    _, by_roster = started(tmp_path)
-    for key in ('roster', 'workers', 'worker_roles', 'worker_profiles', 'subfleets'):
+    run2, by_roster = started(tmp_path)
+    assert by_roster['roster'] == str(run2.resolve() / 'roster.yaml')  # the second run follows its own copy
+    for key in ('workers', 'worker_roles', 'worker_profiles', 'subfleets'):
         assert by_kit[key] == by_roster[key], key
     assert 'kit_fleet' not in by_roster
 
@@ -125,7 +126,7 @@ def test_resume_keeps_the_hot_edited_copy_without_the_kit(monkeypatch, tmp_path,
     fleet.main(argv + ['--worker-kit', str(kit), '--kit-fleet', 'demo'])
     run, cfg = started(tmp_path)
     copy = run / 'fleet-config' / 'roster.yaml'
-    edited = copy.read_text().replace('  - name: memx-1\n', '  - name: memx-1\n  - name: worker-3\n') + 'advisor: on\n'
+    edited = copy.read_text().replace('  - name: alfa-1\n', '  - name: alfa-1\n  - name: worker-3\n') + 'advisor: on\n'
     copy.write_text(edited)  # hot edits while running: one worker added, the advisor turned on
     writable(kit)
     shutil.rmtree(kit)  # the kit version is gone

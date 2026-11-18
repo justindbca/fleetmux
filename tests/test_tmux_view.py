@@ -374,7 +374,7 @@ def wait(check, timeout=5.0):
 
 
 def test_session_name_never_has_a_tmux_separator():
-    assert cm.tmux_session_name('tgog-ops', 3) == 'tgog-ops-g3'
+    assert cm.tmux_session_name('bravo-ops', 3) == 'bravo-ops-g3'
     assert cm.tmux_session_name('ops.a:1', 0) == 'ops_a_1-g0'
 
 

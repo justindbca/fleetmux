@@ -5,11 +5,11 @@
 # Steps: resolve the release (latest, or $FLEETMUX_VERSION) -> create $FLEETMUX_RELEASES/v<version> with a bare mkdir
 # (an existing install is never joined or overwritten) -> unpack that tag's source -> a .venv on the Python that
 # deps.yaml names, provided by uv (uv downloads that Python when the host has none) -> the pinned packages ->
-# the prebuilt fleetmux binaries (scripts/install_fleetmux.sh, sha256-checked) -> links in $FLEETMUX_BIN_DIR ->
+# the prebuilt fleetmux binaries of the same release (scripts/install_fleetmux.sh, sha256-checked) -> links in $FLEETMUX_BIN_DIR ->
 # scripts/check_deps.py. A failed install removes only the directory this run created.
 #
 # Needs: curl, tar, sha256sum or shasum. Nothing else from the host: no system Python, no compiler, no root.
-# What the check lists as missing afterwards (redis-server, tmux, git, an agent CLI) is what `fleetmux start` needs;
+# What the check lists as missing afterwards (redis-server, tmux, git, pi) is what `fleetmux start` needs;
 # the install itself does not stop for it.
 #
 # Environment:
@@ -97,7 +97,7 @@ py=$(awk '/^python:[[:space:]]*$/{p=1; next} /^[a-zA-Z_]+:/{p=0} p && $1=="min:"
 # start refuses a private Redis root that others can read
 mkdir -p .runtime/redis && chmod 700 .runtime .runtime/redis
 
-scripts/install_fleetmux.sh --dest "$REL/bin"
+FLEETMUX_VERSION=$version scripts/install_fleetmux.sh --dest "$REL/bin"  # this release's binary, not the deps.yaml floor
 READY=1
 link
 

@@ -8,7 +8,9 @@
 监工只判断、只派活；worker 只执行；任务什么时候算完成，由 daemon 判定，而不是由模型说了算。上下文快满的会话会写一份交接单，
 换一个新会话接着干，所以一个任务可以跨很多个模型会话连续跑几个小时。同一个 fleet 里可以混用官方 **Claude Code**、官方
 **Codex CLI**、**Pi**（Codex 模型与本地模型）和 **opencode**，任意「监工 × worker」组合均可，前提是该组合已通过真跑冒烟
-（`fleetmux/config/fleet.yaml#cli_pairs`）。
+（`fleetmux/config/fleet.yaml#cli_pairs`）。不同机器上的 fleet 通过 ssh 互相连接、互相调用
+（[docs/distributed-development.md](docs/distributed-development.md)）。团队里固定的流程做成 applet：一个和 daemon 平级的程序，
+需要模型时向监工借一个 worker（[docs/applets.md](docs/applets.md)）。
 
 **日常在用。** 2026 年 10 月起，它在三台 Mac 上以常驻服务 fleet 和定时任务 fleet 支撑一套实盘交易运作：运维团队负责其他团队的
 起停，另有盯盘交易团队、对价格与指标触发作答的策略复盘团队、定时研究团队。每个团队都有 AI 组长和 AI 组员；盯盘交易与复盘两个
@@ -28,6 +30,10 @@
    API 调用。
 6. **每个任务一份预算。** 预算卡限定调用次数、轮数、小时数和每个账号的额度；撞墙表决定是降一档模型，还是暂停运行、留待之后续跑。
 7. **团队套团队。** 一个 worker 可以成为它自己子 fleet 的组长，因此一个常驻 fleet 能同时跑几条业务线，每条线按自己的时钟起停。
+8. **Applet：团队自己的软件。** 团队里固定、机械的那部分（发版流水线、夜间扫描、轮询循环）做成 applet，作为和 daemon 平级的进程运行。
+   applet 自己从不调用模型。需要模型干活时，它向监工申请一份租约：一个 worker、限定时间和范围；活干完就把 worker 还回去。见 [docs/applets.md](docs/applets.md)。
+9. **多台机器上的 fleet。** 不同机器上的 fleet 通过 ssh 互连，不开新端口，不需要中间服务。每个 fleet 既为别的 fleet 服务，也调用它们。
+   一个常驻 fleet 持有目标，所以别的机器离线时工作照常进行。见 [docs/distributed-development.md](docs/distributed-development.md)。
 
 这件事为什么重要，是从我们自己的环境里学到的：我们跑过的一个助理网关，聊天通道断了几个月，外面没有任何东西发现，因为外面
 根本没有东西在检查。在 fleet 里，每一次交付都由 daemon 检查。
@@ -101,7 +107,8 @@
   必含章节；daemon 按字面验收，给这次运行设硬性时限，结束时关闭工作区。
 - **常驻判定服务**（`service`）。另一个程序用 `fleetmux request` 发 JSON 请求；指定了 `to` 的请求直接交给该角色的 worker
   （`--worker-names exit-1,reentry-1,...`，每个角色一份提示词，经 `--roles` 提供）。daemon 按 `reply.required` / `reply.allowed`
-  校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。
+  校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。较大的活用 `fleetmux task` 作为 job 提交，
+  在它自己的 task 模式子 fleet 里运行。
   详见英文版[服务模式](README.md#service-mode-resident-fleet)。
 - **功能开发与独立复核**（`dev_task`）。监工拆分功能，worker 实现，另设复核 worker 评审；复核至多三轮，剩下的 P0 / P1 交给你，
   而不是开第四轮。只有交付闸的 `test_cmd` 通过、代码合并并交给发布队列，任务才算完成。接口契约（`"contracts": true`）在开工前
@@ -116,7 +123,7 @@
 - **日间与夜间模型。** `start --roster day.yaml --night-roster night.yaml` 加 `fleetmux night on|off`，在空闲边界把配置档有差别的
   worker 换成夜间配置档（例如免费或本地模型），槽位名不变，并告诉监工哪些已做完、哪些还没做（完整的日 → 夜 → 日运行尚未做端到端
   验收）。`start --resume` 用同样的方式把中断的运行接回来。
-- **在哪都能跑，在哪都能看。** 在 Linux 上由 `fleetmux` 后端取代 cmux；`fleetmux attach`（也可经 `ssh -t`）或 `fleetmux gui` 能从另一个
+- **在哪都能跑，在哪都能看。** 各平台缺省都由 `fleetmux` 后端取代 cmux；`fleetmux attach`（也可经 `ssh -t`）或 `fleetmux gui` 能从另一个
   终端看实时页面，手机上的终端应用也行。
 
 聊天通道（Telegram、飞书、微信、邮件、Slack）是监工的第二块键盘，结果和「等人处理」的事项推回同一个对话：`fleetmux channel`，见 [contracts §8](docs/contracts.md)。
@@ -132,8 +139,8 @@
 1. **装系统包。**
 
    ```bash
-   sudo apt install redis-server tmux git     # Debian / Ubuntu
-   brew install redis tmux git                # macOS
+   sudo apt install curl redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                     # macOS
    ```
 
 2. **运行安装脚本。** 只需要 `curl` 和 `tar`。它把最新发版装到 `~/fleetmux-releases/v<版本>`，用 uv 取得 Python 3.14，下载预编译程序（校验 sha256），把 `fleetmux` 链接到 `~/.local/bin`，最后跑依赖检查。不需要 root，不需要编译器。
@@ -142,15 +149,16 @@
    curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
    ```
 
-3. **装好并登录一个 agent 命令行**，例如 Claude Code：
+3. **装好并登录 pi**（必需），其他 agent 命令行（如 Claude Code）可选：
 
    ```bash
+   npm install -g @earendil-works/pi-coding-agent    # pi (Node.js >= 22)
    curl -fsSL https://claude.ai/install.sh | bash && claude
    ```
 
 4. **检查。** `fleetmux start --help` 能列出选项即可。
 
-要求：`redis-server` ≥ 7.0、`tmux` ≥ 3.4、`git` ≥ 2.30，加一个 agent 命令行（Claude Code、Codex、pi 或 opencode，只装名单里用到的；pi 另需 Node.js ≥ 22）。完整表格见英文版 [Requirements](README.md#requirements)。
+要求：`redis-server` ≥ 7.0、`tmux` ≥ 3.4、`git` ≥ 2.30，加 pi（必需，另需 Node.js ≥ 22）；Claude Code、Codex、opencode 可选，没装或版本过低就跳过。完整表格见英文版 [Requirements](README.md#requirements)。
 
 ### 从 PyPI、crates.io 或 npm 安装
 
@@ -199,7 +207,7 @@ model = "gpt-5.5"
 
 ## 快速上手
 
-打开一个 cmux 终端，配置好你的 Pi provider/model，并替换下面的 `local/my-model`。新启动要求 Redis v2，并需显式的开发许可。不带
+打开任意终端（缺省的 fleetmux 后端不需要 cmux），配置好你的 Pi provider/model，并替换下面的 `local/my-model`。新启动要求 Redis v2，并需显式的开发许可。不带
 `--supervisor-cli` / `--worker-cli` 时，`start` 取 `fleetmux/config/fleet.yaml#cli_pairs` 里的缺省组合：**Pi 监工跑
 `openai-codex/gpt-6-astra`（thinking high），配官方 Claude Code worker**。该表列出所有支持的组合及其状态（见英文版
 [Redis v2 development runtime](README.md#redis-v2-development-runtime)），表里没有的组合直接拒绝。`start` 还必须带
@@ -220,6 +228,12 @@ fleetmux stop                                 # cancel; confirm runtime retireme
 
 `fleetmux task -` 把目标交给监工；`fleetmux status` 显示任务、各 agent 的状态、上下文占用和待投递数；`fleetmux stop` 取消任务，
 确认 runtime 已退役后才关闭 Redis。
+
+**一台机器一个 fleet。** 本机已有你的根 fleet 在跑时，`fleetmux start` 不再起第二个：它挂靠到那个 fleet，
+打印挂靠的是哪个、写一个挂靠记录（join stub）后退出。用它打印的 `fleetmux task` 命令提交活；在跑的 fleet 把这件活
+作为 job 放进它自己的子 fleet 里跑，子 fleet 在侧栏里按提交先后往下排。这件活带上 `start` 的 `--name`、`--roster`、
+`--roles`、`--lifecycle`、`--budget`，所以一整个开发 fleet 可以作为一件活跑。带同一个 `--config` 的 `status`、`stop`、
+`result` 只作用于这件活，不碰在跑的 fleet。service 模式的 `start` 也挂靠：它成为在跑 service fleet 的 service 子 fleet，在那个 fleet 的一个 worker 上起来，一直跑到被停；用 `fleetmux request --config <挂靠记录> -` 给它发请求，同一个 `--config` 的 `results` / `result` / `status` / `stop` 只作用于这个子 fleet。task fleet 不接别的 fleet 的活：在跑的只有 task fleet 时，`start` 自己起一个；那个 task fleet 就在同一个 fleet 家目录时拒绝，什么都不起。要单独起一个 fleet，加 `--no-join`（[design §19](docs/design.md)）。正在停的 fleet（它的 Redis 不再应答，或已收到 `stop`）不挂靠；同一个 fleet 家目录里同名（`--name` 相同）的 fleet 就是正在重启的这个 fleet 自己，也不挂靠：这时 `start` 自己起一个。
 
 ## 完整参考
 

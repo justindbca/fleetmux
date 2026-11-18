@@ -506,7 +506,8 @@ def _paused_at(record):
 def effective_age(req, now):
     """Service request age in seconds, excluding completed and current pauses (r3 §2.5).
 
-    This is not the task hours budget: that hard budget continues to use wall time.
+    ``now`` and the request's ``created`` / ``clock_paused_at`` are awake seconds (fleetmux/awake.py, §35).
+    This is not the task hours budget (``fleet.task_deadline``, also awake time).
     """
     _number(now, 'now')
     created = _stored_number(req, 'created')

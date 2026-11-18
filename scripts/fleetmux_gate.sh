@@ -50,7 +50,7 @@ M4_PY="tests/test_fleetmux_pages.py tests/test_fleetmux_tmux_view.py tests/test_
 M4_FAKE_KILL_PY="tests/test_fake_fleetmux_kill.py"   # fake server kill_group under a transient EPERM (fix-m4, bbdc18ca)
 M4_DRAIN_PY="tests/test_m4_drain_s_contract.py"   # named sub-fleet down waits the parent's declared drain_s (brief §7.2, M43)
 M4_TMUX_CLEANUP_PY="tests/test_m4_tmux_cleanup.py"   # fleet stop removes its own dead tmux socket, both backends (brief §7.1, M42)
-M4_E2E="tests/test_m4_fake_cli.py tests/test_m4_e2e_hygiene.py tests/test_m4_e2e_studio_ops.py"   # real E2 (brief-m4 §5 item 1)
+M4_E2E="tests/test_m4_fake_cli.py tests/test_m4_e2e_hygiene.py tests/test_m4_e2e_ops.py"   # real E2 (brief-m4 §5 item 1)
 M4_REQUIRED="rust/crates/app/tests/pages.rs $M4_WEB_TEST $M4_SHIM tests/m4e $M4_PY $M4_E2E"
 m4_require() {   # list every missing M4 test file, then fail
   local f missing=0
@@ -70,7 +70,7 @@ py_no_skip() {   # pytest that may not skip anything: in M4 tests a missing depe
 # FM4_TEST_ROOT is always a new short directory under it. Nothing is reused or deleted.
 M4_SOCK_MAX=103     # macOS sockaddr_un path limit (bytes), used for every M4 test socket
 # Longest socket path below M4E_ROOT, in bytes including the leading '/', from the final fixtures (833d70c5 / d3f17df8):
-#   e2e child tmux  /<6hex id>/runs/fleet-YYYYmmdd-HHMMSS-<8hex>/sub/mayfly/tmux.sock     = 1+6+6+30+21 = 64
+#   e2e child tmux  /<6hex id>/runs/fleet-YYYYmmdd-HHMMSS-<8hex>/sub/svc-01/tmux.sock     = 1+6+6+30+21 = 64
 #                   (run dir name and its uuid4().hex[:8] token: fleetmux/fleet.py:7532 / :7537; measured 92 B at 28 B)
 #   Python          /<tag>-<8hex>/state/fleetmux/<session token>/ctl.sock, …/fleet-…/tmux.sock   = 53 measured
 #   Rust            /r.XXXXXX/<pid>-<seq>/rt/ctl.sock = 9+24 (7-digit Linux pid); web /r.XXXXXX/w<pid>-<n>/w/web.sock <= 9+22

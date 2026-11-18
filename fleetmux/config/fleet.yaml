@@ -4,7 +4,7 @@
 #   $FLEETMUX_CONFIG, else ~/.fleetmux/fleet.yaml   (never part of this repository)
 # A top-level block there replaces the shipped block as a whole (no deep merge). Only these blocks may
 # be overridden there: accounts, tools, walls, lifecycle_modes, pi_context, daemon_watch, fresh_dispatch,
-# discovery (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
+# discovery, remote, job_subfleet, gui, bare, relay (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
 # watchdog_prompts (the dialog whitelist), models, profiles and capability_matrix change only here,
 # through a reviewed commit.
 #
@@ -21,6 +21,9 @@
 #   pi_context         context window written into each run's pi models.json            (pi_adapter.py)
 #   fresh_dispatch     when a reused worker earns the supervisor a "fresh" hint               (fleet_config.py)
 #   dsh                dsh workers: the model when `start --dsh-model` is not given             (fleet_config.py)
+#   gui                the root fleet daemon keeps its `fleetmux gui` window open               (gui_keep.py)
+#   bare               the root fleet bare `fleetmux` starts when none runs                   (open_window.py)
+#   relay              multi-machine relay development through one git hub                       (relay/params.py)
 
 cli_pairs:
   # Transport v2 supervisor_cli x worker_cli x mode table (read by fleetmux/cli_pairs.py).
@@ -134,10 +137,12 @@ lifecycle_modes:
       base: task
       done_when: merged_to_deploy_branch_and_enqueued
       require_integrator_worker: true
-      # master design v2 §4.14 (draft said fable). Review rounds are capped (10/13 codex-notype ran to r16):
+      # master design v2 §4.14. Review rounds are capped (10/13 codex-notype ran to r16):
       # a FAIL verdict at round max_rounds stops the rounds; the open P0/P1 go to the user in the result
       # (outstanding.json / .md), no new round. Reviewers in a fleet follow fleetmux/agents/reviewer.md.
-      review_step: {reviewer: opus, must_pass: true, max_rounds: 3, on_cap: stop_and_report}
+      # Who reviews is the supervisor's decision: the gate checks the verdict (PASS, zero open P0/P1), never the
+      # reviewer's model.
+      review_step: {must_pass: true, max_rounds: 3, on_cap: stop_and_report}
       on_complete: stop_and_close
       notify: [tg, parent]
     program:
@@ -660,7 +665,8 @@ profiles:
 # accounts: a budget card's "pool" names an account by id or alias; meter picks the budget line:
 #   usd_equiv -> max_usd (equivalent USD since the card started; caps.day_usd / night_usd is the default
 #                cap when the card has none, else 40 / 10), week_pct -> max_week_pct (absolute weekly %),
-#   calls / none -> no pool line. Readings come from quota.json (rows keyed by account id).
+#   calls / none -> no pool line. Readings come from quota.json (rows keyed by account id), through the
+#   hot quota block of fleet-superpowers (docs/design.md section 56).
 # Example for the private file:
 #   accounts:
 #     - {id: pool-a, provider: claude, aliases: [], meter: usd_equiv, hosts: [host-1], caps: {day_usd: 40, night_usd: 10}}
@@ -693,6 +699,18 @@ daemon_watch:
   check_interval_s: 120
   stale_after_s: 120
   realert_after_s: 600
+  # The daemon's held watchdog (docs/design.md §24): a slot held (or waiting on a user dialog), or the run paused,
+  # for held_after_s awake seconds with no session progress -> the daemon recovers it when its turn is proven
+  # stopped, else escalates (parent fleet supervisor / root tg + parent channels); again at most every
+  # held_realert_s. Read by the daemon (hot, within 30 s); not passed to the pi extension.
+  held_after_s: 300
+  held_realert_s: 1800
+  # The parent's view of each running sub-fleet (R3b, same section): every subfleet_check_s the parent daemon reads
+  # the sub-fleet's own Redis (daemon heartbeat, last non-bookkeeping audit row, paused, held supervisor, task
+  # state); no progress for subfleet_stuck_after_s -> [sub-fleet stuck] to the parent supervisor and, at a managed
+  # root, the user channel; again at most every held_realert_s. Works when the sub-fleet's daemon itself is down.
+  subfleet_stuck_after_s: 600
+  subfleet_check_s: 60
 
 fresh_dispatch:
   # docs/design.md §37. A dispatch without "fresh": true to a worker already above this share of its context
@@ -733,3 +751,116 @@ discovery:
   only_via: {claude: claude, fable: claude, opus: claude, sonnet: claude, haiku: claude, gpt: pi}
   # Found and shown in the table, never a default candidate (no model listing, or not in the default pairs).
   report_only: [codex, dsh, gemini, ollama]
+
+remote:
+  # `fleetmux remote` (design.md section 55): the machine that runs your fleet when this one is only a screen
+  # and a keyboard. `fleetmux remote` shows its live page over ssh, `fleetmux remote <fleet command>` runs that
+  # command there. Machines, their ssh destinations (reach) and their fleetmux path come from the machines block of
+  # fleet-superpowers (docs/distributed-development.md). default: the machine used without --host (none needed when
+  # the inventory names exactly one other machine). Set it in the private file (~/.fleetmux/fleet.yaml). Reaching
+  # the machine (keys, ports, jump hosts) is your own ssh configuration.
+  default: ""
+  # The one order in which every machine tries the reach entries of another, by the route kind in each entry's
+  # `via`: thunderbolt direct, LAN, overlay network (e.g. Tailscale), ssh through a domestic relay host, ssh
+  # through an overseas relay host. List order is kept within a kind; a kind not listed here is tried last.
+  # `superpowers add --via` accepts only these kinds. A private `remote` block without this key uses this order.
+  reach_order: [thunderbolt, lan, overlay, tunnel, tunnel-overseas]
+
+session_env:
+  # Session environment from an applet (docs/distributed-development.md). An applet entry's session_env (port, vars,
+  # clis) routes the sessions of these CLIs through the applet's loopback port. verified_clis: the CLIs a roster
+  # may route; a roster that lists another CLI is refused whole. Add a CLI only after starting it through the
+  # proxy and seeing a CONNECT to its API host in the proxy's log (that is the verification). Shipped file only.
+  # wait_interval_s: how often a held session probes the port; probe_timeout_s: one probe's connect timeout.
+  verified_clis: [claude]
+  wait_interval_s: 2
+  probe_timeout_s: 1
+
+job_subfleet:
+  # Jobs on a service fleet (docs/design.md §58). `fleetmux task <spec>` against a service fleet is a job: the
+  # program takes one idle worker slot, makes it the supervisor of a task-mode sub-fleet with these settings, and
+  # publishes the sub-fleet's outcome under the job id. A job spec may override each key for itself.
+  # workers: number of sub-fleet workers (no default cap for jobs; a root limits.child_workers_max caps it).
+  # supervisor_profile: agent card the slot runs on as sub-fleet supervisor (a claude card); null = its own model.
+  # worker_profiles: one agent card per sub-fleet worker; [] = the fleet's default worker model.
+  # hours: the sub-fleet task's time budget.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
+  workers: 2
+  supervisor_profile: null
+  worker_profiles: []
+  hours: 4
+
+gui:
+  # The root fleet daemon keeps its `fleetmux gui` window open (docs/design.md "Window keep-open"). Every check_s
+  # seconds it looks for a `fleetmux gui --runtime <its runtime>` process and starts one in the background when there
+  # is none, also when the fleet was started over ssh or by a scheduler. No launchd / cron item is needed for this.
+  # Sub-fleets never open one (they show in the root's sidebar). A failed open waits check_s, then twice as long each
+  # time, at most backoff_max_s. keep_open: false turns it off (read on every check, no restart needed); a run
+  # started with `start --no-view` never opens it.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml); seconds > 0.
+  keep_open: true
+  check_s: 30
+  backoff_max_s: 600
+
+bare:
+  # Bare `fleetmux` (= `fleetmux gui`) when no root fleet runs on this machine and this fleet home runs no fleet of
+  # its own (docs/design.md section 50): it prints one line, then runs
+  #   start --lifecycle <lifecycle> --name <name> --resume auto --no-join [--roster R | --workers N] <start_args>
+  # with FLEETMUX_HOME=<home> and FLEETMUX_STATE=<home>/state, stdin from /dev/null. `--resume auto` resumes a
+  # resumable earlier run of that home (a run stopped with `fleetmux stop` is finished: a new run starts); other
+  # fleet homes are not touched. No model is set here: start takes the fleet.yaml#discovery default pair. The new
+  # root's daemon opens the window (gui block): bare looks for it every window_poll_s, up to window_wait_s, and
+  # brings it to the front; when the wait runs out it opens (or raises) the window itself once and returns. With
+  # gui.keep_open false it does not wait. Over ssh or without a desktop it attaches instead.
+  # enabled: false = the history window of this fleet home (or one line and exit 1), as before this block.
+  # start_args: further start flags, verbatim; the flags bare sets itself, --no-view / --gui / --attach and the
+  # CLI / model flags are refused. Nothing here waives a safety check: a flag such as --allow-unsandboxed-pi goes
+  # only into the operator's own block, as an explicit decision.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml); a missing key takes the value below.
+  enabled: true
+  name: main                        # default root fleet name (start --name)
+  lifecycle: service                # start --lifecycle
+  home: ~/.fleetmux/fleets/{name}   # its fleet home; {name} is the name above
+  roster: null                      # start --roster PATH; null = none
+  workers: null                     # start --workers N; null = start's default; not together with roster
+  start_args: []
+  window_wait_s: 30                 # s, longest wait for the daemon's window before bare opens it itself
+  window_poll_s: 0.5                # s, between two looks for that window
+
+relay:
+  # Multi-machine relay development (fleetmux/relay/). Several machines work on the tasks of one job through one
+  # git hub; a machine that leaves or goes silent has its tasks taken over from the last checkpoint.
+  # Every number the relay uses is here; the code has no defaults. A private `relay` block (~/.fleetmux/fleet.yaml)
+  # is laid over this one key by key (and `hot` key by key), so it may name only the keys it changes.
+  # Keys under `hot` are copied into the root fleet's Redis at start, read from there while running, and written
+  # back every write_back_seconds.
+  enabled: false                # the root fleet daemon starts the relay only when true
+  state_remote: ""              # git remote for task, node, snapshot and salvage refs; "" = the code remote
+  snapshot_timeout_s: 45        # s, limit of one checkpoint push (record + snapshot)
+  takeover_md_max_lines: 60     # lines, maximum length of TAKEOVER.md
+  text_max: 200                 # characters, clip length of titles and progress items in records
+  secret_globs: [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", ".netrc", "credentials*"]
+  probe_timeout_s: 5            # s, limit of one local machine probe (performance-core count)
+  notify_max: 1000              # characters a relay notice may carry
+  reason_max: 200               # characters of a refusal reason in an audit line
+  coordinator:                  # the optional coordinator role (a light task record without a sub-fleet)
+    enabled: true               # false = no coordinator record is created
+    prefer: ""                  # machine (node name) that should hold it; "" = always-on machines first
+    takeover: true              # false = peers never take it over from a lost owner
+  hot:
+    beat_s: 60                  # s, node record push interval
+    lost_after_s: 300           # s, no change of a node's refs this long (observer's own clock) = lost
+    snapshot_s: 120             # s, automatic snapshot interval (pushed only when the tree changed)
+    poll_s: 30                  # s, task table read interval
+    git_timeout_s: 20           # s, limit of one git network operation
+    max_tasks_per_node: 2       # tasks a machine works on at once
+    max_heavy_per_node: 1       # heavy tasks a machine works on at once
+    disk_floor_heavy_gb: 40     # GiB free disk below which a machine takes no heavy task
+    disk_floor_any_gb: 15       # GiB free disk below which a machine takes no new task
+    score: {cores: 1.0, mem_gb: 0.25, disk_free_gb: 0.02}   # weights of the capability score
+    offline_grace_s: 0          # s, wait after a goodbye before others take its tasks (0 = at once)
+    claim_stagger_s: 20         # s, the k-th ranked machine claims (k-1) x this later
+    wake_gap_s: 180             # s, a gap between two loop turns above this = the machine just woke
+    settle_s: 600               # s, a returning machine stays online this long before it takes new tasks
+    budget_pause_gap_s: 60      # s, daemon tick gaps above this do not count against a time budget
+    write_back_seconds: 300     # s, interval of writing changed hot keys back

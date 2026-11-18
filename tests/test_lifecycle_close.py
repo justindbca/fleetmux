@@ -111,6 +111,11 @@ def deliver_spec(repo, tmp_path, test_cmd=None):
             'queue': str(tmp_path / 'queue' / 'deploy-queue.jsonl'), 'review_file': 'reviewer/verdict.json'}
 
 
+def make_reviewer(f, slot='worker-2', profile='claude-reviewer'):
+    """``slot``'s generation runs the ``claude-reviewer`` card (model opus; recorded in the gate record, audit only)."""
+    f.setf(slot, runtime_launch=json.dumps({'profile_id': profile}))
+
+
 def write_verdict(f, verdict='PASS', reviewer='opus', rnd=1, issues=(), name='reviewer/verdict.json'):
     path = f.workspace() / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +163,6 @@ def test_dev_task_gate_runs_once_and_is_idempotent(fx, table, notes, repo, tmp_p
 @pytest.mark.parametrize('case,expect', [
     ('tests_fail', 'tests failed'),
     ('review_fail', 'review verdict is FAIL'),
-    ('wrong_reviewer', 'the mode table asks for opus'),
     ('p1_left', '1 P1'),
     ('not_ff', 'not a fast-forward'),
     ('deploy_checked_out', 'is checked out in'),
@@ -172,8 +176,6 @@ def test_dev_task_gate_refuses_and_never_moves_the_deploy_branch(tmp_path, repo,
         spec['test_cmd'] = [sys.executable, '-c', 'raise SystemExit(1)']
     elif case == 'review_fail':
         verdict['verdict'] = 'FAIL'
-    elif case == 'wrong_reviewer':
-        verdict['reviewer'] = 'sonnet'
     elif case == 'p1_left':
         verdict['issues'] = [{'id': 'X-1', 'severity': 'P1', 'title': 'open'}]
     elif case == 'not_ff':
@@ -1262,16 +1264,16 @@ def tree_closed_run(tmp_path, monkeypatch, **result):
     sub_record(run, 'svc', 'running', named=True, name='svc', mode='service')
     inner = sub_record(run / 'sub' / 'svc', 'M0', 'running')
     assert inner.is_dir()
-    sub_record(run, 'memx', 'running', named=True, name='memx', mode='service')
-    sub_record(run, 'tgog', 'reclaimed', outcome='down', named=True, name='tgog', mode='service')
+    sub_record(run, 'alfa', 'running', named=True, name='alfa', mode='service')
+    sub_record(run, 'bravo', 'reclaimed', outcome='down', named=True, name='bravo', mode='service')
     sub_record(run, 'ops', 'running')
     mgr.kv['sidebar'] = json.dumps({'v': 1, 'current': run.name, 'fleets': [
         {'id': run.name, 'title': 'fmx-demo', 'state': 'stopping', 'page': '',
          'line1': '正在关闭 · 监工+3 worker（1忙）', 'line2': '~/.fleetmux'},
         card('svc', 'running', '运行中 · 1 worker', page='svc'),
         card('M0', 'stopping', '运行中 · 1 worker', page='M0'),
-        card('memx', 'paused', '运行中 · 1 worker', page='memx'),
-        card('tgog', 'reclaimed', '已收回 · 结局 down', page='tgog', line2='只读，可看记录'),
+        card('alfa', 'paused', '运行中 · 1 worker', page='alfa'),
+        card('bravo', 'reclaimed', '已收回 · 结局 down', page='bravo', line2='只读，可看记录'),
         card('ops', 'running', '运行中 · 1 worker', page='ops'),
         # not in this run's sub/ tree: another fleet's card, and an id that merely starts like a child's
         {'id': 'fleet-child-a', 'title': 'child', 'state': 'running', 'line1': '运行中', 'line2': '~'},
@@ -1288,13 +1290,13 @@ def test_sidebar_close_takes_this_runs_subfleet_cards_out_of_running(tmp_path, m
     assert lifecycle_close.close_workspace(run / 'config.json', mgr=mgr) == 'closed (server kept for ↺)', mgr.writes
     cards = {c['id']: c for c in json.loads(mgr.kv['sidebar'])['fleets']}
     assert (cards[run.name]['state'], cards[run.name]['line1']) == ('closed', '已关闭 · 可恢复'), cards[run.name]
-    for cid in ('svc', 'M0', 'memx', 'ops'):
+    for cid in ('svc', 'M0', 'alfa', 'ops'):
         c = cards[cid]
         assert (c['state'], c['line1'], c['line2']) == ('reclaimed', '已收回 · 随根关闭', '只读，可看记录'), \
             'a sub-fleet card of the closed tree must not stay running: %r' % (c,)
         assert c['page'] == cid, 'the card keeps its page (click still switches to the read-only page): %r' % (c,)
-    assert (cards['tgog']['state'], cards['tgog']['line1']) == ('reclaimed', '已收回 · 结局 down'), \
-        'an already reclaimed card keeps its own outcome text: %r' % (cards['tgog'],)
+    assert (cards['bravo']['state'], cards['bravo']['line1']) == ('reclaimed', '已收回 · 结局 down'), \
+        'an already reclaimed card keeps its own outcome text: %r' % (cards['bravo'],)
     assert (cards['fleet-child-a']['state'], cards['fleet-child-a']['line1']) == ('running', '运行中'), cards
     assert (cards['svc-2']['state'], cards['svc-2']['line1']) == ('running', '运行中 · 2 worker'), \
         'a card whose id only looks like a child id is not part of the tree: %r' % (cards['svc-2'],)
@@ -1306,7 +1308,7 @@ def test_sidebar_close_leaves_no_running_title_for_any_card_of_the_tree(tmp_path
     run, mgr = tree_closed_run(tmp_path, monkeypatch)
     lifecycle_close.close_workspace(run / 'config.json', mgr=mgr)
     data = json.loads(mgr.kv['sidebar'])
-    tree_ids = {run.name, 'svc', 'M0', 'memx', 'tgog', 'ops'}
+    tree_ids = {run.name, 'svc', 'M0', 'alfa', 'bravo', 'ops'}
     for c in data['fleets']:
         if c['id'] in tree_ids:
             assert '运行中' not in c['line1'] and c['state'] not in lifecycle_close.LIVE_CARD_STATES, \
@@ -1328,9 +1330,9 @@ def test_resumed_daemon_push_brings_the_subfleet_cards_back_to_their_real_state(
     fleetmux_sidebar.tick(f, now=100.0)
     cards = {c['id']: c for c in json.loads(mgr.kv['sidebar'])['fleets']}
     assert cards[run.name]['state'] == 'running', cards[run.name]
-    for cid in ('svc', 'M0', 'memx', 'ops'):
+    for cid in ('svc', 'M0', 'alfa', 'ops'):
         assert (cards[cid]['state'], cards[cid]['line1']) == ('running', '运行中 · 1 worker'), cards[cid]
-    assert (cards['tgog']['state'], cards['tgog']['line1']) == ('reclaimed', '已收回 · 结局 down'), cards['tgog']
+    assert (cards['bravo']['state'], cards['bravo']['line1']) == ('reclaimed', '已收回 · 结局 down'), cards['bravo']
 
 
 # ------------------------------------------------------------------ close_all keeps the server for a busy bash page
@@ -1338,7 +1340,7 @@ def test_resumed_daemon_push_brings_the_subfleet_cards_back_to_their_real_state(
 # states, or the closed-fleet reaper (§13.4) never lets the server go once the bash page is closed too.
 def _tree_states(mgr, run):
     cards = {c['id']: c for c in json.loads(mgr.kv['sidebar'])['fleets']}
-    return cards, {cid: cards[cid]['state'] for cid in (run.name, 'svc', 'M0', 'memx', 'tgog', 'ops')}
+    return cards, {cid: cards[cid]['state'] for cid in (run.name, 'svc', 'M0', 'alfa', 'bravo', 'ops')}
 
 
 def test_close_all_keeping_a_busy_bash_page_stops_the_cards_of_a_plain_stop(tmp_path, monkeypatch):
@@ -1353,7 +1355,7 @@ def test_close_all_keeping_a_busy_bash_page_stops_the_cards_of_a_plain_stop(tmp_
     root = cards[run.name]
     assert (root['state'], root['line1']) == ('stopped', '已停止'), root
     assert 'restorable' not in mgr.kv, 'a plain stop is not a ↺ history entry: %r' % (mgr.writes,)
-    for cid in ('svc', 'M0', 'memx', 'ops'):
+    for cid in ('svc', 'M0', 'alfa', 'ops'):
         assert (cards[cid]['state'], cards[cid]['line1']) == ('reclaimed', '已收回 · 随根关闭'), cards[cid]
     assert cards['fleet-child-a']['state'] == 'running', cards['fleet-child-a']
 

@@ -814,6 +814,14 @@ impl PaneStore {
         self.sync_layout_shown(layout, false);
     }
 
+    /// As [`PaneStore::sync_layout`] / [`PaneStore::sync_layout_hidden`] for page `page`'s layout, where a layout may
+    /// also show a pane whose record belongs to another page (a bash page shows the root page's bash tab zoomed, user
+    /// 2026-11-14): group / index / focused follow only the layout of the pane's own page; `displayed` follows the
+    /// shown layout whatever page the pane belongs to, and a hidden layout clears it only for its own panes.
+    pub fn sync_page_layout(&mut self, layout: &fleetmux_layout::Layout, page: &str, shown: bool) {
+        self.sync_layout_for(layout, Some(page), shown);
+    }
+
     /// M4: the page `id` belongs to (`""` = root), or `None` for no such pane.
     pub fn page_of(&self, id: &str) -> Option<&str> {
         self.panes.get(id).map(|p| p.page.as_str())
@@ -831,6 +839,10 @@ impl PaneStore {
     }
 
     fn sync_layout_shown(&mut self, layout: &fleetmux_layout::Layout, shown: bool) {
+        self.sync_layout_for(layout, None, shown);
+    }
+
+    fn sync_layout_for(&mut self, layout: &fleetmux_layout::Layout, page: Option<&str>, shown: bool) {
         let focus = layout.focus();
         let zoom = layout.zoom().cloned();
         for g in fleetmux_layout::Group::ALL {
@@ -840,9 +852,14 @@ impl PaneStore {
                     continue;
                 };
                 let is_selected = selected.as_ref() == Some(id);
-                p.info.group = proto_group(g);
-                p.info.index = index as u32;
-                p.info.focused = is_selected && g == focus;
+                let own = page.is_none_or(|pg| p.page == pg);
+                if own {
+                    p.info.group = proto_group(g);
+                    p.info.index = index as u32;
+                    p.info.focused = is_selected && g == focus;
+                } else if !shown {
+                    continue;
+                }
                 p.displayed = shown
                     && match &zoom {
                         Some(z) => z == id,

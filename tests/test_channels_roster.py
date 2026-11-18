@@ -59,9 +59,9 @@ def test_roster_without_channels_parses_exactly_as_before(tmp_path):
         'workers[1]: duplicate worker name worker-1'
     assert errors_of(W1 + 'handoff: {claude: {ratio: 0}}\n', tmp_path) == \
         'handoff[claude]: ratio must be a number between 0 and 1'
-    assert errors_of('workers:\n  - {name: worker-1, model: x}\n', tmp_path) == (  # 26392b9 added "split"
+    assert errors_of('workers:\n  - {name: worker-1, model: x}\n', tmp_path) == (  # 26392b9 added "split", §45 "fresh"
         'workers[0]: must be a mapping with "name" and optional "role", "profile", "writable", "window", '
-        '"handoff_ratio", "split" only (pi workers also "pi_model", "pi_thinking")')
+        '"handoff_ratio", "split", "fresh" only (pi workers also "pi_model", "pi_thinking")')
     assert errors_of(W1 + 'agents: []\n', tmp_path) == (  # 26392b9 added "split"; P1a must not change this text
         'the roster must be a mapping with only a "workers" list '
         '(and optional "limits", "handoff", "advisor", "subfleets", "tabs", "split", "max_busy")')  # main max_busy

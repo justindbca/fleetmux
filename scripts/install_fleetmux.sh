@@ -1,7 +1,8 @@
 #!/bin/bash
-# Install the prebuilt fleetmux binary pinned by deps.yaml (programs.fleetmux.min) and verify its sha256; on a
-# desktop session also install the fleetmux-web window (brief-m25 §3.6 W5).
-#   scripts/install_fleetmux.sh [--dest DIR] [--print-target]
+# Install the prebuilt fleetmux binary of a release and verify its sha256; on a desktop session also install the
+# fleetmux-web window (brief-m25 §3.6 W5). The release is $FLEETMUX_VERSION when set (scripts/install.sh passes the
+# release it installs, so the binary matches its Python CLI), else deps.yaml's programs.fleetmux.min (a checkout).
+#   [FLEETMUX_VERSION=X.Y.Z] scripts/install_fleetmux.sh [--dest DIR] [--print-target]
 # Contract: tests/test_install_fleetmux.py. Release assets come from .github/workflows/release.yml:
 #   $FLEETMUX_RELEASE_BASE/v<ver>/fleetmux-<ver>-<triple>.tar.gz   (one top-level `fleetmux` executable)
 #   $FLEETMUX_RELEASE_BASE/v<ver>/fleetmux-<ver>-<triple>.tar.gz.sha256   (`<hex>  <file name>`)
@@ -49,9 +50,14 @@ target() {
 triple=$(target)
 if [ "$print_target" = 1 ]; then echo "$triple"; exit 0; fi
 
-# programs.fleetmux.min, e.g.  fleetmux: {cmd: [fleetmux, --version], min: "0.1.0", when: fleetmux, ...}
-version=$(sed -n 's/^  fleetmux:.*[{ ,]min: *"\{0,1\}\([0-9][0-9A-Za-z.+-]*\)"\{0,1\}.*/\1/p' "$ROOT/deps.yaml" | head -n 1)
-[ -n "$version" ] || die "no programs.fleetmux.min in $ROOT/deps.yaml"
+version=${FLEETMUX_VERSION:-}
+version=${version#v}
+if [ -z "$version" ]; then
+  # programs.fleetmux.min, e.g.  fleetmux: {cmd: [fleetmux, --version], min: "0.1.0", when: fleetmux, ...}
+  version=$(sed -n 's/^  fleetmux:.*[{ ,]min: *"\{0,1\}\([0-9][0-9A-Za-z.+-]*\)"\{0,1\}.*/\1/p' "$ROOT/deps.yaml" | head -n 1)
+  [ -n "$version" ] || die "no programs.fleetmux.min in $ROOT/deps.yaml"
+fi
+case "$version" in *[!0-9A-Za-z.+-]*) die "invalid version '$version'" ;; esac
 
 if command -v sha256sum >/dev/null 2>&1; then
   hash_of() { sha256sum "$1" | cut -d' ' -f1; }

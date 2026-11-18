@@ -1,7 +1,8 @@
 """`fleetmux setup --install`: install what a fleet needs and this machine lacks, after the user confirms.
 
 What a fleet needs (deps.yaml): redis-server, git and tmux (system packages), Node.js 22+ and pi. The command
-1. finds each one the way fleet does (the login shell's PATH, then this process's) and reads its version;
+1. finds each one the way fleet does (the login shell's PATH, then this process's, then the directories this machine
+   recorded before; docs/design.md §50.3) and reads its version with that PATH (pi's `#!/usr/bin/env node`);
 2. prints what is missing and the exact steps: `sudo apt-get install` (Debian / Ubuntu) or `brew install` (macOS)
    for the system packages, the official Node.js tarball (sha256-checked) and `npm install` of pi into
    ~/.fleetmux/tools, linked into the directory that holds the `fleetmux` command;
@@ -41,9 +42,10 @@ def tools_dir():
     return paths.root() / 'tools'
 
 
-def _version(cmd):
+def _version(cmd, search=None):
+    env = dict(os.environ, PATH=search) if search else None  # `#!/usr/bin/env node` finds the node of the lookup
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     m = re.search(r'(\d+)\.(\d+)(?:\.(\d+))?', (done.stdout or '') + (done.stderr or ''))
@@ -61,7 +63,7 @@ def check(search):
     for name in NEEDED:
         spec = programs[name]
         path = shutil.which(name, path=search)
-        have = _version([path] + spec['cmd'][1:]) if path else None
+        have = _version([path] + spec['cmd'][1:], search) if path else None
         need = _tuple(spec['min'])
         state = 'missing' if not path else ('ok' if have and have >= need else 'old')
         rows.append({'name': name, 'path': path, 'version': '.'.join(map(str, have)) if have else None,
@@ -190,8 +192,10 @@ def main(yes=False, out=None, search=None, mgr=None, bin_dir=None, run=subproces
     bin_dir = bin_dir or Path.home() / '.local' / 'bin'
     print('fleetmux setup --install: what a fleet needs on this machine', file=out)
     for r in rows:
+        last = discover.last_found(r['name']) if r['state'] == 'missing' else None
         print('  %-12s %-8s %s' % (r['name'], r['state'], r['path'] or '-') + (
-            '  (%s, need %s)' % (r['version'], r['min']) if r['state'] == 'old' else ''), file=out)
+            '  (%s, need %s)' % (r['version'], r['min']) if r['state'] == 'old' else '')
+              + ('  (' + last + ')' if last else ''), file=out)
     for n in notes:
         print('  note: ' + n, file=out)
     if not steps:

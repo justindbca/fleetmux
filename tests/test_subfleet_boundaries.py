@@ -348,3 +348,106 @@ def test_paths_on_a_report_that_named_none_are_a_widening(cf):
     sup(cf, {'status': 'RUNNING', 'completion': 10, 'dispatch': [],
              'escalations': [{'task': key, 'decision': 'approve', 'paths': ['/data']}]})
     assert cf.task()['bad_replies'] == '1' and 'paths may only narrow' in inbox(cf, 'supervisor')[-1]
+
+
+# ------------------------------------------------------------------ service-mode top: program notices reach the supervisor
+from test_service_escalate import audits, supervisor_says, svc  # noqa: E402,F401  (fixture + helpers)
+from fleetmux import runtime_v2  # noqa: E402
+
+
+def outcome(f, mid):
+    msg = f.v2.bus.message(mid)
+    return msg.get('outcome'), msg.get('cancel_reason')
+
+
+def test_service_top_gets_a_sub_fleet_report_and_its_ruling_goes_down(svc, tmp_path):
+    f = svc
+    origin = tmp_path / 'sub-run'
+    origin.mkdir()
+    key = 'report:M0:abc123'
+    relay_one(f, dict(ITEM, kind='report', id=key, origin_run=str(origin), task='M0', supervisor='worker-1.1'))
+    mid = f.escalation_state()[key]['message_id']
+    f.pump()
+    # a program notice is not bound to a request: never cancelled as "already terminal"
+    assert outcome(f, mid) == (None, None) and f.v2.bus.status(mid) != 'queued'
+    assert typed(f, 'supervisor')[-1].startswith('[sub-fleet report] sub-fleet M0 (worker-1.1)')
+    for _ in range(3):
+        f.tick()
+    assert f.escalation_state()[key]['status'] == 'escalated'  # open until the supervisor rules
+    assert supervisor_says(f, [{'task': key, 'decision': 'approve', 'note': 'only toy/app.py'}])['status'] == 'committed'
+    assert key not in f.escalation_state()
+    ruling, = [fleet.load(p) for p in (origin / 'subfleet-vetoes').glob('*.json')]
+    assert ruling == {'kind': 'report', 'ref': key, 'decision': 'approve', 'note': 'only toy/app.py', 'what': ITEM['what']}
+
+
+def test_service_top_gets_a_sub_fleet_interface_notice(svc):
+    f = svc
+    relay_one(f, {'origin_run': '/sub', 'task': 'M0', 'interfaces': [
+        {'ref': 'api@1', 'change': 'added', 'path': '/sub/api.md', 'producer': 'worker-1'}]})
+    f.pump()
+    assert typed(f, 'supervisor')[-1].startswith('[sub-fleet interfaces] sub-fleet M0 registered: api@1')
+
+
+def test_service_notice_bound_to_an_ended_request_is_still_delivered(svc):
+    """A notice queued while the daemon settles a request inherits that request id (RuntimeV2.queue); the request
+    may be terminal by delivery time. It is still a notice, not a request message."""
+    f = svc
+    def notice():
+        f.v2.context['bound_request'] = 'r-gone'
+        f.queue('supervisor', '[contract] the top supervisor vetoed api@1: wrong shape')
+    f.v2.transaction('t-notice', notice)
+    mid = f.v2.bus.pending('supervisor', 1)[0]
+    assert f.v2.bus.message(mid)['request_id'] == 'r-gone' and not f.r.hgetall(fleet.REQ + 'r-gone')
+    f.pump()
+    assert outcome(f, mid) == (None, None)
+    assert typed(f, 'supervisor')[-1].startswith('[contract] the top supervisor vetoed api@1')
+
+
+def test_service_routing_prompt_of_an_ended_request_is_still_dropped(svc):
+    f = svc
+    f.setf('supervisor', state='busy')  # the routing prompt waits in the queue
+    spec = {'id': 'r9', 'payload': {'question': 'q'}, 'reply': {'required': ['answer']}}
+    runtime_v2.post_event(f.v2.bus, dict(kind='request', request_id='cmd-r9', spec=spec), 'cmd-r9')
+    assert f.v2.step(10)
+    mid = f.v2.bus.pending('supervisor', 1)[0]
+    assert f.v2.bus.message(mid)['request_id'] == 'r9'
+    f.v2.transaction('t-pub', lambda: f.v2.publish('r9', 'timeout', worker='supervisor', error='too slow'))
+    f.setf('supervisor', state='idle')
+    f.pump()
+    assert outcome(f, mid) == ('cancelled', 'already terminal')
+
+
+def test_service_report_notice_lost_before_delivery_is_asked_again(svc, tmp_path):
+    """start --resume cancels what is still queued (reconcile); an open report is asked again, never left with a
+    message nobody saw (escalations_missed would nudge for it, then strike)."""
+    f = svc
+    key = 'report:M0:abc123'
+    f.setf('supervisor', state='busy')
+    relay_one(f, dict(ITEM, kind='report', id=key, origin_run=str(tmp_path), task='M0', supervisor='worker-1.1'))
+    old = f.escalation_state()[key]['message_id']
+    f.v2.transaction('t-cancel', lambda: f.v2.cancel_queued('supervisor', {'message_id': old}, 'start --resume'))
+    f.setf('supervisor', state='idle')
+    f.tick()
+    new = f.escalation_state()[key]['message_id']
+    assert new != old and f.escalation_state()[key]['status'] == 'escalated'
+    f.pump()
+    assert typed(f, 'supervisor')[-1].startswith('[sub-fleet report] sub-fleet M0 (worker-1.1)')
+
+
+def test_service_reply_is_not_nudged_for_a_report_nobody_saw(svc, tmp_path):
+    f = svc
+    key = 'report:M0:abc123'
+    f.setf('supervisor', state='busy')
+    relay_one(f, dict(ITEM, kind='report', id=key, origin_run=str(tmp_path), task='M0', supervisor='worker-1.1'))
+    old = f.escalation_state()[key]['message_id']
+    f.v2.transaction('t-cancel', lambda: f.v2.cancel_queued('supervisor', {'message_id': old}, 'start --resume'))
+    f.setf('supervisor', state='idle')
+    spec = {'id': 'r1', 'payload': {'question': 'q'}, 'reply': {'required': ['answer']}}
+    runtime_v2.post_event(f.v2.bus, dict(kind='request', request_id='cmd-r1', spec=spec), 'cmd-r1')
+    assert f.v2.step(10)
+    f.pump()
+    route = {'status': 'RUNNING', 'reason': 'r', 'skip': [],
+             'dispatch': [{'to': 'worker-1', 'instruction': 'Answer the question from the payload.'}]}
+    assert answer_turn(f, 'supervisor', json.dumps(route))['status'] == 'committed'
+    assert f.r.hget(fleet.REQ + 'r1', 'status') == 'dispatched'  # routed, not sent back for the unseen report
+    assert 'nudged' not in f.escalation_state()[key]

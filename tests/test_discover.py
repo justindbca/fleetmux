@@ -150,7 +150,7 @@ def test_logged_out_too_old_and_missing_are_reported(tmp_path, gateway):
     assert r['clis']['ollama'] == {'installed': False}
     assert r['clis']['codex']['logged_in'] is False
     fixes = '\n'.join(r['fixes'])
-    assert 'claude auth login' in fixes and 'pi 1.0.0 is older than' in fixes and 'codex login' in fixes
+    assert 'claude auth login' in fixes and 'pi 1.0.0 is below 1.2.0: not used by fleets on this machine' in fixes and 'codex login' in fixes
     assert r['default'] is None and 'no default pair' in fixes  # no claude, no pi: no verified pair left
 
 
@@ -269,7 +269,8 @@ def test_apply_models_fills_only_unset_flags():
 
 
 def test_import_and_probe_need_no_repo_root_files(tmp_path, gateway):
-    """An install without scripts/ or deps.yaml (site-packages) must still import, and probe without minimums."""
+    """An install without scripts/ (site-packages) must still import, and probe with the minimums of the packaged
+    deps.yaml (fleetmux/deps.yaml)."""
     import shutil
     import subprocess
     import sys
@@ -286,5 +287,44 @@ def test_import_and_probe_need_no_repo_root_files(tmp_path, gateway):
                          pairs=cli_pairs.load_pairs(), claude_models=CLAUDE_MODELS)
     finally:
         discover.ROOT = old
-    assert r['clis']['pi']['min'] is None and r['clis']['pi']['version_ok'] is True
+    assert r['clis']['pi']['min'] == discover.deps_programs()['pi']['min'] and r['clis']['pi']['version_ok'] is True
     assert r['default']['worker'] == 'claude:opus'
+
+
+def test_which_uses_the_login_shell_path_and_stays_off_when_discovery_is_off(tmp_path, monkeypatch):
+    login = tmp_path / 'npm-prefix' / 'bin'
+    login.mkdir(parents=True)
+    pi = fake_bin(login, 'pi', 'echo 1.4.0\n')
+    shell = fake_bin(tmp_path, 'fake-shell', 'printf "__FLEET_PATH__%%s__END__" "%s"\n' % login)
+    monkeypatch.setenv('SHELL', str(shell))
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    monkeypatch.setattr(discover, '_SEARCH', [])
+    monkeypatch.setenv(discover.OFF_ENV, 'off')
+    assert discover.which('pi') is None  # tests and scripted starts: the process PATH only
+    monkeypatch.delenv(discover.OFF_ENV)
+    assert discover.which('pi') == str(pi)
+
+
+def test_search_path_says_so_when_the_login_shell_cannot_be_read(tmp_path, monkeypatch):
+    monkeypatch.setenv('SHELL', str(tmp_path / 'no-such-shell'))
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    lines = []
+    assert discover.search_path(warn=lines.append) == '/usr/bin:/bin'
+    assert len(lines) == 1 and 'using the process PATH only' in lines[0]
+
+
+def test_the_wall_chain_leaves_out_a_cli_below_its_minimum():
+    cfg = {'cli_order': ['pi', 'opencode'], 'worker': ['sol']}
+    cached = {'gateways': {}, 'clis': {
+        'pi': {'installed': True, 'version_ok': True, 'logged_in': True, 'models': ['openai-codex/gpt-6-sol']},
+        'opencode': {'installed': True, 'version_ok': False, 'logged_in': True, 'models': ['opencode-go/gpt-6-sol']}}}
+    entries, _ = discover.chain('worker', cfg=cfg, cached=cached)
+    assert entries == [('pi', 'openai-codex/gpt-6-sol')]
+
+
+@pytest.mark.parametrize('said, row', [('Logged in using ChatGPT', {'logged_in': True, 'auth_method': 'chatgpt'}),
+                                       ('Logged in using an API key - sk-****', {'logged_in': True}),
+                                       ('Not logged in', {'logged_in': False})])
+def test_codex_login_keeps_only_a_known_auth_method(tmp_path, said, row):
+    fake_bin(tmp_path, 'codex', 'echo "%s"\n' % said)
+    assert discover._login('codex', str(tmp_path / 'codex')) == row  # never the key or any other text

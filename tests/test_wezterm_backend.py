@@ -123,11 +123,11 @@ def test_available_parses_the_dependency_floor(fake_cli, monkeypatch):
     assert wz.WezTermSessionManager.available() is True
 
 
-def test_default_backend_uses_wezterm_when_cmux_is_missing(monkeypatch):
+def test_default_backend_is_never_wezterm(monkeypatch):
     monkeypatch.setattr(base, 'cmux_installed', lambda: False)
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'no cmux' if name == 'cmux' else None)
-    assert base.default_backend('darwin') == 'wezterm'  # a Mac without cmux
-    assert base.default_backend('linux') == 'fleetmux'  # design §5: never cmux off macOS (M3: fleetmux)
+    assert base.default_backend('darwin') == 'fleetmux'  # a Mac without cmux: fleetmux, not WezTerm (§33.3)
+    assert base.default_backend('linux') == 'fleetmux'  # WezTerm only with --backend wezterm
 
 
 # -- §4.1 private mux server ----------------------------------------------------------------------------

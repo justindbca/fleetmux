@@ -117,7 +117,7 @@ def test_bind_page_shares_the_root_runtime_and_keeps_its_own_registry(pg):
     assert child.meta_path == pg.state.resolve() / (RS + ':M0.fleetmux.json')
     assert child.meta_path != root.meta_path
     # the page id is never cut like _token(): a long id keeps its name
-    long_id = 'memx-' + 'a' * 50
+    long_id = 'alfa-' + 'a' * 50
     other = pg.child_mgr(long_id)
     assert other.page == long_id and Path(other.runtime_root) == Path(root.runtime_root)
     # manager_for binds from the child config's two keys (design §6.2 fleet.py manager_for)

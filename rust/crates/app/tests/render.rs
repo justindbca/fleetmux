@@ -2215,20 +2215,14 @@ fn listed_anywhere(srv: &Server, id: &str) -> bool {
     srv.panes_all().iter().any(|p| p["pane"] == json!(id))
 }
 
-/// Whether bash pane `id` is shown (user 2026-11-09): the root page is current, `id` sits in its `workers` group as
-/// that group's selected tab, the focus is there and nothing is zoomed.
-fn bash_shown(srv: &Server, id: &str) -> bool {
-    let l = srv.layout();
-    srv.current_page().is_empty()
-        && l["groups"]["workers"].as_array().is_some_and(|w| w.contains(&json!(id)))
-        && l["focus"] == json!("workers")
-        && l["selected"]["workers"] == json!(id)
-        && l["zoom"] == Value::Null
+/// The bash pane `id`'s own page (`_bash-<pane>`).
+fn bash_page(id: &str) -> String {
+    format!("_bash-{id}")
 }
 
-/// Wait until bash pane `id` is shown ([`bash_shown`]).
-fn wait_bash_shown(srv: &Server, id: &str, what: &str) {
-    wait_until(what, T, || bash_shown(srv, id).then_some(()));
+/// Wait until `page` is the current page.
+fn wait_current(srv: &Server, page: &str, what: &str) {
+    wait_until(what, T, || (srv.current_page() == page).then_some(()));
 }
 
 /// Wait for the one bash page (`bash-1`) and return its pane id.
@@ -2243,12 +2237,13 @@ fn wait_bash_pane(srv: &Server) -> String {
         .to_string()
 }
 
-/// `+` opens a bash as a tab at the end of the root page's `workers` group and shows it (selected, focused); clicking
-/// the fleet card hands the focus back to the supervisor, the bash tab staying in the worker area; clicking the bash
-/// card focuses its tab again (user 2026-11-09: every new bash is mapped into the main fleet's worker area). The
-/// topbar names the selected card; the status line claims no zoom and no page.
+/// `+` opens a bash page on its own page and shows it; clicking the fleet card goes back to the fleet's page as it was,
+/// clicking the bash card shows the bash page again (user 2026-11-08, like cmux: a bash is its own workspace, not a
+/// zoomed tab of the fleet). User 2026-11-14: the fleet's page keeps the same shell as the last tab of its worker area
+/// (the 2026-11-09 mapping), which leaves that page's selection alone. The topbar names the page that is shown; the
+/// status line claims no zoom and no page.
 #[test]
-fn clicking_a_bash_card_focuses_its_tab_in_the_workers_group() {
+fn clicking_a_bash_card_shows_its_page_and_the_fleet_card_goes_back() {
     let srv = Server::start();
     page(&srv);
     let mut v = Viewer::attach(&srv, W, H);
@@ -2258,54 +2253,53 @@ fn clicking_a_bash_card_focuses_its_tab_in_the_workers_group() {
     v.input(&sgr_click(4, 0, 0));
     let id = wait_bash_pane(&srv);
     let screen = v.wait_text("bash-1", T);
-    wait_bash_shown(&srv, &id, "the new bash tab to be selected and focused in the workers group");
-    let workers = srv.layout()["groups"]["workers"].clone();
+    wait_current(&srv, &bash_page(&id), "the new bash page to be the current page");
     assert_eq!(
-        workers.as_array().and_then(|w| w.last()),
-        Some(&json!(id)),
-        "the bash tab is not last in the workers group: {workers}"
+        v.cell(6, 5).bg,
+        Color::Indexed(4),
+        "the bash card at (6,5) is not the selected one (blue bar):\n{screen}"
     );
-    assert_eq!(srv.page_ids(), vec![String::new()], "the bash opened a page of its own");
-    wait_until("the bash card at (6,5) to take the blue bar", T, || {
-        (v.cell(6, 5).bg == Color::Indexed(4)).then_some(())
-    });
-    wait_until("the topbar to name the bash card", T, || {
+    wait_until("the topbar to name the bash page", T, || {
         v.row_text(0).contains("bash-1 · 终端 · 运行中").then_some(())
     });
     let status = v.status_line();
     assert!(
         !status.contains("zoom:") && !status.contains("page:"),
-        "the status line claims a zoom / page for the bash tab: {status:?}\n{screen}"
+        "the status line claims a zoom / page for the bash page: {status:?}"
     );
+    assert_eq!(srv.layout()["zoom"], Value::Null, "the fleet's own layout got a zoom");
 
-    // The fleet card's body hands the focus back to the supervisor; the bash stays a tab of the worker area.
+    // The fleet card's body goes back to the fleet's page.
     v.input(&sgr_click(10, 2, 0));
+    wait_current(&srv, "", "the fleet card to show the fleet's page again");
     wait_until("the fleet card to take the blue bar", T, || {
         (v.cell(2, 5).bg == Color::Indexed(4) && v.cell(6, 5).bg != Color::Indexed(4))
             .then_some(())
     });
-    let l = srv.layout();
-    assert_eq!(l["focus"], json!("supervisor"), "the fleet card left the focus on the bash tab: {l}");
-    assert_eq!(l["zoom"], Value::Null, "the fleet's own layout got a zoom: {l}");
-    assert_eq!(srv.current_page(), "", "the fleet card left the root page");
-    let screen = v.wait_text("SUP-BODY", T);
+    let screen = v.wait_text("W1-BODY", T);
     let (tabs, _) = v.wait_find("fx-worker-1", T);
     assert!(
         v.row_text(tabs).contains("bash-1") && !v.row_text(0).contains("bash-1"),
-        "the worker area's tab row lost the bash tab, or the topbar still names it:\n{screen}"
+        "the worker area's tab row has no bash tab, or the topbar still names the bash:\n{screen}"
     );
+    let workers = srv.layout()["groups"]["workers"].clone();
+    assert_eq!(
+        workers.as_array().and_then(|w| w.last()),
+        Some(&json!(id)),
+        "the bash is not the last tab of the fleet's worker area: {workers}"
+    );
+    assert_eq!(srv.layout()["zoom"], Value::Null, "the fleet's own layout got a zoom");
 
-    // And the bash card's body focuses its tab again.
+    // And the bash card's body shows the bash page again.
     v.input(&sgr_click(10, 6, 0));
-    wait_bash_shown(&srv, &id, "the bash card to focus its tab again");
+    wait_current(&srv, &bash_page(&id), "the bash card to show its page again");
     wait_until("the bash card to take the blue bar again", T, || {
         (v.cell(6, 5).bg == Color::Indexed(4)).then_some(())
     });
 }
 
 /// `←` / `→` and `^b (` / `^b )` walk the merged list (plan §14.2 / §14.5-3): the fleet card is before the bash
-/// card, so one step back focuses the supervisor and one step forward the bash tab. User 2026-11-09: the bash is a tab
-/// of the same page, so a zoom of another pane would hide it — opening or picking the bash cancels that zoom.
+/// card, so one step back shows the fleet's page and one step forward the bash page. The fleet's own zoom survives.
 #[test]
 fn the_arrows_and_the_parens_walk_the_merged_cards() {
     let srv = Server::start();
@@ -2314,7 +2308,7 @@ fn the_arrows_and_the_parens_walk_the_merged_cards() {
     v.wait_text("W1-BODY", T);
     set_sidebar(&srv);
     v.wait_text("fleetmux-demo", T);
-    // The fleet's own view has a zoom of its own; the new bash cancels it, so the bash tab is seen.
+    // The fleet's own view has a zoom of its own; walking to the bash page and back must keep it.
     let w1 = srv
         .panes()
         .into_iter()
@@ -2325,26 +2319,26 @@ fn the_arrows_and_the_parens_walk_the_merged_cards() {
     v.input(&sgr_click(4, 0, 0));
     let id = wait_bash_pane(&srv);
     v.wait_text("bash-1", T);
-    wait_bash_shown(&srv, &id, "the new bash tab shown (the w1 zoom cancelled)");
-    let supervisor_focused =
-        || (srv.layout()["focus"] == json!("supervisor") && !bash_shown(&srv, &id)).then_some(());
+    let page = bash_page(&id);
+    wait_current(&srv, &page, "the bash page shown");
 
     v.input(&sgr_click(10, 0, 0));
-    wait_until("the ← button to select the fleet card", T, supervisor_focused);
+    wait_current(&srv, "", "the ← button to select the fleet card");
     v.input(&sgr_click(13, 0, 0));
-    wait_bash_shown(&srv, &id, "the → button to select the bash card");
+    wait_current(&srv, &page, "the → button to select the bash card");
     v.input(&prefixed(b"("));
-    wait_until("^b ( to select the fleet card", T, supervisor_focused);
+    wait_current(&srv, "", "^b ( to select the fleet card");
     v.input(&prefixed(b")"));
-    wait_bash_shown(&srv, &id, "^b ) to select the bash card");
+    wait_current(&srv, &page, "^b ) to select the bash card");
     // The bash card is the last one: `→` has nowhere to go.
     v.input(&sgr_click(13, 0, 0));
     v.wait_quiet(Duration::from_millis(300), T);
-    assert!(bash_shown(&srv, &id), "→ at the end of the merged list moved the selection: {}", srv.layout());
+    assert_eq!(srv.current_page(), page, "→ at the end of the merged list changed the page");
+    assert_eq!(srv.layout()["zoom"], json!(w1), "the fleet's own zoom did not survive the walk");
 }
 
-/// An idle shell closes right away from its card's `×` (plan §14.2): the pane goes, and the card and the workers tab
-/// go with it.
+/// An idle shell closes right away from its card's `×` (plan §14.2): the pane goes, the card goes with it and the
+/// zoom the card held is gone.
 #[test]
 fn closing_an_idle_bash_card_kills_its_shell() {
     let srv = Server::start();
@@ -2371,12 +2365,8 @@ fn closing_an_idle_bash_card_kills_its_shell() {
         "a bash pane survived the close: {:?}\n{screen}",
         srv.panes_all()
     );
-    let workers = srv.layout()["groups"]["workers"].clone();
-    assert!(
-        !workers.as_array().is_some_and(|w| w.contains(&json!(id))),
-        "the closed bash is still a workers tab: {workers}"
-    );
-    assert_eq!(srv.current_page(), "", "closing the bash left the root page");
+    wait_current(&srv, "", "the closed bash page to hand the view back to the fleet's page");
+    assert!(!srv.page_ids().contains(&bash_page(&id)), "the closed bash page is still listed");
 }
 
 /// A shell with a program in the foreground asks first (plan §14.2): the same box says `bash-1 里还有程序在跑，关掉会
@@ -2434,11 +2424,10 @@ fn closing_a_busy_bash_card_asks_first_and_y_kills_it() {
     );
 }
 
-/// Plan §14.5-6: the closed-fleet placeholder belongs to the fleet's card. A bash opened with no fleet running still
-/// lands in the root page's worker area (user 2026-11-09); while its card is selected the placeholder steps aside, and
-/// the closed card's body brings the placeholder back.
+/// Plan §14.5-6: the closed-fleet placeholder belongs to the fleet's page; a bash page is a page of its own (user
+/// 2026-11-08), so while it is shown the placeholder is not, and the closed card's body brings the placeholder back.
 #[test]
-fn a_bash_tab_keeps_the_closed_placeholder_away_while_it_is_shown() {
+fn a_bash_page_keeps_the_closed_placeholder_away_while_it_is_shown() {
     let srv = Server::start();
     set_kv(&srv, "sidebar", CLOSED_ONE);
     let mut v = Viewer::attach(&srv, W, H);
@@ -2446,25 +2435,25 @@ fn a_bash_tab_keeps_the_closed_placeholder_away_while_it_is_shown() {
 
     v.input(&sgr_click(4, 0, 0));
     let id = wait_bash_pane(&srv);
-    wait_bash_shown(&srv, &id, "the new bash tab to be shown in the root page's workers group");
+    wait_current(&srv, &bash_page(&id), "the new bash page to be shown");
     srv.write(&id, b"echo BASH-BODY\n", "raw");
     let screen = v.wait_text("BASH-BODY", T);
     assert!(
         !screen.contains("fleet「fleetmux-demo」已关闭"),
-        "the closed placeholder still covers the selected bash tab:\n{screen}"
+        "the closed placeholder still covers the zoomed bash page:\n{screen}"
     );
     let (row, col) = v.wait_find("BASH-BODY", T);
     assert!(
         row >= 1 && col >= 34,
-        "the bash tab is not right of the sidebar from row 1 (row {row}, col {col}):\n{screen}"
+        "the zoomed bash page is not right of the sidebar from row 1 (row {row}, col {col}):\n{screen}"
     );
 
-    // The closed card's body hands the focus back: the placeholder is back, the bash content is not drawn.
+    // The closed card's body cancels the zoom: the placeholder is back, the bash content is not drawn.
     v.input(&sgr_click(10, 2, 0));
     let screen = v.wait_text("fleet「fleetmux-demo」已关闭", T);
     assert!(
         !screen.contains("BASH-BODY"),
-        "the deselected bash tab still shows under the placeholder:\n{screen}"
+        "the un-zoomed bash page still shows under the placeholder:\n{screen}"
     );
     // Selecting the bash card again brings the shell back and drops the placeholder.
     v.input(&sgr_click(10, 6, 0));
@@ -2601,12 +2590,12 @@ fn sidebar_band_follows_the_platform_by_default() {
     }
 }
 
-/// User feedback (2026-11-08): the closed-fleet placeholder draws no frame, so nothing separated the sidebar from the
-/// content. The sidebar's gap column (33 for the 34-column band) now carries a `│` from the content's top row (2,
-/// below the topbar and its blank row) down to the row above the status line. A bash opened there is a framed tab of
-/// the worker area (user 2026-11-09), so the content's own border is the line again.
+/// User feedback (2026-11-08): a bash page opened from the sidebar is zoomed, and a zoomed pane — like the closed-fleet
+/// placeholder — draws no frame, so nothing separated the sidebar from the content. The sidebar's gap column (33 for
+/// the 34-column band) now carries a `│` from the content's top row (2, below the topbar and its blank row) down to
+/// the row above the status line, in both cases.
 #[test]
-fn the_sidebar_has_a_divider_beside_the_placeholder_and_frames_a_bash_tab() {
+fn the_sidebar_has_a_divider_beside_the_placeholder_and_a_zoomed_bash_page() {
     let srv = Server::start();
     set_kv(&srv, "sidebar", CLOSED_ONE);
     let mut v = Viewer::attach(&srv, W, H);
@@ -2616,20 +2605,20 @@ fn the_sidebar_has_a_divider_beside_the_placeholder_and_frames_a_bash_tab() {
 
     v.input(&sgr_click(4, 0, 0));
     let id = wait_bash_pane(&srv);
-    wait_bash_shown(&srv, &id, "the new bash tab to be shown");
+    wait_current(&srv, &bash_page(&id), "the new bash page to be shown");
     srv.write(&id, b"echo BASH-BODY\n", "raw");
     v.wait_text("BASH-BODY", T);
+    wait_until("the divider beside the zoomed bash page", T, || divider(&mut v).then_some(()));
     let (_, col) = v.wait_find("BASH-BODY", T);
-    assert!(col > 34, "the bash tab starts right of the content's left border (col {col})");
+    assert!(col >= 34, "the bash page starts right of the divider, not on it (col {col})");
 }
 
-/// User feedback (2026-11-08, "完全参照 cmux"): with the closed placeholder the sidebar divider is one `│` in column 33
-/// from row 0 (the topbar's own `│` moves there from column 34, the title stays at column 36) down to the row above
-/// the status line, and the topbar's blank separation row (row 1) carries `─` across the content (columns 34–239)
-/// meeting it in `├`. The framed layout — a bash tab of the worker area shown (user 2026-11-09) — keeps the topbar
-/// `│` at column 34.
+/// User feedback (2026-11-08, "完全参照 cmux"): with the closed placeholder or a zoomed bash page, the sidebar divider is
+/// one `│` in column 33 from row 0 (the topbar's own `│` moves there from column 34, the title stays at column 36)
+/// down to the row above the status line, and the topbar's blank separation row (row 1) carries `─` across the
+/// content (columns 34–239) meeting it in `├`. The framed layout keeps the topbar `│` at column 34.
 #[test]
-fn the_topbar_has_a_divider_above_the_placeholder_and_frames_a_bash_tab() {
+fn the_topbar_has_a_divider_above_the_placeholder_and_a_zoomed_bash_page() {
     let srv = Server::start();
     set_kv(&srv, "sidebar", CLOSED_ONE);
     let mut v = Viewer::attach(&srv, W, H);
@@ -2645,12 +2634,13 @@ fn the_topbar_has_a_divider_above_the_placeholder_and_frames_a_bash_tab() {
 
     v.input(&sgr_click(4, 0, 0));
     let id = wait_bash_pane(&srv);
-    wait_bash_shown(&srv, &id, "the new bash tab to be shown");
+    wait_current(&srv, &bash_page(&id), "the new bash page to be shown");
     srv.write(&id, b"echo BASH-BODY\n", "raw");
     v.wait_text("BASH-BODY", T);
+    wait_until("the cmux lines around the zoomed bash page", T, || cmux(&mut v).then_some(()));
     let (row, col) = v.wait_find("BASH-BODY", T);
-    assert!(row >= 2 && col > 34, "the bash tab starts below / right of the frame (row {row}, col {col})");
-    // Framed again: the topbar `│` sits on the boxes' left border column 34 —
-    // as in `topbar_is_row_0_and_the_groups_start_on_row_2`.
-    wait_until("the topbar divider back on column 34", T, || (v.cell(0, 34).ch == '│').then_some(()));
+    assert!(row >= 2 && col >= 34, "the bash page starts below / right of the lines (row {row}, col {col})");
+
+    // Unzoomed (the fleet card cancels the zoom), with a live pane the framed layout is back: the topbar `│` sits
+    // on the boxes' left border column 34 again — covered by `topbar_is_row_0_and_the_groups_start_on_row_2`.
 }

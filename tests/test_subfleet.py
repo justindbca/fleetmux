@@ -2073,7 +2073,14 @@ def sleep_holds_the_adopted_supervisor(t, monkeypatch):
     assert 'Research five sources' in task and cf.v2.bus.slot_state('supervisor').get('current_delivery')
     raw = json.dumps({'session_id': thread, 'transcript_path': str(t.claude / (thread + '.jsonl')),
                       'error': 'unknown', 'last_assistant_message': 'API Error: Your computer went to sleep'})
+    # That run's hook posted no stop_failure event for a supervisor (before design.md §24 "Supervisor StopFailure",
+    # 2026-11-14); keep it lost here so this path still reaches the lease-expiry hold. With the event, the daemon
+    # settles it itself: tests/test_supervisor_hold.py.
+    real = runtime_v2.post_event
+    monkeypatch.setattr(runtime_v2, 'post_event',
+                        lambda bus, ev, *a, **kw: None if ev.get('kind') == 'stop_failure' else real(bus, ev, *a, **kw))
     assert fleet.claude_stop_failure(t.f.path, 'worker-1', 0, raw)
+    monkeypatch.setattr(runtime_v2, 'post_event', real)
     monkeypatch.setattr(claude_hook, 'GRACE', 0)
     cf.r.delete(cf.v2.hook_keys('supervisor', 0)['stopping'])
     hook_sim._armed.pop(cf.v2.hook_keys('supervisor', 0)['mailbox'], None)  # nothing waits on a Stop: it failed

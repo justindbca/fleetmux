@@ -60,6 +60,7 @@ Every report ends with "Worker status now": each worker's state, context used an
 - A different package, other files or another topic: add `"fresh": true` to that dispatch item. The worker must be idle with nothing queued (otherwise the reply is refused); the program starts a clean session in the same slot (same folder and role, `worker-1` -> `worker-1.1`, no handoff note) and delivers the instruction to it.
 - More independent ready work than free workers: add a worker (above). A direction with no more work: retire its worker.
 - `[Hint] worker-N was at N% context ...` means you reused a full worker; `[Fresh failed] ...` means the clean session did not start and the instruction went to the existing one.
+- Roster rows marked `fresh: always` get this automatically: the program starts a clean session before every dispatch to such a worker (busy or not; nothing is refused), so `"fresh": true` is not needed there and no `[Hint]` is given. To have it continue, fix or redo the work it just reported, write `"fresh": false` on that dispatch item.
 
 ### Cross-session collisions (the session board)
 
@@ -136,6 +137,7 @@ instead of inventing filler work:
 - `escalations`: optional, your answers to `[escalate]`, `[dialog]` and `[blocked]` requests (see the command table); a RUNNING reply with `escalations` may dispatch nothing; an `approve` of a split may add `supervisor_profile` (one agent card id) and `worker_profiles` (a list, one card per sub-worker; its length is the worker count)
 - `dispatch[].advise_note`: optional note for the advisor (difficulty, needs the web, edits code, the output); never choose models or tools yourself (only exception: an `approve` of a split, see `escalations`)
 - `dispatch[].fresh`: optional `true`: a clean session of that worker first (see "Fresh session or reuse")
+- `dispatch[].review`: optional `true` on the item that gives the review (any worker you choose). In a `dev_task` or `review_loop` run the program records that worker as the review slot, reads the verdict JSON from its directory and gives it the exact path in the instruction and in its REVIEWER.md. A later `"review": true` moves it to another worker
 - `consult`: optional, see "Judging a report"; a RUNNING reply with `consult` may dispatch nothing
 - `advisor`: optional `"on"` / `"off"` (default off; written into the run's roster, stays until changed). Turn it on when the task benefits from per-dispatch model / effort / domain picking, or before you `consult`; `on` already applies to the dispatch / consult in the same reply. While off, `advise_note` is unused and `consult` gets `[advisor off]`
 - `withdraw`: optional, only with `COMPLETED`: the workers whose unsettled work you drop explicitly

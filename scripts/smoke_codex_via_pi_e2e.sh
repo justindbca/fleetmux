@@ -84,7 +84,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 printf 'workers:\n  - {name: worker-1}\n  - {name: worker-2}\nhandoff:\n  pi: {ratio: 0.6}\n' > "$ROSTER"
-args=(start --lifecycle "$LIFECYCLE" --allow-development-v2 --allow-unsandboxed-pi --roster "$ROSTER"
+args=(start --no-view --lifecycle "$LIFECYCLE" --allow-development-v2 --allow-unsandboxed-pi --roster "$ROSTER"
       --redis-runtime-dir "$TMP/r" --name e2e-default-pair)
 [ -n "${CLAUDE:-}" ] && args+=(--claude "$CLAUDE")
 echo "e2e: default pair in $TMP"

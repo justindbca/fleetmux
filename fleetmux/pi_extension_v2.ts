@@ -160,6 +160,7 @@ export default function (pi: ExtensionAPI) {
   const artifact = Type.Object({ path: Type.String(), min_chars: Type.Optional(Type.Integer({ minimum: 1 })), contains: Type.Optional(Type.Array(Type.String())) });
   const dispatch = Type.Object({ to: Type.String(), instruction: Type.String({ minLength: 12 }),
     id: Type.Optional(Type.String()), advise_note: Type.Optional(Type.String()), fresh: Type.Optional(Type.Boolean()),
+    review: Type.Optional(Type.Boolean()),  // the review the delivery gate reads (Fleet.mark_review)
     // §44 监工直接开子 fleet (supervisor_split): the daemon checks the switch, the shape and the limits
     split: Type.Optional(Type.Object({ reason: Type.String({ minLength: 1 }),
       proposal: Type.Array(Type.Object({ instruction: Type.String({ minLength: 12 }), output: Type.String({ minLength: 1 }),
@@ -331,8 +332,10 @@ export default function (pi: ExtensionAPI) {
       // command when our 35 s ran out): the bridge keeps the lease and sends completed later.
       const ack = await send("settled", { candidates: batch, failed, aborted: event.aborted, unfinished: toolsRunning.size > 0 }, ctx)
         .catch((): Answer => ({ status: "pending" }));
+      // A pending settle leaves the idle report to the completed frame (settling). Scheduling one here as well
+      // reported idle twice whenever completed was read before this setImmediate ran.
       if (ack.status === "pending" && !unhealthy && active?.message_id === id) { settling = id; ctx.ui.setStatus("fleet", "已结算，等 fleet 确认"); }
-      availableAfterNotification(ctx);
+      else availableAfterNotification(ctx);
     } else if (phase === "manual") {
       phase = "idle";
       availableAfterNotification(ctx);

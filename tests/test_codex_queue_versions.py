@@ -168,12 +168,11 @@ class Reached(Exception):
     pass
 
 
-def test_start_pins_the_probe_in_config(tmp_path, monkeypatch, capsys):
+def _start_codex(tmp_path, monkeypatch, answer, claude='/bin/echo'):
     from fleetmux import cmux_manager, redis_runtime
     probed, saved = [], {}
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
-    monkeypatch.setattr(codex_queue, 'capability',
-                        lambda codex, **kw: probed.append(codex) or (False, '0.161.0', 'too old (test)'))
+    monkeypatch.setattr(codex_queue, 'capability', lambda codex, **kw: probed.append(codex) or answer)
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: type('M', (), {'session_exists': lambda self: False,
                                                                            'meta_path': tmp_path / 'cmux' / 'm.json'})())
     monkeypatch.setattr(fleet, 'prepare_codex_home', lambda home, profiles: None)
@@ -186,12 +185,32 @@ def test_start_pins_the_probe_in_config(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(fleet, 'save', save)
     with pytest.raises(Reached):
         fleet.main(['start', '--lifecycle', 'dev_task', '--allow-development-v2', '--supervisor-cli', 'codex',
-                    '--worker-cli', 'claude', '--codex', '/bin/echo', '--claude', '/bin/echo',
+                    '--worker-cli', 'claude', '--codex', '/bin/echo', '--claude', claude,
                     '--redis-server', '/bin/echo', '--runs-dir', str(tmp_path / 'runs'),
                     '--codex-home', str(tmp_path / 'codex-home')])
+    return probed, saved
+
+
+def test_start_pins_the_probe_in_config(tmp_path, monkeypatch, capsys):
+    # An unreadable version is not judged against deps.yaml: the run starts on typed delivery.
+    probed, saved = _start_codex(tmp_path, monkeypatch, (False, 'dev-build', 'unrecognised (test)'))
     assert probed == ['/bin/echo']
-    assert saved['codex_queue'] is False and saved['codex_version'] == '0.161.0'
+    assert saved['codex_queue'] is False and saved['codex_version'] == 'dev-build'
     assert 'typed delivery' in capsys.readouterr().err
+
+
+def test_start_refuses_a_codex_below_the_deps_minimum(tmp_path, monkeypatch):
+    # A readable version below deps.yaml's codex.min is not used at all (no typed fallback for a new run).
+    with pytest.raises(SystemExit, match=r'start: codex 0\.161\.0 is below 0\.162\.0 .*not used by fleets'):
+        _start_codex(tmp_path, monkeypatch, (False, '0.161.0', 'too old (test)'))
+
+
+def test_start_refuses_a_claude_below_the_deps_minimum(tmp_path, monkeypatch):
+    claude = tmp_path / 'claude'
+    claude.write_text('#!/bin/sh\necho "2.1.200 (Claude Code)"\n')
+    claude.chmod(0o755)
+    with pytest.raises(SystemExit, match=r'start: claude 2\.1\.200 is below 2\.1\.280 .*not used by fleets'):
+        _start_codex(tmp_path, monkeypatch, (True, '0.164.0', ''), claude=str(claude))
 
 
 def _resume_until_probe(tmp_path, monkeypatch, cfg):

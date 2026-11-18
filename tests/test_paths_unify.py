@@ -54,8 +54,7 @@ def test_shared_files_follow_the_default_home_not_fleetmux_home(home, monkeypatc
     monkeypatch.setattr(fleet_config, 'USER_FILE', None)
     assert fleet_config.user_path() == home / '.fleetmux/fleet.yaml'
     assert dsh_adapter.dsh_home({}) == home / '.fleetmux/dsh-home'
-    (home / '.fleetmux/quota.json').write_text(json.dumps({'pools': {'p': {'at': 1}}}))
-    assert brake.read_quota() == {'pools': {'p': {'at': 1}}}
+    assert brake.quota_file() == home / '.fleetmux/quota.json'  # the daemon ingests it from there
 
 
 def test_inventory_searches_the_new_root_and_its_fleets(home, monkeypatch):

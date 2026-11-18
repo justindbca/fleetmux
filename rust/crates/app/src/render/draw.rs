@@ -966,7 +966,10 @@ fn status(state: &State, buf: &mut Buffer, r: LRect) {
             text.push_str(&format!("  search: {}", page.query));
         }
     }
-    if let Some(z) = state.layout.zoom() {
+    // A bash page (user 2026-11-14) is its own page whose one pane fills it: the topbar names it, so the status line
+    // claims neither a zoom nor a page for it.
+    let bash_page = super::sidebar::bash_page_pane(&state.fleet_pages.current).is_some();
+    if let Some(z) = state.layout.zoom().filter(|_| !bash_page) {
         let title = state
             .panes
             .info(z)
@@ -981,7 +984,7 @@ fn status(state: &State, buf: &mut Buffer, r: LRect) {
         text.push_str(&format!("  {hint} s {what}"));
     }
     // M4 (design m4 R6): a child page names itself right before `focus:` (the root page adds nothing).
-    if let Some(p) = state.fleet_pages.pages.get(&state.fleet_pages.current) {
+    if let Some(p) = state.fleet_pages.pages.get(&state.fleet_pages.current).filter(|_| !bash_page) {
         text.push_str(&format!("  page: {}", p.title));
     }
     text.push_str(&format!("  focus: {focus}"));

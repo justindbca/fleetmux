@@ -27,6 +27,7 @@ def plan(tmp_path):
     v=runtime_v2.RuntimeV2.__new__(runtime_v2.RuntimeV2)
     f.v2=v; v.f=f; v.bus=MessageBus(r,'unit'); v.prefix=v.bus.prefix; v.rotation_pending=set()
     v.effects=runtime_v2.Effects(r); f.r=v.effects; v.context={'intent_id':'unit-event'}; v.queue_index=0
+    v.held_notices=[]; v.held_knobs_at, v.held_knobs_cache, v.pause_alerted = 0.0, None, ''  # set by __init__ (held watch)
     for slot in f.names:
         r.hset(fleet.key('agent',slot),mapping={'state':'idle','generation':0,'thread':'session-'+slot,
             'label':'supervisor-1' if slot=='supervisor' else slot,'runtime_ready':1})

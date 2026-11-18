@@ -75,7 +75,7 @@ def test_sub_fleets_never_start_an_advisor_tab(private_redis_v2, tmp_path, monke
         f.cfg['parent_config'] = str(tmp_path / 'parent' / 'config.json')  # a (named) sub-fleet of a parent
         assert not f.advisor_resident()
         f.cfg.pop('parent_config')
-        f.cfg['adopt'] = {'pane': 'x', 'slot': 'memx-ops'}
+        f.cfg['adopt'] = {'pane': 'x', 'slot': 'alfa-ops'}
         assert not f.advisor_resident()
     finally:
         gen.close()

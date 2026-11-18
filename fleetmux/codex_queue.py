@@ -16,8 +16,9 @@ slot to the existing fail-closed paths; nothing falls back to typing and nothing
 automatically (a timed-out CLI call is 'uncertain', held for a human).
 
 The channel needs a codex-cli that records turn_attribution (MIN_VERSION). `start` probes the binary once
-(capability) and pins the answer in config.json (codex_queue); on an older Codex every slot is typed for the
-whole run (audited queue.unsupported at each spawn), never queued into turns that could not be bound.
+(capability) and pins the answer in config.json (codex_queue). A readable version below deps.yaml's codex.min is
+refused by `start` (design §50.3); an unreadable one, or a run pinned by an older start, is typed for the whole run
+(audited queue.unsupported at each spawn), never queued into turns that could not be bound.
 """
 import datetime
 import json
@@ -37,7 +38,7 @@ QUEUED = re.compile(r'Queued message (\S+) for thread (\S+?)\.?\s*$', re.M)
 MARK = '(fleet delivery {})'
 # The first codex-cli measured to record `task_started.turn_attribution.turn_trigger` ("queue" for a queued
 # turn). codex-cli 0.161.0 has `codex queue` but writes no turn_attribution at all, so bound() can never
-# prove a queued turn there: such a fleet is probed at start and its Codex slots stay on typed delivery.
+# prove a queued turn there: a new run refuses it (design §50.3); an older pinned run stays on typed delivery.
 MIN_VERSION = (0, 162, 0)
 VERSION = re.compile(r'codex-cli (\d+)\.(\d+)\.(\d+)')
 

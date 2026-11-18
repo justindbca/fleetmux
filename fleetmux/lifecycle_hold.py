@@ -7,12 +7,15 @@
   The values are re-read every tick, so an edit of hold_hours applies on the next tick.
 * service: a worker idle for ``worker_idle_reclaim_min`` minutes is retired (the supervisor stays);
   work queued for it later starts its next generation. ``idle_stop_hours`` (null = never) stops the
-  whole run after that long without requests or busy agents.
+  whole run after that long without requests or busy agents. Both count awake time only
+  (fleetmux/awake.py): the time the machine slept is no idleness.
 """
 import json
 import math
 import time
 from pathlib import Path
+
+from fleetmux import awake
 
 # The durable reason a run that failed before its first READY leaves in result.json (A42-LINUX-RESTORE-FAILURE-04).
 STARTUP_FAILURE = 'startup failed before READY'
@@ -233,27 +236,31 @@ def service_tick(f, policy, now):
     from fleetmux.fleet import REQQ
     minutes = policy.get('worker_idle_reclaim_min')
     paused = f.paused()
+    # §58: a queued job needs an idle worker: wake one reclaimed worker per queued job, reclaim none meanwhile
+    queued = sum(job.get('state') == 'queued' for job in f.job_state().values())
     for slot in f.workers:
         info = f.agent(slot)
         pending = f.v2.bus.pending(slot)
         if info.get('state') == 'reclaimed':
-            if pending and not paused:  # work arrived for a reclaimed worker: its next generation starts
-                f.log('lifecycle.respawn', slot=slot, pending=len(pending))
+            if (pending or queued) and not paused:  # work arrived for a reclaimed worker: its next generation starts
+                f.log('lifecycle.respawn', slot=slot, pending=len(pending), jobs=queued)
                 f.v2.respawn([slot], True)
+                queued -= not pending
             continue
-        if (minutes is None or paused or info.get('state') != 'idle' or not info.get('pane') or pending
-                or not _lease_idle(f, slot) or now - f.last_activity(info) < float(minutes) * 60):
+        if (minutes is None or paused or queued or info.get('state') != 'idle' or not info.get('pane') or pending
+                or not _lease_idle(f, slot) or awake.between_wall(f.last_activity(info), now) < float(minutes) * 60):
             continue
         if f.v2.retire(slot, 'idle for ' + str(minutes) + ' min (worker_idle_reclaim_min)'):
             f.setf(slot, state='reclaimed', pane='', reclaimed_at=now)
             f.log('lifecycle.reclaimed', slot=slot, idle_min=minutes)
     hours = policy.get('idle_stop_hours')
-    active = f.r.llen(REQQ) or any(f.agent(s).get('state') in ('busy', 'starting', 'handoff', 'clearing') for s in f.names)
+    active = f.r.llen(REQQ) or bool(f.job_state()) or any(  # §58: an open job keeps the service fleet up
+        f.agent(s).get('state') in ('busy', 'starting', 'handoff', 'clearing') for s in f.names)
     last = close._hget(f, 'service_active_at')
     if active or last is None:
         close._hset(f, service_active_at=now)
         return
-    if hours is not None and now - float(last) >= float(hours) * 3600:
+    if hours is not None and awake.between_wall(float(last), now) >= float(hours) * 3600:
         close.request_close(f, 'timeout', 'service idle for ' + str(hours) + ' h (idle_stop_hours)')
 
 
@@ -265,7 +272,7 @@ def reopen(r, task, extend_hours=None, now=None, result=None):
     one takes the caller's no-task path, and a damaged/partial record is refused instead of being given a deadline.
     """
     from fleetmux.fleet import TASK
-    now = time.time() if now is None else now
+    now = awake.of(r).now() if now is None else now  # the deadline is the fleet's awake time (§35)
     if result is not None and no_task(task, result):
         raise ValueError('this run never submitted a task (' + STARTUP_FAILURE + '); nothing to reopen')
     tid = task.get('id') or ''

@@ -41,7 +41,7 @@ From the project root:
 rg -n "<user task keywords>|fleet|fleetmux|subagent|Task" memory/ references/ .claude/skills .agents/skills 2>/dev/null || true
 ```
 
-If the environment has the EverMemOS MCP, search it first as the project rules say:
+If the environment has a memory MCP server, search it first as the project rules say:
 
 ```text
 search_memory(query="<keywords in Chinese>", user_id="claude-code", retrieve_method="hybrid", top_k=5)

@@ -3,11 +3,12 @@
 1. After a daemon gap the bridges' heartbeat keys have expired; the first tick must not call the link lost.
 2. A startup that fails on the network (Wi-Fi not back yet) is retried as the next generation with backoff,
    not turned into a blocked run that only a human can resume; while the network is down nothing is spent."""
+import json
 import time
 
 import pytest
 
-from fleetmux import fleet, runtime_v2
+from fleetmux import awake, fleet, runtime_v2
 from test_link_loss import SLOT, order_plan
 from test_runtime_v2_planning import plan  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401
@@ -131,3 +132,69 @@ def test_link_restart_waits_for_the_network_without_counting(plan, monkeypatch):
     wd.link_restart(SLOT, f.agent(SLOT), time.time())
     assert calls == [SLOT] and f.agent(SLOT)['link_restarts'].startswith('1:')
     assert f.agent(SLOT)['link_offline'] == '0'
+
+
+# ------------------------------------------------------------------ a startup that spans a sleep
+def starting(f, slot, deadline):
+    f.setf(slot, state='starting', runtime_ready=0, startup_deadline=deadline, startup_nudged=deadline)
+
+
+def test_a_sleep_does_not_time_out_a_startup(fx, fake_awake):
+    """The startup deadline is awake time (fleetmux/awake.py): the wall-clock deadline passes while the lid is
+    closed, the awake one does not; the same READY ask stands (no second nudge)."""
+    f = fx
+    deadline = awake.deadline(60)
+    starting(f, 'supervisor', deadline)
+    fake_awake.sleep(900)
+    f.v2.last_tick = time.time() - 900
+    f.v2.tick()
+    info = f.agent('supervisor')
+    assert not f.paused() and info['state'] == 'starting', 'the sleep is not the startup taking too long'
+    assert float(info['startup_deadline']) == deadline and info['startup_nudged'] == info['startup_deadline']
+    fake_awake.run(61)
+    f.v2.tick()
+    assert f.paused() and f.agent('supervisor')['state'] == 'dead'
+
+
+def test_without_a_gap_the_startup_deadline_still_blocks(fx):
+    f = fx
+    starting(f, 'supervisor', time.time() - 5)
+    f.v2.tick()
+    assert f.paused() and f.agent('supervisor')['state'] == 'dead'
+
+
+def ready(f, slot):
+    event(f, dict(session(f, slot), kind='startup', request_id='late-ready-' + str(time.time()),
+                  text='READY', failed=False, aborted=False))
+
+
+def test_a_late_ready_lifts_the_pause_its_startup_timeout_set(fx):
+    f = fx
+    starting(f, 'supervisor', time.time() - 5)
+    f.v2.tick()
+    assert f.paused() and f.agent('supervisor')['state'] == 'dead'
+    ready(f, 'supervisor')
+    info = f.agent('supervisor')
+    assert not f.paused() and info['state'] == 'idle' and info['runtime_ready'] == '1'
+    assert not audits(f, 'startup.duplicate') and audits(f, 'startup.late_ready')
+    [resumed] = audits(f, 'execution.auto_resumed')
+    assert 'startup timed out' in json.loads(resumed['detail'])['pause_reason']
+
+
+def test_a_late_ready_keeps_a_pause_that_is_not_its_own(fx):
+    f = fx
+    starting(f, 'supervisor', time.time() - 5)
+    f.v2.tick()
+    f.pause('paused by operator')  # a newer pause, not the startup timeout's
+    ready(f, 'supervisor')
+    assert f.paused() and f.agent('supervisor')['state'] == 'idle'
+    assert not audits(f, 'execution.auto_resumed')
+
+
+def test_a_late_ready_keeps_a_pause_that_was_there_before_the_timeout(fx):
+    f = fx
+    f.pause('paused by operator')
+    starting(f, 'supervisor', time.time() - 5)
+    f.v2.tick()
+    ready(f, 'supervisor')
+    assert f.paused() and not audits(f, 'execution.auto_resumed')

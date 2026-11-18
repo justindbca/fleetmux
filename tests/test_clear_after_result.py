@@ -500,7 +500,7 @@ def test_confirmed_manual_clear_can_repair_empty_held_slot_without_unpausing(pla
 @pytest.mark.parametrize('clear,hook,slot,want', [
     (True, False, SLOT, 'typed'), (False, False, SLOT, 'typed'), (False, True, SLOT, 'hook'), (True, False, 'supervisor', 'supervisor')])
 def test_every_claude_worker_is_told_where_its_deliveries_come_from(tmp_path, clear, hook, slot, want):
-    """10-14 evermem: a typed-delivery worker refused a pasted task ("can't confirm it came from the supervisor")."""
+    """Regression: a typed-delivery worker refused a pasted task ("can't confirm it came from the supervisor")."""
     from fleetmux import claude_hook
     cfg = dict(run=str(tmp_path), workers=[SLOT], python=sys.executable, transport_version=2,
                worker_cli='claude', mode='service', clear_after_result=clear, claude_supervisor_hook_delivery=True,

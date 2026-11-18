@@ -101,9 +101,17 @@ fn two_viewers_share_selection_and_zoom() {
 fn pty_size_follows_latest_input_viewer() {
     let srv = Server::start();
     let id = sh(&srv, "fx-worker-1", "worker", "exec sleep 1000");
-    let mut small = Viewer::attach(&srv, 80, 24);
+    // Attach the big viewer first. With no input yet, the latest-added viewer (the small one) sets the size,
+    // so each wait below can only pass once that viewer's input has been handled. If the big viewer were added
+    // last, the first wait would pass before `x` arrived, and `x` could then land after `y` (the two viewers
+    // use separate connections) and leave the width at 200 columns.
     let mut big = Viewer::attach(&srv, 200, 50);
+    let mut small = Viewer::attach(&srv, 80, 24);
     let cols = |srv: &Server| pane_size(srv, &id).0;
+    wait_until("worker width from the latest-added 80-column viewer", T, || {
+        let c = cols(&srv);
+        (30..=45).contains(&c).then_some(())
+    });
 
     big.input(b"x");
     wait_until("worker width from the 200-column viewer", T, || {

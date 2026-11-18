@@ -7,6 +7,7 @@
         window: 1000000       # optional handoff overrides for this worker (docs/design.md §22)
         handoff_ratio: 0.7
         profile: flashnext-coder  # optional agent card id: this slot's next generation runs that card
+        fresh: always         # optional always | off (default off): a clean session before every dispatch (§45)
       - name: night-1
         pi_model: flashnext/<local-model>  # optional, pi workers only:
         pi_thinking: off      # this slot's own pi model / thinking (not with profile); default --pi-model
@@ -29,6 +30,13 @@
                               # opened with this fleet, as tabs after control
       - {name: exec, command: python3 exec.py, restart: on-exit,      # optional: reopened when it exits
          backoff: {first_s: 5, max_s: 300}, crashloop: {restarts: 5, minutes: 10}}  # (defaults shown)
+    applets:                  # optional applet processes (docs/applet-interface.md section 1); service fleets only
+      - {name: applet-rollout-1, command: ["{python}", "-m", "rollout.applet"], cwd: .., durable_state: true}
+    import_claude_md:         # optional project rules (user 2026-11-11): each file's text is copied into every
+      - ~/projects/app/CLAUDE.md  # agent's AGENTS.md / CLAUDE.md at each spawn (copied, not an @import: a worker
+                              # cwd answers Claude Code's "external imports" dialog with No)
+    import_mcp:               # optional: these servers of that mcp json are merged into each Claude agent's mcp.json
+      - {from: ~/projects/app/.mcp.json, servers: [memory]}
 
 The daemon re-reads the file while running (hot add / graceful remove; advisor on / off without
 a restart, also via `fleet advisor on|off` or the supervisor's decision key). Optional `channels:` (docs/design.md
@@ -39,10 +47,13 @@ problem is rejected as a whole, with one reason per problem; the running roster 
 A changed `profile` (or `pi_model` / `pi_thinking`) swaps that slot to its next generation once it is idle (same slot name,
 docs/design.md §25 night switch); the card itself is resolved and checked by the daemon.
 """
+import json
 import math
 import os
 import re
 from pathlib import Path
+
+from fleetmux import session_env
 
 NAME_RE = r'[a-z][a-z0-9-]{0,30}'  # same as fleet.WORKER_NAME_RE: no dots (dots mark generations)
 PROFILE_RE = r'[a-z][a-z0-9-]{0,63}'  # same as agent_registry.AGENT_ID_RE
@@ -95,7 +106,7 @@ def parse_entries(raw, base):
         raise ValueError('invalid YAML: ' + ' '.join(str(exc).split())) from exc
     if (not isinstance(data, dict) or 'workers' not in data
             or not set(data) <= {'workers', 'limits', 'handoff', 'advisor', 'subfleets', 'tabs', 'split', 'max_busy',
-                                 'channels'}
+                                 'channels', 'applets'} | set(IMPORT_KEYS)
             or not isinstance(data['workers'], list)):
         raise ValueError('the roster must be a mapping with only a "workers" list '
                          '(and optional "limits", "handoff", "advisor", "subfleets", "tabs", "split", "max_busy")')
@@ -107,9 +118,9 @@ def parse_entries(raw, base):
     errors += max_busy_errors(data)
     for i, item in enumerate(data['workers']):
         where = 'workers[' + str(i) + ']'
-        if not isinstance(item, dict) or not set(item) <= {'name', 'role', 'profile', 'writable', 'split'} | set(WORKER_HANDOFF) | set(PI_KEYS) or 'name' not in item:
+        if not isinstance(item, dict) or not set(item) <= {'name', 'role', 'profile', 'writable', 'split', 'fresh'} | set(WORKER_HANDOFF) | set(PI_KEYS) or 'name' not in item:
             errors.append(where + ': must be a mapping with "name" and optional "role", "profile", "writable", "window",'
-                          ' "handoff_ratio", "split" only (pi workers also "pi_model", "pi_thinking")')
+                          ' "handoff_ratio", "split", "fresh" only (pi workers also "pi_model", "pi_thinking")')
             continue
         errors += [where + ': ' + e for e in split_errors(item.get('split'))]
         errors += [where + ': ' + e for e in pi_errors(item)]
@@ -125,6 +136,8 @@ def parse_entries(raw, base):
             errors.append(where + ': duplicate worker name ' + name)
             continue
         workers.append(name)
+        if 'fresh' in item and not _fresh_ok(item['fresh']):
+            errors.append(where + ' (' + name + '): fresh must be "always" or "off" (got ' + repr(item['fresh']) + ')')
         if item.get('profile') is not None:
             profile = item['profile']
             if not isinstance(profile, str) or not re.fullmatch(PROFILE_RE, profile):
@@ -141,6 +154,9 @@ def parse_entries(raw, base):
     errors += subfleet_errors(data.get('subfleets'), base, workers)
     errors += tab_entries(data.get('tabs'), base)[1]
     errors += channel_entries(data.get('channels'))[1]
+    errors += applet_entries(data.get('applets'), base, workers, [s.get('name') for s in data.get('subfleets') or []
+                                                                  if isinstance(s, dict)])[1]
+    errors += import_errors(data, base)
     if errors:
         raise ValueError('\n'.join(errors))
     return workers, roles, profiles
@@ -172,6 +188,17 @@ def writable_roots(raw):
     import yaml
     data = yaml.safe_load(raw)
     return {i['name']: list(i['writable']) for i in data['workers'] if i.get('writable')}
+
+
+def _fresh_ok(value):
+    return value is False or (isinstance(value, str) and value in ('always', 'off'))  # YAML 1.1: bare off = false
+
+
+def fresh(raw):
+    """{name: 'always'} for the rows of an already validated roster that set `fresh: always` (docs/design.md §45)."""
+    import yaml
+    data = yaml.safe_load(raw)
+    return {i['name']: 'always' for i in data['workers'] if i.get('fresh') == 'always'}
 
 
 def pi_settings(raw):
@@ -284,7 +311,8 @@ def split(raw):
             {i['name']: dict(i['split']) for i in data['workers'] if isinstance(i.get('split'), dict)})
 
 
-LIMIT_KEYS = ('max_depth', 'max_children', 'max_agents_total', 'child_workers_max', 'split_budget_h')
+LIMIT_KEYS = ('max_depth', 'max_children', 'max_agents_total', 'child_workers_max', 'split_budget_h',
+              'job_hot_add_max')  # §58: job_hot_add_max may be 0 (no worker is added for jobs)
 
 
 def parse_limits(value):
@@ -293,10 +321,71 @@ def parse_limits(value):
         return {}
     if not isinstance(value, dict):
         raise ValueError('limits must be a mapping of ' + ', '.join(LIMIT_KEYS))
-    bad = [k for k, v in value.items() if k not in LIMIT_KEYS or isinstance(v, bool) or not isinstance(v, int) or v < 1]
+    bad = [k for k, v in value.items() if k not in LIMIT_KEYS or isinstance(v, bool) or not isinstance(v, int)
+           or v < (0 if k == 'job_hot_add_max' else 1)]
     if bad:
         raise ValueError('limits: unknown key or not a positive integer: ' + ', '.join(map(str, bad)))
     return dict(value)
+
+
+IMPORT_KEYS = ('import_claude_md', 'import_mcp')
+
+
+def _import_path(base, value):
+    return (Path(base) / Path(value).expanduser()).resolve()
+
+
+def import_errors(data, base):
+    """The optional top-level project imports (user 2026-11-11): ``import_claude_md`` = files whose text is copied
+    into every agent's AGENTS.md / CLAUDE.md; ``import_mcp`` = ``[{from: <mcp json>, servers: [names]}]`` merged
+    into each Claude agent's mcp.json. Paths are relative to the roster's directory; ``~`` is expanded."""
+    errors = []
+    if 'import_claude_md' in data:
+        paths = data['import_claude_md']
+        if not (isinstance(paths, list) and paths and all(isinstance(p, str) and p.strip() for p in paths)):
+            errors.append('import_claude_md must be a non-empty list of file paths')
+        else:
+            errors += ['import_claude_md: file not found: ' + p for p in paths
+                       if not _import_path(base, p).is_file()]
+    if 'import_mcp' in data:
+        entries = data['import_mcp']
+        if not (isinstance(entries, list) and entries):
+            return errors + ['import_mcp must be a non-empty list of {from: <mcp json file>, servers: [<name>, ...]}']
+        for i, entry in enumerate(entries):
+            where = 'import_mcp[' + str(i) + ']'
+            if (not isinstance(entry, dict) or set(entry) != {'from', 'servers'} or not isinstance(entry['from'], str)
+                    or not (isinstance(entry['servers'], list) and entry['servers']
+                            and all(isinstance(n, str) and n for n in entry['servers']))):
+                errors.append(where + ': must be {from: <mcp json file>, servers: [<name>, ...]}')
+                continue
+            path = _import_path(base, entry['from'])
+            try:
+                servers = json.loads(path.read_text()).get('mcpServers')
+                if not isinstance(servers, dict):
+                    raise ValueError('no "mcpServers" mapping')
+            except (OSError, ValueError, AttributeError) as exc:
+                errors.append(where + ': cannot read ' + str(path) + ': ' + str(exc)[:200])
+                continue
+            missing = [n for n in entry['servers'] if not isinstance(servers.get(n), dict)]
+            if missing:
+                errors.append(where + ': not in ' + str(path) + ' mcpServers: ' + ', '.join(missing))
+    return errors
+
+
+def imports(raw, base):
+    """(claude_md_paths, mcp_servers) of an already validated roster: absolute file paths in order, and
+    {server name: entry} (the first entry wins a duplicate name). ([], {}) without the keys."""
+    import yaml
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        return [], {}
+    paths = [str(_import_path(base, p)) for p in data.get('import_claude_md') or []]
+    servers = {}
+    for entry in data.get('import_mcp') or []:
+        found = json.loads(_import_path(base, entry['from']).read_text())['mcpServers']
+        for name in entry['servers']:
+            servers.setdefault(name, found[name])
+    return paths, servers
 
 
 SERVICE_ONLY = 'channels: 只挂本机常驻 service fleet (mode service, not a task fleet, not a sub-fleet, transport v2)'
@@ -636,3 +725,271 @@ def tabs(raw, base):
     """Validated ``tabs:`` entries of an already validated roster (empty list without the section)."""
     import yaml
     return tab_entries(yaml.safe_load(raw).get('tabs'), base)[0]
+
+
+# ------------------------------------------------------------------ applets (docs/applet-interface.md section 1)
+APPLET_KEYS = {'name', 'command', 'cwd', 'env', 'params', 'autostart', 'interface', 'heartbeat_s', 'stale_after_s',
+               'stop_grace_s', 'detach_wait_s', 'lease', 'review', 'notify', 'session_env', 'durable_state', 'waits'}
+APPLET_NAME_RE = r'applet-[a-z][a-z0-9]*(-[a-z0-9]+)*-[0-9]+'
+APPLET_NAME_MAX = 48
+APPLET_DEFAULTS = {'autostart': True, 'interface': 1, 'heartbeat_s': 10, 'stale_after_s': 60, 'stop_grace_s': 30,
+                   'detach_wait_s': 60, 'durable_state': True}
+APPLET_LEASE = {'max_active': 2, 'ttl_s': 1800, 'ttl_max_s': 7200, 'max_renewals': 3, 'renew_margin_s': 300,
+                'renew_grace_s': 0, 'prepare_timeout_s': 300, 'eligible': None, 'decision_wait_s': 600,
+                'hot_add_max': 2, 'hot_add_like': None}
+APPLET_REVIEW = {'max_rounds': 3, 'timeout_s': 1800}
+APPLET_NOTIFY = {'max_per_hour': 6}
+APPLET_WAITS = ('request_lease', 'renew', 'send', 'release', 'notify')  # SDK calls with a local bound
+APPLET_WAIT_GRACE_S = 60  # past the host's own bound (the SDK's ESCALATE_GRACE_S): the host times out on its tick
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _count(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def applet_lease(value, workers):
+    """(lease policy with every key of applet-interface.md section 1.2, errors). ``eligible`` defaults to
+    ``workers``."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict) or not set(value) <= set(APPLET_LEASE):
+        return None, ['lease must be a mapping with keys ' + ', '.join(sorted(APPLET_LEASE)) + ' only']
+    out = dict(APPLET_LEASE, **value)
+    if out['eligible'] is None:
+        out['eligible'] = list(workers)
+    if out['hot_add_like'] is None and isinstance(out['eligible'], list) and out['eligible']:
+        out['hot_add_like'] = out['eligible'][0]
+    bad = []
+    eligible = out['eligible']
+    if not (isinstance(eligible, list) and eligible and all(isinstance(n, str) and n in workers for n in eligible)
+            and len(set(eligible)) == len(eligible)):
+        bad.append('lease.eligible must be a non-empty list of distinct worker names of this roster: '
+                   + ', '.join(workers))
+    if not (_count(out['max_active']) and out['max_active'] >= 1):
+        bad.append('lease.max_active must be an integer >= 1')
+    if not _count(out['hot_add_max']):
+        bad.append('lease.hot_add_max must be an integer >= 0')
+    if not (isinstance(out['hot_add_like'], str) and out['hot_add_like'] in workers):
+        bad.append('lease.hot_add_like must be a worker name of this roster')
+    if not (_number(out['ttl_max_s']) and out['ttl_max_s'] >= 60):
+        bad.append('lease.ttl_max_s must be a number >= 60')
+    elif not (_number(out['ttl_s']) and 60 <= out['ttl_s'] <= out['ttl_max_s']):
+        bad.append('lease.ttl_s must be a number from 60 to ttl_max_s')
+    elif not (_number(out['renew_margin_s']) and 0 < out['renew_margin_s'] < out['ttl_s']):
+        bad.append('lease.renew_margin_s must be a number > 0 and < ttl_s')
+    if not _count(out['max_renewals']):
+        bad.append('lease.max_renewals must be an integer >= 0')
+    if not (_number(out['renew_grace_s']) and out['renew_grace_s'] >= 0):
+        bad.append('lease.renew_grace_s must be a number >= 0')
+    if not (_number(out['prepare_timeout_s']) and out['prepare_timeout_s'] > 0):
+        bad.append('lease.prepare_timeout_s must be a number > 0')
+    if not (_number(out['decision_wait_s']) and 10 <= out['decision_wait_s'] <= 86400):
+        bad.append('lease.decision_wait_s must be a number from 10 to 86400')
+    return (None, bad) if bad else (out, [])
+
+
+def applet_review(value):
+    """(review bounds with every key of applet-interface.md section 1.3, errors)."""
+    value = {} if value is None else value
+    if not isinstance(value, dict) or not set(value) <= set(APPLET_REVIEW):
+        return None, ['review must be a mapping with keys ' + ', '.join(sorted(APPLET_REVIEW)) + ' only']
+    out, bad = dict(APPLET_REVIEW, **value), []
+    if not (_count(out['max_rounds']) and out['max_rounds'] >= 1):
+        bad.append('review.max_rounds must be an integer >= 1')
+    if not (_number(out['timeout_s']) and 60 <= out['timeout_s'] <= 86400):
+        bad.append('review.timeout_s must be a number from 60 to 86400')
+    return (None, bad) if bad else (out, [])
+
+
+def applet_waits(value, lease, review):
+    """(local bounds of the SDK calls, applet-interface.md section 1.1, errors). Defaults: the host's own bound of
+    each call plus APPLET_WAIT_GRACE_S, so the host answers first while it runs."""
+    value = {} if value is None else value
+    if not isinstance(value, dict) or not set(value) <= set(APPLET_WAITS):
+        return None, ['waits must be a mapping with keys ' + ', '.join(APPLET_WAITS) + ' only']
+    grace = APPLET_WAIT_GRACE_S
+    out = {'request_lease': lease['decision_wait_s'] + grace, 'renew': lease['decision_wait_s'] + grace,
+           'send': lease['prepare_timeout_s'] + lease['ttl_max_s'] + review['timeout_s'] + grace,
+           'release': grace, 'notify': grace}
+    out.update(value)
+    bad = ['waits.' + k + ' must be a number > 0' for k in APPLET_WAITS if not (_number(out[k]) and out[k] > 0)]
+    return (None, bad) if bad else (out, [])
+
+
+def _applet_fields(item, base, workers):
+    """(entry without name, problems) of one ``applets:`` row."""
+    bad, out = [], dict(APPLET_DEFAULTS)
+    command = item.get('command')
+    if not (isinstance(command, list) and command and all(isinstance(c, str) and c for c in command)):
+        bad.append('command must be a non-empty list of non-empty strings (run with no shell)')
+    cwd = item.get('cwd', '.')
+    path = (Path(base) / Path(cwd).expanduser()) if isinstance(cwd, str) and cwd.strip() else None
+    if path is None or not path.is_dir():
+        bad.append('cwd directory not found: ' + str(cwd))
+    env = item.get('env') or {}
+    if not isinstance(env, dict) or not all(isinstance(k, str) and re.fullmatch(ENV_NAME_RE, k)
+                                            and not k.startswith('FLEETMUX_') and isinstance(v, str)
+                                            for k, v in env.items()):
+        bad.append('env must map variable names (not starting with FLEETMUX_) to strings')
+    params = item.get('params')
+    if params is not None:
+        ok = (isinstance(params, dict) and set(params) == {'file', 'block'} and isinstance(params['file'], str)
+              and params['file'].strip() and isinstance(params['block'], str) and params['block'].strip())
+        if not ok:
+            bad.append('params must be {file: <path>, block: <name>}')
+        elif not (Path(base) / Path(params['file']).expanduser()).is_file():
+            bad.append('params file not found: ' + params['file'])
+        else:
+            params = {'file': str((Path(base) / Path(params['file']).expanduser()).resolve()),
+                      'block': params['block']}
+    for key in ('autostart', 'durable_state'):
+        out[key] = item.get(key, out[key])
+        if not isinstance(out[key], bool):
+            bad.append(key + ' must be true or false')
+    out['interface'] = item.get('interface', out['interface'])
+    if not (_count(out['interface']) and out['interface'] >= 1):
+        bad.append('interface must be an integer >= 1')
+    for key in ('heartbeat_s', 'stale_after_s', 'stop_grace_s'):
+        out[key] = item.get(key, out[key])
+        if not (_number(out[key]) and out[key] > 0):
+            bad.append(key + ' must be a number > 0')
+    if not bad and out['stale_after_s'] <= out['heartbeat_s']:
+        bad.append('stale_after_s must be greater than heartbeat_s')
+    out['detach_wait_s'] = item.get('detach_wait_s', out['detach_wait_s'])
+    if not (_number(out['detach_wait_s']) and out['detach_wait_s'] >= 0):
+        bad.append('detach_wait_s must be a number >= 0')
+    lease, more = applet_lease(item.get('lease'), workers)
+    bad += more
+    review, more = applet_review(item.get('review'))
+    bad += more
+    waits, more = applet_waits(item.get('waits'), lease, review) if lease and review else (None, [])
+    bad += more
+    notify = dict(APPLET_NOTIFY, **(item.get('notify') or {})) if isinstance(item.get('notify') or {}, dict) else None
+    if notify is None or set(notify) != set(APPLET_NOTIFY) or not _count(notify['max_per_hour']):
+        bad.append('notify must be {max_per_hour: <integer >= 0>}')
+    if bad:
+        return None, bad
+    out.update(command=list(command), cwd=str(path.resolve()), env=dict(env), params=params, lease=lease,
+               review=review, notify=notify, waits=waits)
+    if 'session_env' in item:  # accepted as is; validated by the session environment code
+        out['session_env'] = item['session_env']
+    return out, []
+
+
+def applet_entries(value, base, workers, others=()):
+    """(entries, errors) of the optional ``applets:`` list (docs/applet-interface.md section 1). Each entry has
+    every key of section 1.1 resolved (``cwd`` and ``params.file`` absolute, defaults filled in, ``params`` None
+    when absent) plus ``lease`` and ``review`` with every key of sections 1.2 and 1.3, ``waits`` with every key and
+    ``durable_state``; ``session_env`` is kept
+    as written when present. ``others`` are further names an applet may not take (sub-fleet names)."""
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], ['applets must be a list of mappings']
+    entries, errors, names = [], [], set()
+    for i, item in enumerate(value):
+        where = 'applets[' + str(i) + ']'
+        if not isinstance(item, dict) or not set(item) <= APPLET_KEYS or 'name' not in item:
+            errors.append(where + ': must be a mapping with "name" and keys ' + ', '.join(sorted(APPLET_KEYS))
+                          + ' only')
+            continue
+        name = item['name']
+        if not (isinstance(name, str) and re.fullmatch(APPLET_NAME_RE, name) and len(name) <= APPLET_NAME_MAX):
+            errors.append(where + ': name must match ' + APPLET_NAME_RE + ' (at most ' + str(APPLET_NAME_MAX)
+                          + ' characters)')
+            continue
+        where += ' (' + name + ')'
+        bad = ['duplicate applet name'] if name in names else []
+        names.add(name)
+        if name in workers or name in others:
+            bad.append('name is also a worker or sub-fleet name')
+        entry, more = _applet_fields(item, base, workers)
+        bad += more
+        if 'session_env' in item:  # docs/distributed-development.md: refused whole on an unverified CLI
+            bad += session_env.errors(item['session_env'])
+        if bad:
+            errors += [where + ': ' + b for b in bad]
+        else:
+            entries.append(dict(entry, name=name))
+    return entries, errors + session_env.conflicts(entries)
+
+
+def applets(raw, base):
+    """Validated ``applets:`` entries of an already validated roster (empty list without the section)."""
+    import yaml
+    data = yaml.safe_load(raw)
+    workers = [w['name'] for w in data['workers']]
+    others = [s.get('name') for s in data.get('subfleets') or [] if isinstance(s, dict)]
+    return applet_entries(data.get('applets'), base, workers, others)[0]
+
+
+def load_applets(path):
+    path = Path(path).expanduser().resolve()
+    return applets(path.read_bytes(), path.parent)
+
+
+# ------------------------------------------------------------------ the run's own roster (distributed-development.md)
+RUN_COPY = 'roster.yaml'
+
+
+def copy_into_run(source, run):
+    """``start --roster <file outside the run>`` (docs/distributed-development.md open question 5): the run's own copy
+    ``<run>/roster.yaml``, which the daemon follows from then on; the source is never read or written again.
+    Paths the roster resolves against its own directory (``role``, ``subfleets[].supervisor_role`` / ``roster`` /
+    ``claude``, ``tabs[].cwd``, ``applets[].cwd`` / ``params.file``, ``import_claude_md``, ``import_mcp[].from``) are
+    written as absolute paths against the source's directory, so they resolve the same; that rewrite drops YAML
+    comments. A roster with no such path is copied byte for byte. A file already inside the run is returned as it is."""
+    import yaml
+    source, run = Path(source).expanduser().resolve(), Path(run).resolve()
+    if source.is_relative_to(run):
+        return source
+    raw = source.read_bytes()
+    data = yaml.safe_load(raw)
+    target = run / RUN_COPY
+    if _absolute_paths(data, source.parent):
+        target.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding='utf-8')
+    else:
+        target.write_bytes(raw)
+    return target
+
+
+def _absolute_paths(data, base):
+    """Rewrite the base-relative paths of a validated roster in place; True when any value changed."""
+    changed = []
+
+    def fix(item, key, default=None):
+        value = item.get(key, default)
+        if isinstance(value, str) and value.strip():
+            new = str(Path(base) / Path(value).expanduser())
+            if new != item.get(key):
+                item[key] = new
+                changed.append(key)
+
+    for item in data.get('workers') or []:
+        if isinstance(item, dict) and 'role' in item:
+            fix(item, 'role')
+    for item in data.get('subfleets') or []:
+        if isinstance(item, dict):
+            fix(item, 'supervisor_role')
+            fix(item, 'roster')
+            if isinstance(item.get('claude'), str) and '/' in item['claude']:
+                fix(item, 'claude')
+    for block in ('tabs', 'applets'):
+        for item in data.get(block) or []:
+            if isinstance(item, dict):
+                fix(item, 'cwd', '.')  # absent: the roster's own directory
+                if block == 'applets' and isinstance(item.get('params'), dict):
+                    fix(item['params'], 'file')
+    paths = data.get('import_claude_md')
+    for i, value in enumerate(paths if isinstance(paths, list) else []):
+        if isinstance(value, str) and value.strip() and str(Path(base) / Path(value).expanduser()) != value:
+            paths[i] = str(Path(base) / Path(value).expanduser())
+            changed.append('import_claude_md')
+    for item in data.get('import_mcp') or []:
+        if isinstance(item, dict):
+            fix(item, 'from')
+    return bool(changed)

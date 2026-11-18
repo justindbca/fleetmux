@@ -136,16 +136,18 @@ def test_deps_manifest_gates_fleetmux_on_backend():
 
 
 def test_default_backend_is_fleetmux_after_m3(monkeypatch):
-    """M3 flipped Linux to fleetmux via ``test-contract:`` (plan §6); a Mac with cmux keeps cmux, without it WezTerm."""
+    """M3 flipped Linux to fleetmux via ``test-contract:`` (plan §6); macOS followed (design §33.3)."""
     monkeypatch.setattr(base, 'unavailable_reason', lambda name: None)  # every backend usable
     monkeypatch.setattr(base, 'cmux_installed', lambda: True)
     assert base.default_backend('linux') == 'fleetmux'
-    assert base.default_backend('darwin') == 'cmux'
+    assert base.default_backend('darwin') == 'fleetmux'
     monkeypatch.setattr(base, 'cmux_installed', lambda: False)
-    assert base.default_backend('darwin') == 'wezterm'
+    assert base.default_backend('darwin') == 'fleetmux'
     assert fleet.resolve_backend(None, platform='linux') == ('fleetmux', None)
+    assert fleet.resolve_backend(None, platform='darwin') == ('fleetmux', None)
     assert check_deps.DEFAULT_BACKEND == 'fleetmux'
     monkeypatch.delenv(check_deps.BACKEND_ENV, raising=False)
     spec = {'programs': {'cmux': {'cmd': ['cmux', '--version']}}}
     assert check_deps.pick_backend(spec, plat='linux', probe_it=lambda cmd: (1,)) == 'fleetmux'
+    assert check_deps.pick_backend(spec, plat='darwin', probe_it=lambda cmd: (1,)) == 'fleetmux'  # cmux usable
     assert fleet.cli().parse_args(['start']).backend is None  # no flag: resolve_backend decides

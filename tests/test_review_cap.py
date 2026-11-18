@@ -23,7 +23,7 @@ ISSUES = [{'id': 'P1-07', 'severity': 'P1', 'title': 'late settle race'},
 def test_dev_task_review_step_is_capped_in_the_mode_table():
     review = lifecycle.mode_policy('dev_task', 'review_step')
     assert review['max_rounds'] == 3 and review['on_cap'] == 'stop_and_report'
-    assert review['reviewer'] == 'opus' and review['must_pass'] is True  # unchanged
+    assert 'reviewer' not in review and review['must_pass'] is True  # who reviews is the supervisor's decision
 
 
 def test_dev_task_review_cap_stops_the_rounds_and_reports_the_open_issues(fx, table, notes, repo, tmp_path):  # noqa: F811

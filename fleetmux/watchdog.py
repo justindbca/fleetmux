@@ -28,7 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fleetmux import advisor, fleet_config
+from fleetmux import advisor, fleet_config, session_env
 
 STATES = ('idle', 'working', 'stalled', 'frozen', 'prompting')
 DEFAULT_TABLE = None  # None = the watchdog_prompts block of fleet.yaml; a path = that file (blocks or a bare table)
@@ -741,7 +741,8 @@ class Watchdog:
 
     def clear_prompt_wait(self, slot, reason):
         info = self.f.agent(slot)
-        self.f.setf(slot, prompt_wait='', prompt_wait_at=0, prompt_route='', prompt_channel='', oc_permission='')
+        self.f.setf(slot, prompt_wait='', prompt_wait_at=0, prompt_route='', prompt_channel='', oc_permission='',
+                    prompt_class='')
         self.audit('watch.prompt_cleared', slot=slot, level='info', reason=reason, scope=info.get('prompt_wait', ''))
 
     def wait_for_user(self, slot, scope, reason, path, kind, user=None):
@@ -909,6 +910,9 @@ class Watchdog:
             # E before F (docs/design.md §23): a usage wall is the brake's. No key, no hold, no kill this
             # tick; a wall menu (e.g. "❯ 1. Yes, switch…") is never a dialog to answer.
             return
+        if in_flight and session_env.route_closed(self.f, slot, info):  # applet route port closed: hold, no key
+            self.f.setf(slot, watch_state='idle', watch_since=0, stall_escapes=0, quiet_since=0, proc_frozen=0)
+            return
         digest = hashlib.sha256(screen.encode()).hexdigest()[:16] if screen else ''
         frozen_seen = int(info.get('proc_frozen') or 0) + 1 if uninterruptible(self.proc_stats(pane)) else 0
         self.f.setf(slot, proc_frozen=frozen_seen)
@@ -1003,6 +1007,8 @@ class Watchdog:
         from fleetmux.fleet import NAMES, SUPERVISOR_LABEL
         f, rt = self.f, self.rt
         info = f.agent(slot)
+        if session_env.route_closed(f, slot, info):
+            return False  # applet route port closed: no kill, no new generation until it answers
         pane, generation = info['pane'], int(info.get('generation') or 0)
         if info.get('prompt_wait'):
             return False  # a confirmation dialog never authorizes a kill, including mid-turn fallback

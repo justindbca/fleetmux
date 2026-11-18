@@ -485,8 +485,9 @@ fn dragging_the_vsep_with_the_sidebar_keeps_the_ratio() {
 // ------------------------------ fleet sidebar toolbar (S1b-③, plan §11.1) ----------------------------
 
 /// The `+` opens a bash (S1c, plan §14.2 / §14.5-1): a server-owned `type "shell"` pane that lands as a tab at the end of
-/// the root page's `workers` group (user 2026-11-09: every new bash is mapped into the main fleet's worker area), the
-/// `bash-1` card after the fleet card, and no S1b notice any more. The fleet's own panes keep their places.
+/// the root page's `workers` group (user 2026-11-09: every new bash is mapped into the main fleet's worker area) and is
+/// shown on its own clean page (user 2026-11-14), the `bash-1` card after the fleet card, and no S1b notice any more.
+/// The fleet's own panes keep their places.
 #[test]
 fn clicking_plus_opens_a_bash_page() {
     let srv = Server::start();
@@ -1487,7 +1488,8 @@ fn shell_panes(srv: &Server) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// User 2026-11-09: a bash pane is a tab in the root page's `workers` group, never a page of its own.
+/// User 2026-11-09 / 2026-11-14: a bash pane is a tab in the root page's `workers` group (its record and the root
+/// layout say so, the fleet registers it there), and it has a page of its own, `_bash-<pane id>`, that shows it alone.
 fn in_root_workers(srv: &Server, id: &str) {
     let p = shell_panes(srv)
         .into_iter()
@@ -1495,18 +1497,23 @@ fn in_root_workers(srv: &Server, id: &str) {
         .unwrap_or_else(|| panic!("bash pane {id} is not listed: {:?}", srv.panes_all()));
     assert_eq!(p["page"], json!(""), "the bash pane {id} is not on the root page: {p}");
     assert_eq!(p["group"], json!("workers"), "the bash pane {id} is not in the workers group: {p}");
+    let root = srv.layout();
+    assert!(
+        root["groups"]["workers"].as_array().is_some_and(|w| w.contains(&json!(id))),
+        "the root page's worker area has no tab for bash pane {id}: {root}"
+    );
     let ids = srv.page_ids();
-    assert!(!ids.iter().any(|p| p.starts_with("_bash-")), "a bash opened a page of its own: {ids:?}");
+    assert!(ids.contains(&bash_page(id)), "bash pane {id} has no page of its own: {ids:?}");
 }
 
-/// Whether bash pane `id` is shown: the root page is current, `id` is the selected tab of the focused `workers` group
-/// and nothing is zoomed.
+/// The page id of bash pane `id`'s own page (user 2026-11-14).
+fn bash_page(id: &str) -> String {
+    format!("_bash-{id}")
+}
+
+/// Whether bash pane `id` is shown: its own page is current (user 2026-11-14: a clean bash, not the fleet's page).
 fn bash_shown(srv: &Server, id: &str) -> bool {
-    let l = srv.layout();
-    srv.current_page().is_empty()
-        && l["focus"] == json!("workers")
-        && l["selected"]["workers"] == json!(id)
-        && l["zoom"] == Value::Null
+    srv.current_page() == bash_page(id)
 }
 
 /// Wait for the first bash page (`bash-1`, `type "shell"`) and return its pane id.
@@ -1521,8 +1528,9 @@ fn wait_shell_pane(srv: &Server) -> String {
         .to_string()
 }
 
-/// Two left presses on the sidebar's empty card area within `DOUBLE_CLICK` (300 ms) open a bash, which becomes the
-/// selected tab of the focused `workers` group (plan §14.5-2; user 2026-11-09: in the main fleet's worker area).
+/// Two left presses on the sidebar's empty card area within `DOUBLE_CLICK` (300 ms) open a bash (plan §14.5-2). User
+/// 2026-11-14: the screen is a clean bash on its own page — none of the fleet's panes — while the root page's worker
+/// area keeps the same pane as a tab and the root page's layout is not touched.
 #[test]
 fn double_clicking_the_blank_sidebar_area_opens_a_bash_page() {
     let srv = Server::start();
@@ -1532,15 +1540,20 @@ fn double_clicking_the_blank_sidebar_area_opens_a_bash_page() {
     set_sidebar(&srv);
     v.wait_text("fleetmux-demo", T);
 
+    let root_before = srv.layout();
     let mut dbl = sgr_click(5, 10, 0);
     dbl.extend(sgr_click(5, 10, 0));
     v.input(&dbl);
     let id = wait_shell_pane(&srv);
     v.wait_text("终端 · 运行中", T);
     in_root_workers(&srv, &id);
-    wait_until("the new bash tab to be selected and focused", T, || {
-        bash_shown(&srv, &id).then_some(())
-    });
+    wait_until("the new bash page to be shown", T, || bash_shown(&srv, &id).then_some(()));
+    let screen = v.wait_no_text("SUP-BODY", T);
+    assert!(!screen.contains("W1-BODY"), "the bash page still shows the fleet's worker:\n{screen}");
+    let root = srv.layout();
+    for key in ["focus", "selected", "zoom"] {
+        assert_eq!(root[key], root_before[key], "opening a bash changed the root page's {key}: {root}");
+    }
     // The bash card is the second card (row 2 + 4 = 6) and carries the blue bar; the fleet card gives it up.
     wait_until("the bash card at (6,5) to take the blue bar", T, || {
         (v.cell(6, 5).bg == Color::Indexed(4)).then_some(())
@@ -1617,7 +1630,7 @@ fn prefix_c_opens_a_bash_page() {
 }
 
 /// User 2026-11-09 ("都在主fleet的worker区域有映射"): with a child fleet's page shown, `^b c` still puts the bash in the
-/// root page's `workers` group, goes back to the root page and shows the new tab there; the child page stays.
+/// root page's `workers` group; it is shown on its own page (user 2026-11-14); the child page stays.
 #[test]
 fn prefix_c_on_a_child_page_opens_the_bash_in_the_root_workers_group() {
     let srv = Server::start();
@@ -1633,7 +1646,7 @@ fn prefix_c_on_a_child_page_opens_the_bash_in_the_root_workers_group() {
     v.input(&prefixed(b"c"));
     let id = wait_shell_pane(&srv);
     in_root_workers(&srv, &id);
-    wait_until("^b c on a child page to show the bash tab on the root page", T, || {
+    wait_until("^b c on a child page to show the bash on its own page", T, || {
         bash_shown(&srv, &id).then_some(())
     });
     assert!(srv.page_ids().contains(&"M0".to_string()), "the child page went away");
@@ -1673,17 +1686,62 @@ fn a_bash_card_goes_away_when_its_shell_exits() {
     let id = wait_shell_pane(&srv);
     in_root_workers(&srv, &id);
     v.wait_text("bash-1", T);
+    wait_until("the bash page to be shown", T, || bash_shown(&srv, &id).then_some(()));
     srv.ok("pane.kill", json!({ "pane": id }));
     wait_until("the bash tab to leave the workers group", T, || {
         (!srv.layout()["groups"]["workers"].as_array()?.contains(&json!(id))).then_some(())
     });
-    assert_eq!(srv.current_page(), "", "the root page is no longer current");
+    wait_until("the bash page to close and the root page to come back", T, || {
+        (srv.current_page().is_empty() && !srv.page_ids().contains(&bash_page(&id))).then_some(())
+    });
     let screen = v.wait_no_text("bash-1", T);
     assert!(
         shell_panes(&srv).is_empty(),
         "the shell pane {id} survived pane.kill: {:?}\n{screen}",
         srv.panes()
     );
+}
+
+/// User 2026-11-14 (the agreed picture): from the bash page the fleet card brings the main fleet's page back exactly as
+/// it was, with the bash as a live tab of its worker area; clicking that tab shows the shell there and stays on the
+/// main fleet's page; the bash card shows the clean page again.
+#[test]
+fn the_fleet_card_shows_the_main_page_with_the_bash_as_a_worker_tab() {
+    let srv = Server::start();
+    sidebar_page(&srv);
+    let mut v = Viewer::attach(&srv, W, H);
+    v.wait_text("W1-BODY", T);
+    set_sidebar(&srv);
+    v.wait_text("fleetmux-demo", T);
+    let root_before = srv.layout();
+
+    v.input(&prefixed(b"c"));
+    let id = wait_shell_pane(&srv);
+    wait_until("the bash page to be shown", T, || bash_shown(&srv, &id).then_some(()));
+    v.wait_no_text("SUP-BODY", T);
+    v.input(b"echo MAPPED-OK\r");
+    v.wait_text("MAPPED-OK", T);
+
+    // The fleet card (row 2): the root page, as it was, the supervisor back on screen.
+    v.input(&sgr_click(5, 2, 0));
+    wait_until("the root page to come back", T, || srv.current_page().is_empty().then_some(()));
+    v.wait_text("SUP-BODY", T);
+    let root = srv.layout();
+    for key in ["focus", "selected", "zoom"] {
+        assert_eq!(root[key], root_before[key], "the bash page changed the root page's {key}: {root}");
+    }
+    in_root_workers(&srv, &id);
+
+    // The bash tab in the worker area: the same shell, shown there; the root page stays current.
+    srv.ok("pane.focus", json!({ "pane": id }));
+    v.wait_text("MAPPED-OK", T);
+    v.wait_text("SUP-BODY", T);
+    assert!(srv.current_page().is_empty(), "the worker-area bash tab left the root page");
+
+    // The bash card (row 6): the clean page again.
+    v.input(&sgr_click(5, 6, 0));
+    wait_until("the bash card to show its page", T, || bash_shown(&srv, &id).then_some(()));
+    v.wait_no_text("SUP-BODY", T);
 }
 
 // ---- A26 rev3 (user requirement A42-LAYOUT-LINUX-MIRROR): on Linux the content is mirrored — workers left, the

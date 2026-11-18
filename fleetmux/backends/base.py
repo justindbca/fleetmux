@@ -22,11 +22,10 @@ Two capability flags, and nothing else, let fleet degrade a layout per backend (
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
-MISSING = object()  # sentinel of default_backend(): no backend could be picked
+MISSING = object()  # sentinel: no backend could be picked
 
 
 @dataclass
@@ -175,30 +174,14 @@ def cmux_installed() -> bool:
 
 
 def default_backend(platform: Optional[str] = None) -> str:
-    """No ``--backend``: cmux on a Mac with cmux installed, WezTerm on a Mac without it, fleetmux off macOS
-    (design §5; M3 py-switch, brief-m03 §4.6).
+    """No ``--backend``: fleetmux on every platform (design §33.3).
 
-    A Mac with cmux installed always gets cmux, usable or not (ssh / Terminal.app, where cmux does not
-    answer): ``check_backend`` then refuses with cmux's own "run this inside a cmux terminal" -- the
-    message a fleet got before the choice existed -- and the run never silently becomes a WezTerm run.
-    On a Mac WezTerm is the default only where cmux is not installed; even then, while the WezTerm
-    backend is unusable too, the answer stays cmux so the cmux reason is what gets reported. Off macOS
-    the default is fleetmux (a cmux binary never makes Linux a cmux host); ``--backend wezterm`` still
-    selects WezTerm.
+    macOS used to default to cmux (WezTerm without cmux); it now defaults to fleetmux like Linux does.
+    The choice does not depend on what is installed: when the fleetmux binary is missing or too old,
+    ``check_backend`` refuses with fleetmux's own reason and the run never silently becomes a cmux or
+    WezTerm run. ``--backend cmux`` / ``--backend wezterm`` still select the others. ``platform`` is
+    kept so callers and tests can name the host.
     """
-    platform = sys.platform if platform is None else platform
-    if platform == 'darwin':
-        try:
-            if cmux_installed():
-                return 'cmux'
-        except Exception:  # cannot tell: stay on cmux (its probe reports why it cannot run)
-            return 'cmux'
-        try:
-            if unavailable_reason('wezterm') is not None:
-                return 'cmux'
-        except Exception:
-            return 'cmux'
-        return 'wezterm'
     return 'fleetmux'
 
 

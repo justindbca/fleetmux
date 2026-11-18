@@ -326,7 +326,7 @@ def mock_start(tmp_path, monkeypatch):
     ran = []
     def run(argv, **kw):
         ran.append(argv)
-        return SimpleNamespace(stdout='1.1.0\n', returncode=0)
+        return SimpleNamespace(stdout='1.2.0\n', returncode=0)
     monkeypatch.setattr(fleet.subprocess, 'run', run)
     monkeypatch.setattr(fleet, 'connect', lambda cfg: FakeRedis())
     # Provisioning is fake here: do not create persistent Redis directories in the checkout.
@@ -335,6 +335,26 @@ def mock_start(tmp_path, monkeypatch):
             '--allow-unsandboxed-pi', '--allow-development-v2', '--runs-dir', str(tmp_path / 'runs'),
             '--pi-agent-dir', str(tmp_path / 'user-pi'), '--codex-home', str(tmp_path / 'codex-home')]
     return args, ran
+
+
+def test_start_refuses_a_pi_below_the_deps_minimum(tmp_path, monkeypatch):
+    args, _ = mock_start(tmp_path, monkeypatch)
+    monkeypatch.setattr(fleet.subprocess, 'run', lambda argv, **kw: SimpleNamespace(stdout='1.1.0\n', returncode=0))
+    with pytest.raises(SystemExit, match=r'start: pi 1\.1\.0 is below 1\.2\.0 \(deps\.yaml\)'):
+        fleet.main(args)
+
+
+def test_start_finds_a_needed_cli_on_the_login_shell_path(tmp_path, monkeypatch):
+    # Not on the process PATH: start asks discover.which (the login shell's PATH) and pins what it found.
+    args, _ = mock_start(tmp_path, monkeypatch)
+    monkeypatch.setattr(fleet.shutil, 'which', lambda name: None if name in ('pi', 'codex', 'claude', 'caffeinate')
+                        else '/bin/' + name)
+    asked = []
+    monkeypatch.setattr(fleet.discover, 'which', lambda name: asked.append(name) or
+                        ('/opt/example/npm/bin/pi' if name == 'pi' else None))
+    fleet.main(args)
+    assert fleet.load(tmp_path / 'latest.json')['pi'] == '/opt/example/npm/bin/pi'
+    assert 'codex' not in asked and 'claude' not in asked  # only CLIs this run needs
 
 
 def test_all_pi_start_needs_no_codex_binary_profile_or_login(tmp_path, monkeypatch):

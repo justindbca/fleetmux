@@ -112,6 +112,47 @@ def test_a_new_fleet_home_not_yet_migrated_is_refused(home, monkeypatch):
     assert code == 2 and str(home / '.cmux-fleet-dev') in lines[0]
 
 
+def test_a_separate_new_fleet_home_starts_beside_old_data_with_a_note(home, monkeypatch):
+    # Older fleets still run on the old top-level data; a new fleet with its own home and state must not wait
+    # for them to stop and be migrated.
+    old_layout(home)
+    old_fleet(home, 'prod')
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux/fleets/lab'))
+    monkeypatch.setenv('FLEETMUX_STATE', str(home / '.fleetmux/fleets/lab/state'))
+    code, lines = guard()
+    assert code == 0 and len(lines) == 1
+    assert 'is not read' in lines[0] and "run 'fleetmux home migrate' after its fleets stop" in lines[0]
+    assert str(home / '.cmux-fleet') in lines[0] and str(home / '.local/state/cmux-fleet') in lines[0]
+
+
+def test_a_separate_home_without_fleetmux_state_is_a_note_too(home, monkeypatch):
+    # State then lands in ~/.fleetmux/state, the target of the old state dir: a later migrate skips that item.
+    old_layout(home)
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux/fleets/lab'))
+    code, lines = guard()
+    assert code == 0 and len(lines) == 1 and 'is not read' in lines[0]
+
+
+def test_an_explicit_default_home_or_default_state_stays_fatal(home, monkeypatch):
+    old_layout(home)
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux'))   # start writes FLEETMUX_HOME into its env
+    code, lines = guard()
+    assert code == 2 and 'is not read any more' in lines[0]
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux/fleets/lab'))
+    monkeypatch.setenv('FLEETMUX_STATE', str(home / '.fleetmux/state'))
+    code, lines = guard()
+    assert code == 2 and 'is not read any more' in lines[0]
+
+
+def test_an_old_name_value_stays_fatal_beside_old_data(home, monkeypatch):
+    old_layout(home)
+    monkeypatch.setenv('FLEETMUX_HOME', str(home / '.fleetmux/fleets/lab'))
+    monkeypatch.setenv('FLEETMUX_STATE', str(home / '.local/state/cmux-fleet-lab'))
+    code, lines = guard()
+    assert code == 2 and any('uses the old name' in line for line in lines)
+    assert any('is not read any more' in line for line in lines)
+
+
 def test_old_environment_names_are_refused_unless_mirrored(home, monkeypatch):
     monkeypatch.setenv('CMUX_FLEET_HOME', str(home / 'x'))
     code, lines = guard()

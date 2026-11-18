@@ -16,7 +16,7 @@ fn full_run() -> Layout {
     l.insert(id("advisor-1"), PaneType::Advisor);
     l.insert(id("history"), PaneType::History);
     l.insert(id("control"), PaneType::Daemon);
-    l.insert(id("evermem-shell"), PaneType::Tab);
+    l.insert(id("index-service"), PaneType::Tab);
     for w in ["worker-1", "worker-2", "worker-3"] {
         l.insert(id(w), PaneType::Worker);
     }
@@ -123,7 +123,7 @@ fn generation_titles_fit_on_top_rows_at_196_and_240() {
         l.insert(id("fx-supervisor-1.1"), PaneType::Supervisor); // the successor, alive next to gen 0
         l.insert(id("history"), PaneType::History);
         l.insert(id("control"), PaneType::Daemon);
-        l.insert(id("evermem-shell"), PaneType::Tab);
+        l.insert(id("index-service"), PaneType::Tab);
         for n in 1..=workers {
             l.insert(id(&format!("fx-worker-{n}")), PaneType::Worker);
         }
@@ -223,7 +223,8 @@ fn generation_titles_fit_on_top_rows_at_196_and_240() {
 //
 // `tab_rects_titled` / `hit_test_titled` take the display width of the text inside each block (unread `• ` +
 // title, no pads). A block is `min(label + 2, share − 1, cap + 2)` columns from the group's inner x, one
-// column of gap between blocks, nothing after the last block; cap 24 on the top row, 15 on the separator row.
+// column of gap between blocks, nothing after the last block; cap 24 on both rows (the separator row: 15 until
+// applet tabs, design §54), the separator row's share taken from its width less the grip's room.
 
 /// Display width of an ASCII id, standing in for its title.
 fn ascii_cols(id: &PaneId) -> u16 {
@@ -345,7 +346,8 @@ fn titled_block_and_gap_boundaries() {
 }
 
 /// A title wider than the block is cut to the block's inner width, so both pads stay: the block is
-/// share − 1 wide with many tabs, cap + 2 with one tab (26 on the top row, 17 on the separator row).
+/// share − 1 wide with many tabs, cap + 2 with one tab (26 on both rows; the separator row was 17 before applet
+/// tabs, design §54).
 #[test]
 fn truncated_title_keeps_both_pads() {
     let long = |_: &PaneId| 40;
@@ -361,7 +363,7 @@ fn truncated_title_keeps_both_pads() {
     assert_eq!((sup[0].1.x, sup[0].1.w), (r.supervisor.x, 26));
     let lower = titled_in_group(&l, 240, 60, Group::Lower, long);
     assert_eq!(lower.len(), 1);
-    assert_eq!((lower[0].1.x, lower[0].1.w), (r.lower.x, 17));
+    assert_eq!((lower[0].1.x, lower[0].1.w), (r.lower.x, 26));
 
     let share = r.workers.w / 8;
     let w = (share - 1).min(26);
@@ -425,7 +427,8 @@ fn titled_rects_follow_set_ratios() {
     }
 }
 
-/// The lower group's 15-column cap keeps (50,35) the draggable separator with the usual three lower tabs.
+/// The usual three lower tabs keep (50,35) the draggable separator (titled blocks: the lower cap is 24 since
+/// applet tabs, design §54; the legacy fixed slots keep 15).
 #[test]
 fn titled_lower_cap_keeps_hsep_at_50_35() {
     let l = full_run();
@@ -442,9 +445,42 @@ fn titled_lower_cap_keeps_hsep_at_50_35() {
     assert!(
         titled_in_group(&l, 240, 60, Group::Lower, long)
             .iter()
-            .all(|(_, t)| t.w <= 17),
+            .all(|(_, t)| t.w <= 26),
         "lower cap"
     );
+}
+
+/// Applet tabs (design §54): an applet's tab title is `<name> <state>` (`applet-relay-1 up`, 17 columns), so the
+/// titled lower blocks take up to 24 title columns, like the top row. The separator row still keeps a free run of
+/// at least the [M59] grip's 5 columns (plus the blank cell either side), however many long lower tabs there are.
+#[test]
+fn titled_lower_fits_applet_titles_and_keeps_a_grip_run() {
+    for (cols, rows) in [(196, 50), (240, 60)] {
+        for extra in 1..=6 {
+            let mut l = Layout::new();
+            l.insert(id("supervisor-1"), PaneType::Supervisor);
+            l.insert(id("history"), PaneType::History);
+            l.insert(id("control"), PaneType::Daemon);
+            l.insert(id("applet-relay-1 up"), PaneType::Tab);
+            for n in 1..extra {
+                l.insert(id(&format!("! applet-rollout-{n} crashloop")), PaneType::Tab);
+            }
+            l.insert(id("worker-1"), PaneType::Worker);
+            let lower = titled_in_group(&l, cols, rows, Group::Lower, ascii_cols);
+            let inner = l.rects(cols, rows).lower;
+            if extra <= 2 {
+                assert_eq!(lower[2].1.w, 17 + 2, "{cols}x{rows}: `applet-relay-1 up` whole: {lower:?}");
+            }
+            assert!(lower.iter().all(|(_, t)| t.w <= 26), "{cols}x{rows} lower cap: {lower:?}");
+            let taken = |x: u16| lower.iter().any(|(_, r)| x + 1 >= r.x && x <= r.x + r.w);
+            let (mut best, mut run) = (0, 0);
+            for x in inner.x..inner.x + inner.w {
+                run = if taken(x) { 0 } else { run + 1 };
+                best = best.max(run);
+            }
+            assert!(best >= 5, "{cols}x{rows} with {extra} tabs: free run {best} < 5: {lower:?}");
+        }
+    }
 }
 
 /// `label_cols` is display columns, not characters: a CJK title of 4 characters / 6 columns gets an 8-column

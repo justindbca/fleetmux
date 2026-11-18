@@ -35,7 +35,7 @@ fn full_run() -> Layout {
     l.insert(id("advisor-1"), PaneType::Advisor);
     l.insert(id("history"), PaneType::History);
     l.insert(id("control"), PaneType::Daemon);
-    l.insert(id("evermem-shell"), PaneType::Tab);
+    l.insert(id("index-service"), PaneType::Tab);
     for w in ["worker-1", "worker-2", "worker-3"] {
         l.insert(id(w), PaneType::Worker);
     }
@@ -578,7 +578,7 @@ fn layout_json_is_protocol_layout_object_plus_version() {
         "h_ratio": 65, "v_ratio": 40, "zoom": "worker-3", "focus": "lower",
         "groups": {
             "supervisor": ["supervisor-1", "advisor-1"],
-            "lower": ["history", "control", "evermem-shell"],
+            "lower": ["history", "control", "index-service"],
             "workers": ["worker-1", "worker-2", "worker-3"],
         },
         "selected": {"supervisor": "supervisor-1", "lower": "control", "workers": null},

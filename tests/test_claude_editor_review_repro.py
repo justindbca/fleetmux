@@ -44,7 +44,7 @@ def test_v2_claude_supervisor_gets_the_routing_message(service_fleet, editor_bac
 @pytest.mark.parametrize('text', [
     # v1 Fleet.send pointer for a Claude supervisor (fleet.py:5447-5454), real run path shape
     '[Request r-20261102-1] A new request needs routing. -- the full message is in '
-    '/Users/j/stte-replay-tests/studio-wb-20261101/fleet-live/runs/fleet-20261101-120647-4f5a01f0/'
+    '/home/user/old-replay-tests/fleet-wb-20261101/fleet-live/runs/fleet-20261101-120647-4f5a01f0/'
     'agents/supervisor/.inbox/msg-20261102-101500-a1b2c3.md . Read that whole file first and follow it.',
     # subfleet.py:862 role-change prompt typed into the adopted Claude pane (378 chars)
     'Your role changed. You are now supervisor of sub-fleet M0 (workers: worker-1, worker-2). The files '

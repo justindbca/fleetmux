@@ -30,6 +30,11 @@ TIMEOUT = 10  # per probe, seconds (T3 Code raised its login probe from 4 s to 1
 GATEWAY_TIMEOUT = 3
 MODEL_KEYS = {'claude': 'worker_model', 'pi': 'pi_model', 'opencode': 'opencode_model'}
 _PATH_MARK = re.compile(r'__FLEET_PATH__(.*?)__END__', re.S)
+# Where this machine recorded the programs it found (docs/design.md §50.3): the dependency rows of the installed
+# release (~/fleetmux-current, the link install_release.sh --activate moves) and of this code's own release.
+CURRENT = Path('~/fleetmux-current')
+OWN_INSTALLED = ROOT / 'bin' / 'installed.json'
+_ENV_SHEBANG = re.compile(rb'#![ \t]*/usr/bin/env[ \t]+(?:-S[ \t]+)?([^\s/]+)')
 
 
 
@@ -52,10 +57,15 @@ def cache_path():
     return paths.home() / 'discovered.yaml'
 
 
-def search_path():
-    """The login shell's PATH first, then this process's: a GUI-started process lacks the login PATH (T3 Code
-    issue 1787), and a cmux pane's PATH starts with session-private shims that die with the session."""
-    parts = []
+def search_path(warn=None):
+    """The login shell's PATH first, then this process's, then the directories this machine recorded where it found
+    a program before (``recorded_dirs``): a GUI-started process lacks the login PATH (T3 Code issue 1787), a cmux
+    pane's PATH starts with session-private shims that die with the session, and a program in a private directory
+    (pi under its own npm prefix) is on neither when the caller is ssh. This is the one resolver for the user's
+    programs (docs/design.md §50.3): discovery, `start`, scripts/check_deps.py and applets use it. The order is fixed:
+    what the user's environment says now wins, a record is only the fallback for what it misses. When the shell
+    cannot be read, the login part is left out and ``warn`` gets one line."""
+    parts, why = [], None
     shell = os.environ.get('SHELL') or '/bin/zsh'
     try:
         out = subprocess.run([shell, '-lic', 'printf "__FLEET_PATH__%s__END__" "$PATH"'], capture_output=True,
@@ -63,9 +73,17 @@ def search_path():
         m = _PATH_MARK.search(out)
         if m:
             parts += m.group(1).split(os.pathsep)
-    except (OSError, subprocess.SubprocessError):
-        pass
+        else:
+            why = 'no PATH in its output'
+    except (OSError, subprocess.SubprocessError) as exc:
+        why = type(exc).__name__ + ': ' + str(exc)[:120]
+    if why and warn:
+        warn('login shell PATH unavailable (' + shell + ' -lic: ' + why + '); using the process PATH only')
     parts += os.environ.get('PATH', '').split(os.pathsep)
+    try:
+        parts += recorded_dirs()
+    except Exception:  # a record never breaks the lookup
+        pass
     seen = []
     for p in parts:
         if p and p not in seen:
@@ -73,19 +91,190 @@ def search_path():
     return os.pathsep.join(seen)
 
 
-def _run(cmd, timeout=TIMEOUT):
-    """(returncode, stdout + stderr) or (None, '') on a missing binary / timeout."""
+def interpreter_of(path):
+    """The program an ``#!/usr/bin/env <name>`` script runs under (pi's cli.js: node), else None."""
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        with open(path, 'rb') as fh:
+            first = fh.read(256).split(b'\n', 1)[0]
+    except OSError:
+        return None
+    m = _ENV_SHEBANG.match(first)
+    return m.group(1).decode('utf-8', 'replace') if m else None
+
+
+def locate(name, search):
+    """Where ``name`` is on ``search``, as recorded (docs/design.md §50.3): ``path`` (links followed, the install
+    itself), ``dir`` (the PATH entry it was found in, reusable as a PATH entry) and, for an ``#!/usr/bin/env``
+    script, ``interpreter`` / ``interpreter_path`` / ``interpreter_dir`` of that interpreter on the same search.
+    None when it is not there."""
+    found = shutil.which(name, path=search)
+    if not found:
+        return None
+    path = os.path.realpath(found)
+    row = {'path': path, 'dir': os.path.dirname(os.path.abspath(found))}
+    interp = interpreter_of(path)
+    if interp:
+        hit = shutil.which(interp, path=search)
+        row.update(interpreter=interp, interpreter_path=os.path.realpath(hit) if hit else None,
+                   interpreter_dir=os.path.dirname(os.path.abspath(hit)) if hit else None)
+    return row
+
+
+def _installed_rows(path):
+    try:
+        path = Path(os.path.realpath(Path(path).expanduser()))
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    rows = data.get('dependencies') if isinstance(data, dict) else None
+    return [(r['name'], r, str(path)) for r in rows if isinstance(r, dict) and isinstance(r.get('name'), str)] \
+        if isinstance(rows, list) else []
+
+
+def _discovered_rows():
+    """The discovery rows (``clis``), read only: the models block of fleet-superpowers.yaml, then discovered.yaml.
+    Never ``load()``: its one-time migration writes."""
+    out = []
+    try:
+        from . import fleet_superpowers
+        blocks = [(fleet_superpowers.read_block('models'), str(fleet_superpowers.file_path()))]
+    except Exception:
+        blocks = []
+    try:
+        blocks.append((yaml.safe_load(cache_path().read_text()), str(cache_path())))
+    except (OSError, yaml.YAMLError):
+        pass
+    for data, source in blocks:
+        clis = data.get('clis') if isinstance(data, dict) else None
+        for name, row in (clis.items() if isinstance(clis, dict) else ()):
+            if isinstance(name, str) and isinstance(row, dict):
+                out.append((name, row, source))
+    return out
+
+
+def recorded():
+    """[(name, row, source file)] of every program this machine recorded, read only, never raising: the installed
+    release's installed.json ``dependencies`` (~/fleetmux-current), this code's own release's, then discovery."""
+    rows = _installed_rows(CURRENT / 'bin' / 'installed.json')
+    if os.path.realpath(Path(CURRENT).expanduser() / 'bin' / 'installed.json') != os.path.realpath(OWN_INSTALLED):
+        rows += _installed_rows(OWN_INSTALLED)
+    return rows + _discovered_rows()
+
+
+def _usable(d, name, path):
+    """A recorded directory counts only while it still holds the recorded program, and never when it is a release's
+    own bin/ (an older release's fleetmux binaries must not shadow the ones being checked or linked)."""
+    if not all(isinstance(v, str) and v for v in (d, name, path)) or not os.path.isabs(d) or not os.path.isdir(d):
+        return False
+    if os.path.basename(d) == 'bin' and os.path.isfile(os.path.join(d, 'installed.json')):
+        return False
+    hit = os.path.join(d, name)
+    return os.access(hit, os.X_OK) and os.path.realpath(hit) == path
+
+
+def _derived(path):
+    """Directories an older row (``path`` only, no ``dir``) may have come from: the file's own directory, and for an
+    npm package (``<prefix>/lib/node_modules/...``, pi's cli.js) the prefix's bin/."""
+    if not isinstance(path, str):
+        return []
+    out = [os.path.dirname(path)]
+    if '/lib/node_modules/' in path:
+        out.append(path.split('/lib/node_modules/', 1)[0] + '/bin')
+    return out
+
+
+def recorded_dirs():
+    """The directories of ``recorded()`` that still hold the recorded program (see ``_usable``), in record order."""
+    out = []
+    for name, row, _ in recorded():
+        path = row.get('path')
+        for d in ([row.get('dir')] if 'dir' in row else _derived(path)):
+            if _usable(d, name, path) and d not in out:
+                out.append(d)
+        d = row.get('interpreter_dir')
+        if _usable(d, row.get('interpreter'), row.get('interpreter_path')) and d not in out:
+            out.append(d)
+    return out
+
+
+def last_found_at(name):
+    """(path, source file) of the first record of ``name``, or None."""
+    for n, row, source in recorded():
+        if n == name and isinstance(row.get('path'), str) and row['path']:
+            return row['path'], source
+    return None
+
+
+def last_found(name):
+    """The hint for a missing program: 'last found at <path> (recorded in <file>)', or None without a record."""
+    hit = last_found_at(name)
+    return 'last found at ' + hit[0] + ' (recorded in ' + hit[1] + ')' if hit else None
+
+
+def run_dirs(program):
+    """Directories to append to the process PATH so ``program`` runs: the directory of its ``#!/usr/bin/env``
+    interpreter found on search_path() (pi -> node) when the process PATH lacks it; [] otherwise and when discovery
+    is off (tests, scripted starts)."""
+    if not program or os.environ.get(OFF_ENV, '').strip().lower() == 'off':
+        return []
+    interp = interpreter_of(os.path.realpath(program))
+    if not interp or shutil.which(interp):
+        return []
+    hit = which(interp)
+    return [os.path.dirname(os.path.abspath(hit))] if hit else []
+
+
+_SEARCH = []
+
+
+def which(name):
+    """Absolute path of ``name`` on search_path() (probed once per process), or None. None as well when discovery
+    is off (tests, scripted starts): those callers see only the process PATH."""
+    if os.environ.get(OFF_ENV, '').strip().lower() == 'off':
+        return None
+    if not _SEARCH:
+        _SEARCH.append(search_path(warn=lambda line: print('fleetmux: ' + line, file=sys.stderr)))
+    return shutil.which(name, path=_SEARCH[0])
+
+
+def deps_programs():
+    """deps.yaml `programs` (the packaged copy, kept equal to the checkout's by tests/test_setup_install.py), else {}
+    (versions are then shown, not judged)."""
+    try:
+        return (yaml.safe_load(Path(__file__).resolve().with_name('deps.yaml').read_text()) or {}).get('programs') or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def below_min(cli, text):
+    """One line when ``text`` (the output of `<cli> --version`) is a version below the deps.yaml minimum of that
+    agent CLI, else None (also when the version is unreadable or there is no minimum)."""
+    need = (deps_programs().get(cli) or {}).get('min')
+    have = version(text)
+    if not need or have is None or at_least(have, need):
+        return None
+    return (cli + ' ' + '.'.join(map(str, have)) + ' is below ' + str(need)
+            + ' (deps.yaml): not used by fleets on this machine; choose another CLI (`fleetmux setup` lists the usable ones)')
+
+
+def _run(cmd, timeout=TIMEOUT, search=None):
+    """(returncode, stdout + stderr) or (None, '') on a missing binary / timeout. ``search`` goes first on the child's
+    PATH (the process PATH after it), so an ``#!/usr/bin/env node`` CLI finds the node of the same lookup."""
+    env = None
+    if search:
+        dirs = search.split(os.pathsep) + os.environ.get('PATH', '').split(os.pathsep)
+        env = dict(os.environ, PATH=os.pathsep.join(dict.fromkeys(d for d in dirs if d)))
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
         return done.returncode, (done.stdout or '') + (done.stderr or '')
     except (OSError, subprocess.SubprocessError):
         return None, ''
 
 
-def _login(name, path):
+def _login(name, path, search=None):
     """{logged_in: True / False / None, auth_method?} -- whitelisted fields only."""
     if name == 'claude':
-        code, out = _run([path, 'auth', 'status'])
+        code, out = _run([path, 'auth', 'status'], search=search)
         try:
             data = json.loads(out[out.index('{'):])
         except ValueError:
@@ -95,20 +284,24 @@ def _login(name, path):
             row['auth_method'] = data['authMethod']
         return row
     if name == 'codex':
-        code, out = _run([path, 'login', 'status'])
+        code, out = _run([path, 'login', 'status'], search=search)
         low = out.lower()
         if 'not logged in' in low:
             return {'logged_in': False}
-        return {'logged_in': True} if code == 0 and 'logged in' in low else {'logged_in': None}
+        if not (code == 0 and 'logged in' in low):
+            return {'logged_in': None}
+        # "Logged in using ChatGPT" (codex-cli 0.164.0): the only method kept; any other text, an API key line
+        # with its masked key included, is dropped and the reach probe falls back to the API host.
+        return dict({'logged_in': True}, **({'auth_method': 'chatgpt'} if 'logged in using chatgpt' in low else {}))
     return {'logged_in': None}
 
 
-def _models(name, path, claude_models):
+def _models(name, path, claude_models, search=None):
     """Model ids a CLI can run now, or None when it has no listing we use."""
     if name == 'claude':
         return list(claude_models)
     if name == 'pi':
-        code, out = _run([path, '--list-models'])
+        code, out = _run([path, '--list-models'], search=search)
         if code != 0:
             return []
         rows, table = [], False
@@ -120,10 +313,10 @@ def _models(name, path, claude_models):
                 rows.append(cols[0] + '/' + cols[1])
         return rows
     if name == 'opencode':
-        code, out = _run([path, 'models'])
+        code, out = _run([path, 'models'], search=search)
         return [ln.strip() for ln in out.splitlines() if code == 0 and re.fullmatch(r'[\w.\-]+/\S+', ln.strip())]
     if name == 'ollama':
-        code, out = _run([path, 'list'])
+        code, out = _run([path, 'list'], search=search)
         if code != 0:
             return None  # installed, server not running (or not answering)
         return [ln.split()[0] for ln in out.splitlines()[1:] if ln.split()]
@@ -131,16 +324,17 @@ def _models(name, path, claude_models):
 
 
 def probe_cli(name, need, search, claude_models):
-    found = shutil.which(name, path=search)
-    if not found:
+    where = locate(name, search)
+    if not where:
         return {'installed': False}
-    path = os.path.realpath(found)
-    code, out = _run([path, '--version'])
+    path = where['path']
+    code, out = _run([path, '--version'], search=search)
     have = version(out) if code == 0 else None
     row = {'installed': True, 'path': path, 'version': '.'.join(map(str, have)) if have else None,
            'min': need, 'version_ok': (at_least(have, need) if need else have is not None)}
-    row.update(_login(name, path))
-    models = _models(name, path, claude_models)
+    row.update((k, v) for k, v in where.items() if k != 'path')  # dir / interpreter*: reusable by the next lookup
+    row.update(_login(name, path, search=search))
+    models = _models(name, path, claude_models, search=search)
     if models is not None:
         row['models'] = models
         if name in ('pi', 'opencode') and row['logged_in'] is None:
@@ -304,10 +498,7 @@ def run(cfg=None, search=None, pi_dir=None, pairs=None, claude_models=None):
     search = search_path() if search is None else search
     if claude_models is None:
         claude_models = [m['model'] for m in (fleet_config.block('models') or {}).values() if m.get('cli') == 'claude']
-    try:  # minimums from deps.yaml when the checkout ships it; without it versions are shown, not judged
-        deps = (yaml.safe_load((ROOT / 'deps.yaml').read_text()) or {}).get('programs') or {}
-    except (OSError, yaml.YAMLError):
-        deps = {}
+    deps = deps_programs()
     names = list(dict.fromkeys(list(cfg.get('cli_order') or []) + list(cfg.get('report_only') or [])))
     with ThreadPoolExecutor(max_workers=len(names) + 1) as pool:
         jobs = {n: pool.submit(probe_cli, n, (deps.get(n) or {}).get('min'), search, claude_models) for n in names}
@@ -339,7 +530,8 @@ def fixes(clis, choice):
              'opencode': 'opencode auth login'}
     for name, row in clis.items():
         if row.get('installed') and not row.get('version_ok'):
-            out.append(name + ' ' + str(row.get('version')) + ' is older than ' + str(row.get('min')) + ': upgrade it')
+            out.append(name + ' ' + str(row.get('version')) + ' is below ' + str(row.get('min'))
+                       + ': not used by fleets on this machine')
         elif row.get('logged_in') is False and name in hints:
             out.append(name + ' is not logged in: run `' + hints[name] + '`')
         elif name == 'ollama' and row.get('installed') and not row.get('serving'):
@@ -351,6 +543,9 @@ def fixes(clis, choice):
 
 
 def save(result, path=None):
+    if path is None and not os.environ.get(CACHE_ENV):  # the models block of fleet-superpowers is the cache
+        from . import fleet_superpowers
+        return fleet_superpowers.write_block('models', result)
     path = path or cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + '.tmp')
@@ -363,6 +558,12 @@ def save(result, path=None):
 
 
 def load(path=None):
+    if path is None and not os.environ.get(CACHE_ENV):  # fleet-superpowers models (once from discovered.yaml)
+        from . import fleet_superpowers
+        try:
+            return fleet_superpowers.migrate('models') or None
+        except Exception:  # never stop a start: an unusable inventory reads the old cache as before
+            pass
     try:
         data = yaml.safe_load((path or cache_path()).read_text())
     except (OSError, yaml.YAMLError):
@@ -398,7 +599,9 @@ def render(result):
         lines.append('  passed over: ' + note)
     for fix in result.get('fixes') or []:
         lines.append('  to do: ' + fix)
-    lines.append('cached in ' + str(cache_path()) + '; `fleetmux setup` probes again')
+    from . import fleet_superpowers
+    where = cache_path() if os.environ.get(CACHE_ENV) else fleet_superpowers.file_path()
+    lines.append('cached in ' + str(where) + '; `fleetmux setup` probes again')
     return '\n'.join(lines)
 
 

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import test_install_release as inst  # noqa: E402  (tests/ is on sys.path: conftest imports test_fleet)
-from test_fleetmux_history import gui_world, make_run  # noqa: E402
+from test_fleetmux_history import bare_off, gui_world, make_run  # noqa: E402
 from test_install_release import APP_SHA, OTHER_SHA, make_bin_dir, make_python, world  # noqa: E402,F401
 
 from fleetmux import fleet  # noqa: E402
@@ -67,9 +67,34 @@ def test_subcommand_usage_errors_name_fleetmux():
 
 # ---- gui: never a loop --------------------------------------------------------------------------------------------
 
+def test_python_gui_with_bare_on_also_execs_only_the_runtime_form(tmp_path, monkeypatch):
+    """Bare on (default), no root: after the bare start, the only exec is `fleetmux attach --runtime <dir>` (here over
+    ssh), a form Rust handles itself, so nothing is forwarded back to Python."""
+    mgr, execs = gui_world(tmp_path, monkeypatch)
+    monkeypatch.setenv('HOME', str(tmp_path / 'user'))  # the bare home ~/.fleetmux/fleets/main is under tmp
+    monkeypatch.setattr(fleet, 'daemon_running', lambda run: False)
+    monkeypatch.setenv('SSH_CONNECTION', '10.0.0.2 50000 10.0.0.1 22')
+
+    def run_start(argv, env):
+        home = Path(env['FLEETMUX_HOME'])
+        assert str(home).startswith(str(tmp_path)), home
+        run = home / 'runs' / 'fleet-bare'
+        run.mkdir(parents=True)
+        fleet.save(run / 'config.json', {'run': str(run), 'backend': 'fleetmux'})
+        fleet.save(home / 'latest.json', {'run': str(run), 'config': str(run / 'config.json')})
+        return 0
+
+    monkeypatch.setattr(fleet, 'run_start', run_start)
+    fleet.main(['gui'])
+    assert len(execs) == 1, execs
+    _, argv = execs[0]
+    assert argv[1:3] == ['attach', '--runtime'] and argv[3] == str(mgr.runtime_root), argv
+
+
 def test_python_gui_execs_the_rust_form_with_runtime_so_it_is_never_forwarded_back(tmp_path, monkeypatch):
     """Rust forwards `fleetmux gui` without --runtime to Python; Python's gui must exec the --runtime form only."""
     mgr, execs = gui_world(tmp_path, monkeypatch)
+    bare_off(tmp_path, monkeypatch)  # the history path; the bare root path execs only --runtime forms too
     make_run(tmp_path, 'fleet-old', closed_at=1790000000)
     monkeypatch.setattr(fleet, 'daemon_running', lambda run: False)
     fleet.main(['gui'])

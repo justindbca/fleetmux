@@ -674,25 +674,25 @@ def test_sidebar_cards_carry_page_ids(request):
     cards = fleetmux_sidebar.payload(sidebar_fleet(first), history=[])['fleets']
     assert cards[0].get('page') == '' and cards[0]['id'] == first.name, cards
     assert [c.get('page') for c in cards if c['id'] == 'M0'] == ['M0'], cards
-    # (2) a retry sub/M0-attempt-2 (running) next to the reclaimed first attempt; (4) a named memx; a grandchild
+    # (2) a retry sub/M0-attempt-2 (running) next to the reclaimed first attempt; (4) a named alfa; a grandchild
     run = root / 'two' / 'fleet-20261104-000000-a1b2c3d4'
     W.sub_run(run, 'M0', 'M0', state='returned', attempt=1, outcome='failed')
     retry = W.sub_run(run, 'M0-attempt-2', 'M0', state='running', attempt=2)
     W.sub_run(retry, 'M0.1', 'M0.1', state='running', attempt=1)
-    W.sub_run(run, 'memx', 'memx', state='running', attempt=3, named=True, name='memx', mode='service')
+    W.sub_run(run, 'alfa', 'alfa', state='running', attempt=3, named=True, name='alfa', mode='service')
     tree_keys = set(subfleet.tree({'run': str(run)}))
     cards = fleetmux_sidebar.payload(sidebar_fleet(run), history=[])['fleets']
     by_id = {c['id']: c for c in cards}
     assert by_id['M0-attempt-2'].get('page') == 'M0', cards
     assert 'page' not in by_id['M0'], cards  # the older attempt's card does not claim the reused page
-    assert by_id['memx'].get('page') == 'memx' and by_id['M0.1'].get('page') == 'M0.1', cards
+    assert by_id['alfa'].get('page') == 'alfa' and by_id['M0.1'].get('page') == 'M0.1', cards
     # (3) every page id is a valid page id, never a tree() display key
     for c in cards:
         if 'page' in c and c['page'] != '':
             assert W.PAGE_ID.match(c['page']) and ' (' not in c['page'], c
     assert len([c for c in cards if c.get('page') == 'M0']) == 1
     # (5) subfleet.tree() keeps its M3 keys
-    assert tree_keys == {'M0', 'M0 (M0-attempt-2)', 'memx'}, tree_keys
+    assert tree_keys == {'M0', 'M0 (M0-attempt-2)', 'alfa'}, tree_keys
     assert len(cards) <= fleetmux_sidebar.MAX_FLEETS
 
 

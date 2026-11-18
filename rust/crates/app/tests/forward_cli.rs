@@ -1,7 +1,8 @@
 //! One command name (docs/design.md §50): `fleetmux` keeps its own subcommands and hands every other one to the
 //! Python fleet CLI of the same release, by `exec` (argv, stdin / stdout / stderr and the exit code pass through
 //! untouched). `gui --runtime D` stays here; `gui` without `--runtime` goes to Python, whose `gui` execs back the
-//! `--runtime` form only (pinned in tests/test_fleetmux_command.py), so there is no loop.
+//! `--runtime` form only (pinned in tests/test_fleetmux_command.py), so there is no loop. No arguments at all is
+//! forwarded as `gui` (the root fleet's window, docs/design.md section 50).
 //!
 //! The Python CLI is found at, in order: `$FLEETMUX_PYTHON_CLI` (an executable, run as is), the release this
 //! binary sits in (`<release>/bin/fleetmux` → `<release>/.venv/bin/python <release>/fleetmux/fleet.py`),
@@ -359,11 +360,37 @@ fn help_lists_our_subcommands_and_points_at_the_fleet_commands() {
 }
 
 #[test]
-fn no_arguments_is_still_a_usage_error() {
-    let out = Command::new(BIN).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
+fn dash_h_still_prints_usage_and_exits_0() {
+    let out = Command::new(BIN).arg("-h").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("usage: fleetmux"),
+        String::from_utf8_lossy(&out.stdout).starts_with("usage: fleetmux "),
         "{out:?}"
+    );
+}
+
+/// Bare `fleetmux` opens the root fleet's window: it is `fleetmux gui`, handed to the Python CLI (design.md §50).
+#[test]
+fn no_arguments_forwards_gui_to_the_python_cli() {
+    let t = TempDir::new();
+    let cli = t.path().join("fake-cli");
+    write_exe(&cli, FAKE);
+    let argv = t.path().join("argv");
+    let out = run(Path::new(BIN), &[], t.path(), Some(&cli), &argv, "in");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "exit code passes through: {out:?}"
+    );
+    assert_eq!(
+        argv_of(&argv),
+        vec![cli.display().to_string(), "gui".to_string()],
+        "bare fleetmux runs `<python cli> gui`"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "out:in");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "err-from-python\n");
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("usage:"),
+        "no usage error any more: {out:?}"
     );
 }

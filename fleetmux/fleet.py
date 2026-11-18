@@ -56,9 +56,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # runnable as a script (actor/notify argv point at this file)
 from fleetmux import advisor, brake, claude_hook, cli_pairs, codex_queue, contracts, fleet_config, fleetmux_sidebar, handoff, history, kit as kitmod, lifecycle, lifecycle_close, lifecycle_deliver, lifecycle_hold, model_usage, named_subfleet, night, peer, pi_adapter, profile_runtime, profile_launch, roster, runtime_v2, redis_runtime, session_board, subfleet, tabs, terminal_theme, watchdog  # noqa: E402
 from fleetmux.platform import keep_awake_prefix  # noqa: E402
+from fleetmux import gui_keep  # noqa: E402
+from fleetmux import applet_host  # noqa: E402
+from fleetmux import applet_view  # noqa: E402
+from fleetmux import applet_lease  # noqa: E402
+from fleetmux import session_env  # noqa: E402
 from fleetmux import clear_after_result, discover, dsh_adapter, midturn, opencode_adapter  # noqa: E402
 from fleetmux import sandbox  # noqa: E402  (P8o)
+from fleetmux import awake  # noqa: E402  (§35: deadlines in awake time)
 from fleetmux import paths  # noqa: E402  (§50.1)
+from fleetmux import releases  # noqa: E402  (§56)
 from fleetmux.agent_registry import AgentRegistry, AgentRegistryError  # noqa: E402
 from fleetmux.assignment import assign_profiles  # noqa: E402
 from fleetmux.handoff import read_usage  # noqa: E402
@@ -136,6 +143,15 @@ CONTRACTS = 'fx:contracts'  # contract tasks only: one JSON state document (flee
 ESCALATIONS = 'fx:escalations'  # task mode: {task id: worker's split request / approval / delegation} (§20)
 ITEMS = 'fx:items'  # plain task mode: {dispatch id: {to, instruction}} for dispatch items that carry an id
 SPLIT_STALE = 'fx:split:stale'  # P7: JSON {M<n>: request id} of service splits dropped because their request ended
+JOBS = 'fx:jobs'  # service mode, §58: JSON {job id: open job} of `fleetmux task` jobs, each run by its own sub-fleet
+JOB_PREFIX = 'job-'  # job ids
+JOB_KEYS = ('goal', 'hours', 'budget', 'artifacts', 'lifecycle', 'workers', 'supervisor_profile', 'worker_profiles',
+            'name', 'roster', 'roles', 'deliver', 'review_file', 'overrides')
+# carried to the child (subfleet.spawn_child job=); overrides: the attached start's own settings (join.py)
+JOB_SPAWN = ('name', 'roster', 'roles', 'deliver', 'review_file', 'overrides')
+JOB_ROSTER_REFUSED = ('subfleets', 'channels', 'applets')  # a job sub-fleet's roster reload would refuse these
+JOB_HOT_BASE = 'worker'  # a worker added for a job is <base>-<n> (an added roster row ends with -<number>)
+JOB_TRIES = 3  # a job whose sub-fleet could not start this many times fails
 ESCALATION_DECISIONS = ('approve', 'revise', 'reject')
 # Plan F' 8.3 / 8.4: escalations the supervisor rules on instead of the user (keys in fx:escalations).
 DIALOG_KEY, BLOCKED_KEY = 'dialog:', 'blocked:'
@@ -173,6 +189,7 @@ ADVICE, ADVICE_SEQ, ADVICE_PENDING, ADVICE_NOTES = 'fx:advice:', 'fx:advice:seq'
 # Mid-task rescue (advisor plan §3.2): supervisor consult items waiting for an idle slot, relays per task+slot.
 RESCUE, RESCUE_RELAYS = 'fx:advice:rescue', 'fx:advice:relays'
 FRESH_HINTS = 'fx:fresh:hints'  # §37 [Hint] / [Fresh failed] lines appended to the supervisor's next message
+FRESH_INTENT = 'fx:fresh:intent:'  # §45 + slot: [instruction, explicit fresh] per queued dispatch to an always worker
 SPLIT_NOTES = 'fx:split:notes'  # §44 rulings superseded by an approved split, appended the same way
 # Resident advisor slot (docs/design.md §27, v2 task mode): its tab sits in the supervisor's pane; the first
 # generation is labelled 'advisor', successors advisor-1.1, advisor-1.2 (like supervisor-1.1).
@@ -249,8 +266,8 @@ def run_backend(cfg):
 def resolve_backend(requested=None, platform=None):
     """`start --backend`: (name, reason-or-None) -- the backend to write into config.json.
 
-    No flag: cmux on macOS when cmux is usable there, otherwise WezTerm (design §5). An explicit choice
-    that is not usable is refused here, before anything is provisioned, with what is missing.
+    No flag: fleetmux on every platform (design §33.3). The chosen backend -- default or explicit -- is
+    refused here when it is not usable, before anything is provisioned, with what is missing.
     """
     from fleetmux import backends  # bound before any except clause below can run
     unknown = backends.InterfaceError
@@ -258,21 +275,8 @@ def resolve_backend(requested=None, platform=None):
         name = backends.normalize_backend(requested)
     except unknown as exc:  # --backend is validated by argparse; a config is not
         return str(requested), str(exc)
-    here = sys.platform if platform is None else platform
-    if name is None and here != 'darwin':
-        return backends.default_backend(here), None
-    if name is None:  # no --backend on macOS: cmux when usable, else WezTerm -- unless WezTerm is missing
-        name = backends.default_backend(here)
-        if name == 'wezterm':
-            try:
-                backends.unavailable_reason('wezterm')
-            except unknown:
-                name = 'cmux'  # nothing to fall through to until WezTerm ships: cmux reports why it cannot run
-        elif name == 'fleetmux':  # not a default before M3 (fleetmux plan §6); same fall-through when it is
-            try:
-                backends.unavailable_reason('fleetmux')
-            except unknown:
-                name = 'cmux'
+    if name is None:
+        name = backends.default_backend(sys.platform if platform is None else platform)
     try:
         return backends.check_backend(name), None
     except unknown as exc:
@@ -459,6 +463,96 @@ def install_kit(kit, cwd):
         shutil.copytree(kit / '.claude', cwd / '.claude', dirs_exist_ok=True)
     if (kit / 'mcp.json').exists():
         shutil.copy(kit / 'mcp.json', cwd / 'mcp.json')
+
+
+PROJECT_FLEET_DIR = '.fleetmux'  # start --project-dir: runs under <project>/.fleetmux/runs (user 2026-11-11)
+
+
+def exclude_project_fleet_dir(project):
+    """Add ``.fleetmux/`` to the git exclude of the repository that holds ``project`` (info/exclude, never a
+    tracked .gitignore), once: a line already there is left alone. Returns the exclude path, None outside git."""
+    try:
+        out = subprocess.run(['git', '-C', str(project), 'rev-parse', '--path-format=absolute', '--git-path',
+                              'info/exclude'], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    path = Path(out.stdout.strip())
+    line = PROJECT_FLEET_DIR + '/'
+    text = path.read_text() if path.exists() else ''
+    if any(l.strip().strip('/') == PROJECT_FLEET_DIR for l in text.splitlines()):
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a') as f:
+        f.write(('' if not text or text.endswith('\n') else '\n') + line + '\n')
+    return path
+
+
+IMPORTED_MCP_MARK = '.fleet-imported-mcp'  # names this fleet merged into cwd/mcp.json (roster `import_mcp`)
+
+
+def roster_imports(cfg):
+    """(claude_md_paths, mcp_servers) of the run's roster ``import_claude_md`` / ``import_mcp`` (user 2026-11-11);
+    ([], {}) without a roster, without the keys, or when the roster cannot be read now."""
+    path = cfg.get('roster')
+    try:
+        return roster.imports(Path(path).read_bytes(), Path(path).parent) if path else ([], {})
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return [], {}
+
+
+def imported_rules(cfg, native_user_memory=False):
+    """The roster's ``import_claude_md`` files, appended to every agent's AGENTS.md / CLAUDE.md; '' without any.
+    Copied, not an ``@path`` line: trust_claude_dir answers Claude Code's "Allow external CLAUDE.md file imports?"
+    with No for each agent cwd (an unattended pane would sit on that dialog), so an import of a file outside the
+    cwd would silently never load. Read at each spawn: an edited file reaches the next generation.
+    ``native_user_memory``: this agent is a Claude Code session that loads ~/.claude/CLAUDE.md itself (no
+    --setting-sources project), so that file is not copied a second time."""
+    out = ''
+    user_md = str((Path.home() / '.claude' / 'CLAUDE.md').resolve())
+    for path in roster_imports(cfg)[0]:
+        if native_user_memory and path == user_md:
+            continue
+        try:
+            text = Path(path).read_text()
+        except OSError:
+            continue
+        out += ('\n\n## Imported project rules (`' + path + '`)\n\n'
+                'Copied from that file when this session started. Where it conflicts with the fleet rules above (the '
+                'reply format, who may change your task, where you may write), the fleet rules win. Relative paths in '
+                'it are relative to `' + str(Path(path).parent) + '`.\n\n' + text.rstrip() + '\n')
+    return out
+
+
+def install_imported_mcp(cfg, cwd):
+    """Merge the roster's ``import_mcp`` servers into a Claude agent's cwd/mcp.json (passed as --mcp-config). A
+    kit's own server of the same name wins. Without the key, the servers this fleet merged earlier are dropped:
+    a cwd/mcp.json the fleet wrote alone (no kit mcp.json) is removed."""
+    cwd = Path(cwd)
+    target, mark = cwd / 'mcp.json', cwd / IMPORTED_MCP_MARK
+    kit = cfg.get('worker_kit')
+    kit_mcp = bool(kit) and (Path(kit).expanduser() / 'mcp.json').exists()  # copied into cwd at this spawn
+    servers = roster_imports(cfg)[1]
+    if not servers:
+        if mark.exists():
+            mark.unlink()
+            if not kit_mcp and target.exists():
+                target.unlink()
+        return
+    data = {}
+    if target.exists() and (kit_mcp or not mark.exists()):  # the kit's copy, or a file the fleet never wrote
+        try:
+            data = json.loads(target.read_text())
+        except ValueError:
+            data = {}
+    if not isinstance(data, dict) or not isinstance(data.get('mcpServers', {}), dict):
+        data = {}
+    merged = data.setdefault('mcpServers', {})
+    for name, entry in servers.items():
+        merged.setdefault(name, entry)
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    mark.write_text(json.dumps(sorted(servers)))
 
 
 def claude_transcript_usage(path, window):
@@ -668,12 +762,14 @@ def hook_delivered(r, k, thread, lease):
             and (not lease.get('current_delivery') or bind.get('delivery_id') == lease.get('current_delivery')))
 
 
-def hook_session(cfg, r, name, generation, thread, parent):
+def hook_session(cfg, r, name, generation, thread, parent, transcript=''):
     """(keys, alive, accept) of one hook process; shared by the Stop hook and its rewake fallback.
 
     ``accept(entry, via)`` re-validates an entry at hand-over: a delivery must still be this
     session's received lease (v2) or the pointer the daemon sent last (v1); anything else is
     dropped as stale (audit ``hook.dropped``). It writes the bind on success and returns the text.
+    The bind carries the size of ``transcript`` at that moment (``offset``): Claude Code writes the
+    row of this hand-over after it, so an older row of the same text is not this delivery's.
     """
     bus = runtime_v2.bus_for(cfg, r) if cfg.get('transport_version') == 2 else None
     k = hook_keys(cfg, r, name, generation)
@@ -715,8 +811,12 @@ def hook_session(cfg, r, name, generation, thread, parent):
         else:
             return drop(entry, 'unknown hook entry')
         bind = {x: entry.get(x) for x in ('kind', 'message_id', 'delivery_id', 'msg_id') if x in entry}
+        try:
+            offset = os.path.getsize(transcript)
+        except (OSError, TypeError, ValueError):
+            offset = 0
         r.set(k['bind'], json.dumps(dict(bind, generation=generation, session_id=thread or '', via=via,
-                                         at=time.time())), ex=claude_hook.BIND_TTL)
+                                         at=time.time(), offset=offset)), ex=claude_hook.BIND_TTL)
         if via != 'stop':
             audit('hook.rewake', entry, level='warn')
         return entry.get('text')
@@ -759,7 +859,7 @@ def claude_hook_next(cfg, name, generation, thread, deadline, transcript='', own
             time.sleep(claude_hook.POLL)
             continue
         try:
-            k, alive, accept = hook_session(cfg, r, name, generation, thread, parent)
+            k, alive, accept = hook_session(cfg, r, name, generation, thread, parent, transcript)
             here = (cfg.get('run'), name, int(generation))
             if own is not None:
                 live = alive
@@ -840,7 +940,8 @@ def claude_rewake(cfg_path, name, generation, raw):
     It never acts while another turn of the session runs (``claude_hook.TurnWatch`` on the Stop's
     transcript): a turn the Stop hook did not start (operator after Escape or ctrl+x ctrl+s, a peer
     message, a background task) ends with its own Stop, whose hooks take over. Escape or a
-    StopFailure ending that turn makes this fallback eligible again.
+    StopFailure ending that turn makes this fallback eligible again. Started at a StopFailure, it
+    also counts a turn that queued entries started right at the failure, before this hook ran.
 
     Runs in the background at every Stop. Only the newest one per slot acts: if this generation's
     mailbox holds an entry while neither a waiting nor a settling Stop hook exists for
@@ -874,7 +975,8 @@ def claude_rewake(cfg_path, name, generation, raw):
     hook_on_sigterm()
     thread, parent = data.get('session_id'), os.getppid()
     deadline = started + claude_hook.hook_timeout(cfg) - claude_hook.margin(cfg)
-    watch = claude_hook.TurnWatch(data.get('transcript_path') or '')
+    watch = claude_hook.TurnWatch(data.get('transcript_path') or '',
+                                  failed=data.get('hook_event_name') == 'StopFailure')
     mine = None
     rearm_started = time.time()
     while time.monotonic() < deadline and parent != 1:
@@ -890,7 +992,8 @@ def claude_rewake(cfg_path, name, generation, raw):
             time.sleep(claude_hook.POLL)
             continue
         try:
-            k, alive, accept = hook_session(cfg, r, name, generation, thread, parent)
+            k, alive, accept = hook_session(cfg, r, name, generation, thread, parent,
+                                            data.get('transcript_path') or '')
             here = (cfg.get('run'), name, int(generation))
             if mine is None:
                 mine = r.incr(k['rewake'])
@@ -1002,7 +1105,8 @@ def split_nudge(r, k, info):
 
 def claude_stop_failure(cfg_path, name, generation, raw):
     """Claude Code StopFailure hook (output ignored): an API error ended the turn, so no Stop hook
-    waits for the next delivery. Record it. A v2 worker also posts a ``stop_failure`` event (no wait):
+    waits for the next delivery. Record it. A v2 agent (worker, supervisor, advisor) also posts a ``stop_failure``
+    event (no wait):
     the daemon settles its in-flight delivery as not adopted and holds only that slot for a backoff
     (docs/design.md §24). Task mode re-delivers the same instruction; service mode fails the request
     (never re-sent) and, on a model refusal (``refusal``), gives the slot a fresh session.
@@ -1028,9 +1132,15 @@ def claude_stop_failure(cfg_path, name, generation, raw):
             r.rpush(LOG, json.dumps(dict(fields, time=time.time(), kind='hook.stop_failure'), ensure_ascii=False))
         if claude_hook.enabled(cfg, name, claude=True):
             # The turn ended without a Stop: a waiting rewake fallback may act again (TurnWatch.ended).
+            # When it ended, by the transcript's clock: this hook runs after a queued entry may have
+            # started the next turn, which the mark must not end.
             k = hook_keys(cfg, r, name, int(generation))
-            r.set(k['turnend'], str(time.time()), ex=claude_hook.BIND_TTL)
-            if cfg.get('transport_version') == 2 and name not in ('supervisor', ADVISOR):
+            ended = claude_hook.failure_end(claude_hook.tail_rows(data.get('transcript_path') or ''))
+            r.set(k['turnend'], str(ended or time.time()), ex=claude_hook.BIND_TTL)
+            if cfg.get('transport_version') == 2:
+                # Workers, the supervisor (also a sub-fleet's adopted one, routed above) and the advisor all post it:
+                # the daemon settles the turn (design.md §24 "Supervisor StopFailure"; the advisor takes §27's fault
+                # branch). Before 2026-11-14 a supervisor posted nothing and stayed "busy" until the watchdog froze it.
                 ev = dict(kind='stop_failure', agent=name, generation=int(generation), run_id=bus.run_id,
                           thread=data.get('session_id'), error=fields['error'],
                           text=str(data.get('last_assistant_message') or data.get('error_details') or '')[:1000],
@@ -1267,6 +1377,8 @@ def parse_decision(text, workers, others_active):
             raise ValueError('dispatch.advise_note must be text')
         if 'fresh' in item and type(item['fresh']) is not bool:
             raise ValueError('dispatch.fresh must be true or false')
+        if 'review' in item and type(item['review']) is not bool:
+            raise ValueError('dispatch.review must be true or false')
     escalations = validate_escalations(decision)
     report_up = validate_report_up(decision, workers)
     if 'advisor' in decision and decision['advisor'] not in ('on', 'off'):
@@ -1331,6 +1443,39 @@ def task_waiting(task):
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def task_deadline(task, now=None):
+    """The task's deadline in awake seconds (0 = none; fleetmux/awake.py, §35: the time the machine slept does not
+    use the ``hours`` budget). While a sub-fleet waits for the top supervisor's ruling on a report_up (§46) its
+    clock is stopped: ``report_wait_at`` (awake) is set and the deadline moves with the time. ``now``: awake."""
+    deadline = float((task or {}).get('deadline') or 0)
+    since = (task or {}).get('report_wait_at')
+    if deadline and since:
+        deadline += max(0.0, (awake.now() if now is None else now) - float(since))
+    return deadline
+
+
+def task_clock(task, now=None):
+    """``status``: add ``clock_paused_s`` (time the task clock stood still for report_up rulings, §46) and
+    ``clock`` (paused / running) to the task hash ``task`` when its clock was ever stopped, and the budget in
+    awake time: ``budget_remaining_s`` and, from ``budget_s``, ``budget_used_s``; returns it. ``now``: the fleet's
+    awake time (``awake.of(r).now()`` outside the daemon)."""
+    if not isinstance(task, dict):
+        return task
+    now = awake.now() if now is None else now
+    if task.get('report_wait_at') or task.get('report_wait_s'):
+        since = float(task.get('report_wait_at') or 0)
+        waited = now - since if since else 0
+        task['clock_paused_s'] = round(float(task.get('report_wait_s') or 0) + waited, 1)
+        task['clock'] = 'paused: report_up awaiting the top ruling' if since else 'running'
+    deadline = task_deadline(task, now)
+    if deadline:
+        left = max(0.0, deadline - now)
+        task['budget_remaining_s'] = round(left, 1)
+        if task.get('budget_s'):
+            task['budget_used_s'] = round(max(0.0, float(task['budget_s']) - left), 1)
+    return task
 
 
 def validate_escalations(decision):
@@ -1565,6 +1710,8 @@ def parse_service_decision(text, workers):
     validate_report_up(decision, workers)
     if decision.get('subfleet') is not None:  # §29: approve / reject one external sub-fleet up / down
         named_subfleet.validate_decision(decision['subfleet'])
+    if decision.get('applet') is not None:  # applet-interface.md 3.5: lease / escalation / control answers
+        applet_lease.validate_decision(decision['applet'])
     return decision
 
 
@@ -1705,8 +1852,9 @@ def notify(cfg_path, name, generation, payload, sessions=None):
 
 class Prompt(str):
     """A transcript prompt with where it came from: ``hook`` (a Stop-hook feedback or rewake row, i.e. a
-    hook-channel delivery) or ``user`` (typed / CLI argument). Plain strings count as ``hook``."""
-    origin = 'hook'
+    hook-channel delivery) or ``user`` (typed / CLI argument). Plain strings count as ``hook``.
+    ``at``: the byte offset of its transcript row (None when unknown)."""
+    origin, at = 'hook', None
 
 
 def claude_user_prompts(path, count=3):
@@ -1717,15 +1865,32 @@ def claude_user_prompts(path, count=3):
     """
     out = collections.deque(maxlen=count)
     try:
-        with open(path, errors='replace') as f:
-            for line in f:
-                if '"user"' not in line:
+        with open(path, 'rb') as f:
+            end = 0
+            for raw in f:
+                at, end = end, end + len(raw)
+                line = raw.decode(errors='replace')
+                if '"user"' not in line and '"queued_command"' not in line:
                     continue
                 try:
                     row = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(row, dict) or row.get('type') != 'user' or row.get('isSidechain'):
+                if not isinstance(row, dict) or row.get('isSidechain'):
+                    continue
+                if row.get('type') == 'attachment':
+                    # A rewake notification Claude Code absorbed into the running turn has no user row, only a
+                    # queued_command attachment: still a hook-channel delivery. Other absorbed lines are skipped.
+                    att = row.get('attachment') if isinstance(row.get('attachment'), dict) else {}
+                    came = att.get('origin') if isinstance(att.get('origin'), dict) else {}
+                    text = (claude_hook.rewake_text(att.get('prompt')) if att.get('type') == 'queued_command'
+                            and came.get('kind') == 'task-notification' else None)
+                    if text:
+                        prompt = Prompt(text)
+                        prompt.origin, prompt.at = 'hook', at
+                        out.append(prompt)
+                    continue
+                if row.get('type') != 'user':
                     continue
                 message, came = row.get('message'), row.get('origin')
                 content, origin = (message if isinstance(message, dict) else {}).get('content'), 'user'
@@ -1741,7 +1906,7 @@ def claude_user_prompts(path, count=3):
                     content = '\n'.join(p.get('text', '') for p in content if isinstance(p, dict) and p.get('type') == 'text')
                 if isinstance(content, str) and content.strip() and not content.startswith('[Request interrupted by user'):
                     prompt = Prompt(content)
-                    prompt.origin = origin
+                    prompt.origin, prompt.at = origin, at
                     out.append(prompt)
     except (OSError, TypeError):
         pass
@@ -1858,7 +2023,7 @@ def supervisor_yield_wait(cfg, r, name, generation, thread):
     k = hook_keys(cfg, r, name, generation)
     # Persistent until resolved: expiry must not turn uncertainty into permission to deliver.
     mark = json.dumps(dict(run_id=bus.run_id, slot=name, generation=generation,
-                           session_id=thread, deadline=time.time() + claude_hook.HUMAN_HOLD))
+                           session_id=thread, deadline=awake.of(r).deadline(claude_hook.HUMAN_HOLD)))  # the hook is not the daemon
     r.set(k['yield_wait'], mark, nx=True)
 
 
@@ -2082,13 +2247,22 @@ def tui_turn(cfg, name, generation, *, thread, transcript, text, inputs, wait=No
             if codex:  # official Codex: the queued delivery's token binding (codex_queue.bound)
                 return codex_bound(lease.get('current_delivery') or '')
             # Hook channel: this session's Stop hook must have handed over this very delivery, and it
-            # must be the row that started this turn (its isMeta "Stop hook feedback" row is the latest
-            # prompt, see claude_user_prompts): an older feedback row never settles a manual turn, nor
+            # must be this turn's latest hook input (its isMeta "Stop hook feedback" row, its rewake row,
+            # or the rewake notification absorbed into this running turn, see claude_user_prompts): an
+            # older feedback row never settles a manual turn, nor
             # does an operator line that repeats the delivery text word for word (origin 'user').
+            # The row must also lie after the hand-over (the bind's transcript offset): retries of one
+            # instruction share their text, and the row of an earlier one is not this delivery's.
             if k is None:
                 return runtime_v2.turn_answers(body_text, inputs)
-            return (bool(inputs) and getattr(inputs[-1], 'origin', 'hook') == 'hook'
-                    and runtime_v2.turn_answers(body_text, inputs[-1:]) and hook_delivered(r, k, thread, lease))
+            if not (inputs and getattr(inputs[-1], 'origin', 'hook') == 'hook'
+                    and runtime_v2.turn_answers(body_text, inputs[-1:]) and hook_delivered(r, k, thread, lease)):
+                return False
+            at = getattr(inputs[-1], 'at', None)
+            if at is not None and at < int(hook_bind(r, k).get('offset') or 0):
+                why.append('the latest hook input was written before this delivery was handed over')
+                return False
+            return True
 
         def ignored(reason):
             # §21: a turn no delivery started (a peer SendMessage woke it, or the operator typed):
@@ -2219,6 +2393,9 @@ REVIEW_POINTER = ('\n## Review instructions\n\nWhen an instruction asks you to r
                   'and follow it for that instruction: the top principle is to go live quickly and run normally '
                   'after go-live, rounds narrow, P2 items are deferred. It does not apply to other work.\n')
 
+VERDICT_SECTION = ('\n## Verdict file for this run\n\nThis run decides delivery from your verdict JSON (R6). Write it to '
+                   'exactly this path, every round:\n\n`<path>`\n')
+
 # Every Claude Code the fleet starts: never self-update. An isolated config (CLAUDE_CONFIG_DIR) has no
 # autoupdater setting of its own, and on 2026-10-14 01:36 such an auto-update broke the shared install.
 CLAUDE_ENV = {'DISABLE_AUTOUPDATER': '1'}
@@ -2245,10 +2422,10 @@ def claude_argv(cfg_path, cfg, name, generation, prompt, resume=None):
         # An API error ends the turn with StopFailure instead of Stop: no hook waits afterwards.
         hooks['StopFailure'] = [{'hooks': [{'type': 'command', 'timeout': 30, 'command': shlex.join(
             [cfg['python'], str(Path(__file__).resolve()), 'claude-stop-failure', str(cfg_path), name, str(generation)])}]}]
-        if name not in ('supervisor', ADVISOR):
+        if name != ADVISOR:
             # After a StopFailure the slot gets work again (§24: task mode re-delivers the instruction, service
-            # mode the next request); after a turn the rewake itself started fails, no Stop's rewake is left
-            # to hand it over: this one does.
+            # mode the next request; a supervisor its message); after a turn the rewake itself started fails, no
+            # Stop's rewake is left to hand it over: this one does.
             hooks['StopFailure'][0]['hooks'].append(dict(hooks['Stop'][0]['hooks'][1]))
     if name != ADVISOR:
         # Mid-turn handoff (design.md §34): the daemon never types into a Claude pane; this hook hands the
@@ -2265,7 +2442,8 @@ def claude_argv(cfg_path, cfg, name, generation, prompt, resume=None):
     if name == ADVISOR:
         # Resident advisor (§27): the one-shot advisor's flags, only Read, and this file's hooks.
         settings.write_text(json.dumps(sandbox.merge_settings({'hooks': hooks, 'autoMemoryEnabled': False,
-                                        'env': dict(CLAUDE_ENV, **(claude_hook.ENV if hooked else {}))}, extra)))
+                                        'env': session_env.settings_env(cfg, 'claude', dict(
+                                            CLAUDE_ENV, **(claude_hook.ENV if hooked else {})))}, extra)))
         argv = advisor.resident_argv(cfg, cfg['run'], settings)
         if hooked:
             argv += ['--append-system-prompt', claude_hook.DECLARATION]
@@ -2286,7 +2464,7 @@ def claude_argv(cfg_path, cfg, name, generation, prompt, resume=None):
     # Consent for --dangerously-skip-permissions rides here: Claude Code keeps it in ~/.claude/settings.json,
     # which --setting-sources project (advised slots) does not read, and --settings is always read. Without
     # it the pane waits on the Bypass Permissions dialog until the startup timeout (macmini 2026-10-30..11-06).
-    data = {'hooks': hooks, 'env': dict(CLAUDE_ENV, **(claude_hook.ENV if hooked else {})),
+    data = {'hooks': hooks, 'env': session_env.settings_env(cfg, 'claude', dict(CLAUDE_ENV, **(claude_hook.ENV if hooked else {}))),
             'skipDangerousModePermissionPrompt': True}
     if advised:
         data['autoMemoryEnabled'] = False  # fleet workers have no memory layer (advisor plan §2)
@@ -2368,6 +2546,9 @@ def actor(cfg_path, name, prompt, generation=None):
         time.sleep(.1)
         info = r.hgetall(key('agent', name))
     cfg = agent_cfg(load(cfg_path), name)  # an advisor release may have rewritten this generation's snapshot
+    # Fail closed (distributed-development.md): a routed session waits here, route_wait=1, while the applet port is closed.
+    session_env.wait(cfg, agent_cli(cfg, name), r, key('agent', name), generation,
+                     ready_s=float(cfg.get('profile_ready_timeout') or DEFAULTS['profile_ready_timeout']))
     os.chdir(agent_cwd(cfg, name))
     if is_pi(cfg, name):
         os.environ.update(pi_adapter.environment(cfg_path, cfg, name, generation))
@@ -2421,6 +2602,7 @@ def actor(cfg_path, name, prompt, generation=None):
         argv = actor_argv(cfg_path, cfg, name, generation, prompt)
     else:  # agent_cli already refuses unknown CLIs; a new one must get its own branch here
         raise ValueError('no launch path for ' + agent_cli(cfg, name))
+    session_env.apply(cfg, agent_cli(cfg, name))  # rules 1 and 2, after the per-CLI update, this process only
     from fleetmux import sandbox  # P8o (C15): mode os wraps the real exec; unavailable -> raise, never unsandboxed
     argv = sandbox.os_wrap(argv, sandbox.security.policy(cfg), str(agent_cwd(cfg, name)), cfg)
     os.execvp(argv[0], argv)
@@ -2442,6 +2624,7 @@ class Fleet:
             raise ValueError('config ' + '; '.join(bad))
         self.run_dir = Path(self.cfg['run'])
         self.r, self.mgr = r, mgr
+        awake.join(r)  # §35: stamps written by this process are in the fleet's awake time from the start
         self.sessions = Path(sessions) if sessions else sessions_dir(self.cfg)
         self.workers = list(self.cfg['workers'])
         # The resident advisor tab (§27) is a slot (bus, hooks, watchdog, handoff), never a worker. A restarted
@@ -2670,8 +2853,9 @@ class Fleet:
         self.r.ltrim(LOG, -2000, -1)
         print(time.strftime('%H:%M:%S'), kind, json.dumps(data, ensure_ascii=False)[:180], flush=True)
 
-    def queue(self, name, text, front=False):
-        """``front`` (v2): deliver before what is already queued (a correction of the reply just given)."""
+    def queue(self, name, text, front=False, request_id=None, kind=None):
+        """``front`` (v2): deliver before what is already queued (a correction of the reply just given).
+        ``request_id`` / ``kind`` (v2): bind the message, e.g. a job notice (kind followup, §58)."""
         if name == 'supervisor' and self.r.hget(ROSTER, 'notify') == '1':
             # Appended, never prepended: the queue parses request/task headers at the start.
             self.r.hset(ROSTER, mapping={'notify': 0})
@@ -2693,7 +2877,7 @@ class Fleet:
                 text += '\n' + '\n'.join(self.r.lrange(SPLIT_NOTES, 0, -1))
                 self.r.delete(SPLIT_NOTES)
         if self.v2:
-            return self.v2.queue(name, text, front=front)
+            return self.v2.queue(name, text, front=front, request_id=request_id, kind=kind)
         self.r.rpush(key('inbox', name), text)
 
     def inbox_depth(self, name):
@@ -2839,6 +3023,37 @@ class Fleet:
     def workspace(self):
         return self.run_dir / 'workspace'
 
+    def review_file(self):
+        """The verdict file the current task's gate reads (dev_task deliver.review_file / review_loop), or None."""
+        spec = lifecycle_close.task_spec(self.task())
+        return (spec.get('deliver') or {}).get('review_file') or spec.get('review_file')
+
+    def reviewer_doc(self, name, review_slot=None):
+        """REVIEWER.md of worker ``name``: the shared reviewer rules, plus the absolute verdict path when the task's
+        gate reads a verdict file and ``name`` is the slot the supervisor dispatched the review to
+        (lifecycle_deliver.verdict_target)."""
+        text = (HERE / 'agents' / 'reviewer.md').read_text()
+        review_file = self.review_file()
+        if not review_file or name != (review_slot or self.task().get('review_slot')):
+            return text
+        return text + VERDICT_SECTION.replace('<path>', str(lifecycle_deliver.verdict_target(self.workspace(),
+                                                                                             review_file, name)))
+
+    def mark_review(self, slot):
+        """A ``"review": true`` dispatch to ``slot``: the task records it as the review slot (the gate reads the verdict
+        from its directory), its REVIEWER.md names the absolute verdict path, and the returned line (prepended to
+        the instruction) names it too ('' when the task's gate reads no verdict file)."""
+        self.r.hset(TASK, mapping={'review_slot': slot})
+        self.log('review.slot', slot=slot, task=self.task().get('id', ''))
+        review_file = self.review_file()
+        if not review_file:
+            return ''
+        cwd = agent_cwd(self.cfg, slot)
+        cwd.mkdir(parents=True, exist_ok=True)
+        (cwd / 'REVIEWER.md').write_text(self.reviewer_doc(slot, review_slot=slot))
+        return ('[Review] This is the review the delivery gate reads. Write the verdict JSON (REVIEWER.md section R6) '
+                'to exactly ' + str(lifecycle_deliver.verdict_target(self.workspace(), review_file, slot)) + '\n')
+
     def fleet_cmd(self):
         return shlex.join([self.cfg['python'], str(Path(__file__).resolve()), 'chrome', '--config', str(self.path)])
 
@@ -2860,7 +3075,7 @@ class Fleet:
         if self.contract_phase():  # successors / roster-added workers inside a contract task
             scope += '\n' + self.contract_doc(role, name)
         if role == 'worker':  # every review inside a fleet follows the fleet copy of the review rules
-            scope += REVIEW_POINTER
+            scope += REVIEW_POINTER + applet_lease.rule_section(self, name)  # an open lease's section
         task_dir = self.cfg.get('task_dir') if self.cfg.get('parent_config') else None
         if role == 'worker':  # roster `writable:` grants extra roots beyond the own directory (user 2026-11-03)
             # §46: grants the program issued from a top ruling sit right behind the rule (set_grants rewrites them)
@@ -2889,12 +3104,15 @@ class Fleet:
                                                          else pi_adapter.UNSANDBOXED_SCOPE) + '\n'
         if self.v2 and role == 'supervisor' and not self.cfg.get('parent_config'):
             scope += daemon_down_section(self.cfg, is_pi(cfg, name))
-        return scope
+        # roster `import_claude_md` (user 2026-11-11), '' without it; an advised Claude slot runs with
+        # --setting-sources project and so gets ~/.claude/CLAUDE.md only through this copy
+        return scope + imported_rules(self.cfg, native_user_memory=is_claude(cfg, name) and not cfg.get('advisor'))
 
     # -- actors
     def spawn(self, name, prompt, *, launch_held=False, advice_hold=False, advised=None):
         """``advised``: only a slot's first generation (spawn_ready) passes it, from the advisor switch;
         every later generation replays the slot's launch record (advised_layout), whatever the switch says."""
+        prompt = applet_lease.start_prompt(self, name, prompt)  # a leased slot: the Lease block (applets.md 5)
         sandbox.preflight(self, name)  # P8o / M172: mode os without a wrapper -> audit + refuse (no policy: no-op)
         if name == ADVISOR:
             return self.spawn_advisor(prompt, launch_held=launch_held)
@@ -2932,7 +3150,7 @@ class Fleet:
         else:
             (cwd / 'AGENTS.md').write_text(scope)
         if role == 'worker':
-            (cwd / 'REVIEWER.md').write_text((HERE / 'agents' / 'reviewer.md').read_text())
+            (cwd / 'REVIEWER.md').write_text(self.reviewer_doc(name))
         if is_claude(cfg, name) and advised:
             # CLAUDE.md = scope + core + domain rules. A held first generation has not started: its record
             # is written when the gate opens (release_hold with the sheet, release_default with nothing).
@@ -2954,12 +3172,12 @@ class Fleet:
                   launch_ready=int(not launch_held), runtime_ready=0, current_profile='', idle_confirmed=0,
                   **{k: '' for k in codex_queue.FIELDS})  # a new session starts without a queued delivery
         if self.v2:
-            self.setf(name, bridge_available=0, startup_deadline=time.time() + float(self.cfg['profile_ready_timeout']))
+            self.setf(name, bridge_available=0, startup_deadline=awake.deadline(self.cfg['profile_ready_timeout']))
         if advised or info.get('advice_hold'):  # a resumed, never-released held slot must not stay marked held
             self.setf(name, advice_hold=int(advice_hold))
         if launch:
             self.setf(name, profile_state='switching', runtime_profile=launch['profile_id'],
-                      profile_ready_deadline=time.time() + float(self.cfg['profile_ready_timeout']))
+                      profile_ready_deadline=awake.deadline(self.cfg['profile_ready_timeout']))
         prompt_file = self.run_dir / 'prompts' / (name + '-g' + str(generation) + '.md')
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(prompt)
@@ -2974,7 +3192,7 @@ class Fleet:
                                   cfg.get('opencode_model') if is_opencode(cfg, name) else
                                   cfg.get('dsh_model') if is_dsh(cfg, name) else
                                   claude_model(cfg, name) if is_claude(cfg, name) else agent_profile(cfg, name))},
-            env_vars=dict({'PATH': os.environ.get('PATH', '')}, **(
+            env_vars=dict({'PATH': pane_path(cfg, os.environ.get('PATH', ''), is_pi(cfg, name))}, **(
                 pi_adapter.environment(cfg_path, cfg, name, generation) if is_pi(cfg, name)
                 else opencode_adapter.environment(cfg_path, cfg, name, generation, label=self.label(name),
                                                   startup_prompt=prompt, task_dir=cwd) if is_opencode(cfg, name)
@@ -3006,7 +3224,7 @@ class Fleet:
                   transcript='', ctx_used=0, ctx_window=0, msg_id='', msg_done='', busy_since=time.time(),
                   delivered=0, retry_at=0, last_msg='', empty_tries=0, launch_ready=int(not launch_held),
                   runtime_ready=0, idle_confirmed=0, bridge_available=0, spawn_failed=0, advisor_fault='',
-                  startup_deadline=time.time() + float(self.cfg['profile_ready_timeout']))
+                  startup_deadline=awake.deadline(self.cfg['profile_ready_timeout']))
         prompt_file = self.run_dir / 'prompts' / (name + '-g' + str(generation) + '.md')
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(prompt)
@@ -3043,13 +3261,17 @@ class Fleet:
                   runtime_ready=0, runtime_launch='', profile_task='', installed_domains='', advice_domains='',
                   **profile_runtime.ProfileApplication().metadata())
         self.r.hset(NAMES, mapping={name: name})
+        if named_subfleet.reserved(self, name, attached_only=True):  # a worker added for an attached sub-fleet
+            named_subfleet.tmux_mark(self, name)
+            named_subfleet.added_launch(self, name)  # on the supervisor model its start asked for
 
     def spawn_ready(self, name):
         # v2 + advisor online: a Claude worker waits behind the launch gate for its first sheet (no
         # default generation that the first dispatch would have to replace).
         # A named sub-fleet's supervisor_slot never waits: up / autostart need it idle and READY, and a sheet only
         # comes with a delivery, which a supervisor slot never gets before its sub-fleet is up (10-14 Studio deadlock).
-        sub_supervisor = name in {e.get('supervisor_slot') for e in (self.cfg.get('subfleets') or [])}
+        sub_supervisor = (name in {e.get('supervisor_slot') for e in (self.cfg.get('subfleets') or [])}
+                          or bool(named_subfleet.reserved(self, name)))  # an attached child's slot too
         hold = (bool(self.v2) and self.advisor_online() and name != 'supervisor' and not sub_supervisor
                 and is_claude(self.runtime_cfg(name), name))
         # The first generation is the one place the switch picks the layout; later ones replay the record.
@@ -3102,7 +3324,13 @@ class Fleet:
         kind = ev.get('kind')
         if kind == 'task':
             try:
-                answer = {'status': 'accepted', 'task_id': self.submit(ev.get('spec'))}
+                if self.service or self.job_root_busy() or ev.get('job'):
+                    # §58: a job, run by its own task sub-fleet; never a task of this fleet. A task root takes jobs
+                    # while its own task runs (§19 "Task root"); `job` (a join stub's task) is never its own task.
+                    jid = self.job_submit(ev.get('spec'))
+                    answer = {'status': 'accepted', 'job_id': jid, 'task_id': jid}
+                else:
+                    answer = {'status': 'accepted', 'task_id': self.submit(ev.get('spec'))}
             except (ValueError, TypeError) as exc:
                 answer = {'status': 'rejected', 'reason': str(exc)}
             self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
@@ -3146,6 +3374,13 @@ class Fleet:
                 else:
                     self.typed_task_allowed()
                     answer = {'status': 'accepted', 'task_id': self.submit({'goal': ev['text']})}
+            except (ValueError, TypeError) as exc:
+                answer = {'status': 'rejected', 'reason': str(exc)}
+            self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
+        elif kind == 'recheck':  # `task --recheck`: the gate was recomputed by the CLI (lifecycle_recheck)
+            from fleetmux import lifecycle_recheck
+            try:
+                answer = lifecycle_recheck.apply(self, ev)
             except (ValueError, TypeError) as exc:
                 answer = {'status': 'rejected', 'reason': str(exc)}
             self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
@@ -3598,9 +3833,12 @@ class Fleet:
         # routes another request, so it answers nothing.
         dispatched = set() if self.service else {BLOCKED_KEY + self.resolve(x['to']) for x in decision['dispatch']}
         dispatched |= {BLOCKED_KEY + self.resolve(c['worker']) for c in decision.get('consult', [])}
+        # A report notice cancelled while still queued was never seen: no nudge for it (report_reask asks again).
         missed = [k for k, rec in esc.items() if k.startswith((DIALOG_KEY, BLOCKED_KEY, REPORT_KEY))
                   and rec.get('status') == 'escalated' and rec.get('message_id') and k not in answered
-                  and k not in dispatched and self.v2.bus.status(rec['message_id']) not in ('', 'queued')]
+                  and k not in dispatched and self.v2.bus.status(rec['message_id']) not in ('', 'queued')
+                  and not (k.startswith(REPORT_KEY)
+                           and self.v2.bus.r.hget(self.v2.bus.msg_key(rec['message_id']), 'cancel_reason'))]
         if not missed:
             return
         first = [k for k in missed if not esc[k].get('nudged')]
@@ -3704,7 +3942,8 @@ class Fleet:
                 req.get('status') != 'dispatched' or req.get('worker') != slot) else
                 ('result id ' + req_id + '.done is already taken') if req_id and (
                     self.r.hgetall(REQ + req_id + '.done') or self.r.get(RESULT + req_id + '.done')) else
-                subfleet.check(self, slot, task_id, workers, ready=False, profiles=profiles))
+                subfleet.check(self, slot, task_id, workers, ready=False, profiles=profiles,
+                               job=self.job_spawn_args(rec['job'])['job'] if rec.get('job') else None))
             launch = None
             if not refused and answer.get('supervisor_profile'):
                 launch, refused = self.split_supervisor_launch(slot, answer['supervisor_profile'])
@@ -3712,6 +3951,8 @@ class Fleet:
                 self.log('escalate.approve_refused', task=task_id, reason=refused)
                 if req_id:
                     self.log('split.approve_refused', task=task_id, request_id=req_id, reason=refused)
+                if rec.get('job'):
+                    return  # §58: nobody to ask; job_start puts the job back in the queue
                 self.queue('supervisor', '[escalate] approve of ' + task_id + ' refused by the program: ' + refused
                            + '. ' + task_id + ' still waits for your answer (approve with fewer workers / revise / '
                            'reject). Reply with the JSON format from AGENTS.md.')
@@ -3732,6 +3973,8 @@ class Fleet:
                         contracts=state is not None, outputs=outputs, worker_profiles=wps)
             if req_id:  # P7: the split's own budget, the request it answers, and no child lifecycle (brief §2.1-11)
                 spec.update(hours=subfleet.limits(self.cfg)['split_budget_h'], split=req_id, lifecycle=None)
+            if rec.get('job'):  # §58: the job's own hours, lifecycle, artifacts and budget card
+                spec.update(self.job_spawn_args(rec['job']))
             # The sub-fleet supervisor keeps a live tab in this fleet's worker area (tmux dual display, user
             # 2026-11-09): the slot's generations run in the fleet's tmux from now on, also after the return.
             # A slot still in a plain pane hands off to such a generation first, on the same model.
@@ -3965,6 +4208,8 @@ class Fleet:
     def service_blocked_intake(self, slot, rid, reason):
         """Service mode, plan F' 8.4: a worker answered {"blocked": ...}; the request stays dispatched and the
         supervisor rules on it. The [blocked] note goes to the supervisor bound to that request."""
+        if applet_lease.take_blocked(self, slot, rid, {'blocked': reason}):  # a leased worker: back to the applet
+            return ''
         key_ = BLOCKED_KEY + slot
         who = self.label(slot)
         text = ('[blocked] ' + who + ' (request ' + rid + ') says it is stuck on: ' + reason[:2000].replace('\n', '; ')
@@ -3986,6 +4231,8 @@ class Fleet:
         request stays dispatched. The program numbers it M<n> (the request's own number if it has one), rewrites
         the proposal ids to M<n>.<i>, and hands it to the §44 intake; the supervisor answers "task": "M<n>".
         Refusals go back to the worker as the same request and to the supervisor."""
+        if applet_lease.take_blocked(self, slot, rid, {'blocked': 'split proposal', 'proposal': fields}):
+            return None  # applets.md section 4: a leased worker's proposal goes back to the applet
         req = self.r.hgetall(REQ + rid)
         if req.get('status') != 'dispatched' or req.get('worker') != slot:
             self.log('split.stale_owner', agent=slot, request_id=rid, status=req.get('status', ''))
@@ -4055,6 +4302,9 @@ class Fleet:
             return
         esc, changed = self.escalation_state(), False
         for task_id, rec in list(esc.items()):
+            if task_id.startswith(REPORT_KEY):
+                changed = self.report_reask(task_id, rec) or changed
+                continue
             rid = rec.get('request')
             if rid and rec.get('status') in ('escalated', 'rotating') and not self.r.hgetall(REQ + rid):
                 self.split_drop(esc, task_id, rec, 'request ' + rid + ' ended before the split started')
@@ -4081,6 +4331,10 @@ class Fleet:
                 self.split_drop(esc, task_id, rec, 'request ' + rid + ' ended before the split started: '
                                 + str(answer.get('reason')))
                 continue
+            if rec.get('job'):  # §58: never back to the supervisor; the job waits for a slot again
+                self.split_drop(esc, task_id, rec, 'sub-fleet ' + task_id + ' could not start: '
+                                + str(answer.get('reason')))
+                continue
             rec['status'] = 'escalated'
             state = self.contract_state()
             if state is not None and task_id in state['tasks']:
@@ -4105,9 +4359,11 @@ class Fleet:
         stale[task_id] = rec.get('request', '')
         self.r.set(SPLIT_STALE, json.dumps(stale, ensure_ascii=False))
         slot = rec['slot']
-        if rec.get('status') == 'rotating' and self.agent(slot).get('split_restore'):
+        if (rec.get('status') == 'rotating' or rec.get('job')) and self.agent(slot).get('split_restore'):
             self.setf(slot, split_launch=self.agent(slot)['split_restore'], split_restore='')
         self.log('split.stale', task=task_id, request_id=rec.get('request', ''), status=rec.get('status', ''), reason=why)
+        if rec.get('job'):
+            self.job_release(rec['job'], why)
 
     def split_delegated(self, task_id, rec, answer):
         """P7: the task sub-fleet of a service split was accepted: the original request is answered now
@@ -4115,6 +4371,10 @@ class Fleet:
         in place; the caller saves the escalations."""
         rid = rec['request']
         rec.update(status='delegated', run=answer.get('run'))
+        if rec.get('job'):  # §58: a job has one result, the sub-fleet's outcome (split_finished)
+            self.job_update(rec['job'], state='running', run=str(answer.get('run') or ''))
+            self.log('job.running', job=rec['job'], task=task_id, run=answer.get('run'))
+            return
         self.publish(rid, 'ok', worker=self.label(rec['slot']), result={
             'reply': '已转 task 子 fleet ' + task_id + ' 处理；子 fleet 结束后另发结果 ' + rid + '.done。',
             'delegated': task_id})
@@ -4164,6 +4424,8 @@ class Fleet:
             if why:
                 changed = True
                 self.split_drop(esc, task_id, rec, why + ' (resume)')
+                if rec.get('job'):
+                    continue  # §58: back in the job queue (split_drop), nothing for the supervisor to route
                 self.queue('supervisor', '[escalate] ' + task_id + ' approval lapsed on resume: ' + why
                            + '. Route or answer ' + rid + ' as usual if it is still open.')
                 continue
@@ -4188,6 +4450,10 @@ class Fleet:
         rid = rec['request']
         outcome = (subfleet.child_result(child_run) or {}).get('status') or child.get('outcome') or 'cancelled'
         reason = str(child.get('reason') or '')
+        if rec.get('job'):
+            esc.pop(task_id, None)  # its M<n> row stays, as below
+            self.save_escalations(esc)
+            return self.job_finished(rec['job'], task_id, rec['slot'], child_run, outcome, reason)
         if outcome == 'completed':
             self.publish(rid + '.done', 'ok', worker=self.label(rec['slot']), result={
                 'reply': 'task 子 fleet ' + task_id + ' 已完成' + ('：' + reason if reason else '。'),
@@ -4200,6 +4466,509 @@ class Fleet:
         self.log('split.done', task=task_id, request_id=rid, outcome=outcome)
         return (' Request ' + rid + ' was answered when ' + task_id + ' started; its follow-up result ' + rid + '.done ('
                 + ('ok' if outcome == 'completed' else 'failed') + ') went out now.')
+
+    # -- §58 jobs: `fleetmux task` on a service fleet, each run by its own task-mode sub-fleet
+    def job_state(self):
+        raw = self.r.get(JOBS)
+        return json.loads(raw) if raw else {}
+
+    def save_jobs(self, jobs):
+        self.r.set(JOBS, json.dumps(jobs, ensure_ascii=False, separators=(',', ':')))
+
+    def job_update(self, jid, **fields):
+        jobs = self.job_state()
+        if jid in jobs:
+            jobs[jid].update(fields)
+            self.save_jobs(jobs)
+
+    def job_holding(self, slot):
+        """The open job whose sub-fleet ``slot`` supervises (or is about to), or that added ``slot`` for itself, else ''."""
+        return next((jid for jid, job in self.job_state().items()
+                     if (job.get('slot') == slot and job.get('state') in ('starting', 'running'))
+                     or job.get('hot_slot') == slot), '')
+
+    def job_spawn_fields(self, spec):
+        """§58: the job's own sub-fleet fields (name, roster, roles, deliver / review_file), checked now; ValueError
+        when one is bad. Paths must be absolute: the daemon's directory is not the caller's."""
+        out = {}
+        if 'name' in spec:
+            name = spec['name']
+            if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60 or '\n' in name:
+                raise ValueError('name must be one line of 1 to 60 characters')
+            out['name'] = ' '.join(name.split())
+        if spec.get('roster') is not None:
+            path = spec['roster']
+            if not isinstance(path, str) or not os.path.isabs(path) or not Path(path).is_file():
+                raise ValueError('roster must be the absolute path of a roster YAML file: ' + repr(path))
+            if 'workers' in spec or 'worker_profiles' in spec:
+                raise ValueError('roster names the sub-fleet workers and their cards; do not also give workers or '
+                                 'worker_profiles')
+            try:
+                roster.load_entries(path)
+                import yaml
+                data = yaml.safe_load(Path(path).read_bytes())
+            except (OSError, ValueError) as exc:
+                raise ValueError('roster ' + path + ' rejected: ' + str(exc).replace('\n', '; '))
+            refused = [k for k in JOB_ROSTER_REFUSED if data.get(k) is not None]
+            if refused:
+                raise ValueError('roster ' + path + ': a job sub-fleet takes no ' + ', '.join(refused))
+            out['roster'] = str(Path(path).resolve())
+        if spec.get('roles') is not None:
+            path = spec['roles']
+            if not isinstance(path, str) or not os.path.isabs(path) or not Path(path).is_dir():
+                raise ValueError('roles must be the absolute path of a directory of <agent-name>.md files: ' + repr(path))
+            out['roles'] = str(Path(path).resolve())
+        overrides = subfleet.check_overrides(spec.get('overrides'))
+        if overrides:
+            out['overrides'] = overrides
+        life = spec.get('lifecycle')
+        if life == 'dev_task':  # the same checks as a root dev_task run (Fleet.submit); the gate runs in the child
+            out['deliver'] = lifecycle_deliver.validate_deliver(spec.get('deliver'))
+        elif spec.get('deliver') is not None:
+            raise ValueError('deliver needs lifecycle dev_task')
+        if life == 'review_loop':
+            if spec.get('review_file') is None:
+                raise ValueError('review_loop needs "review_file": the reviewer verdict JSON it reads each round')
+            out['review_file'] = lifecycle_deliver.validate_review_file(spec['review_file'])
+        elif spec.get('review_file') is not None:
+            raise ValueError('review_file needs lifecycle review_loop (dev_task: deliver.review_file)')
+        return out
+
+    def job_settings(self, spec, fields=None):
+        """The sub-fleet of a job: fleet.yaml#job_subfleet, then the job spec's own keys. ValueError when bad.
+        ``fields`` (job_spawn_fields): a roster sets the workers and their cards."""
+        base = fleet_config.job_subfleet()
+        out = {k: spec.get(k, base[k]) for k in base}
+        cards = []
+        if (fields or {}).get('roster'):
+            names, _, profiles = roster.load_entries(fields['roster'])
+            out.update(workers=len(names), worker_profiles=[])
+            cards = sorted(set(profiles.values()))
+        wps = out['worker_profiles']
+        if wps is None:
+            wps = out['worker_profiles'] = []
+        if not isinstance(wps, list) or not all(isinstance(x, str) for x in wps):
+            raise ValueError('worker_profiles must be a list of agent card ids')
+        if 'worker_profiles' in spec and 'workers' not in spec and wps:
+            out['workers'] = len(wps)
+        workers = out['workers']
+        if type(workers) is not int or workers < 1:
+            raise ValueError('workers must be a positive integer')
+        if wps and len(wps) != workers:
+            raise ValueError('worker_profiles names ' + str(len(wps)) + ' cards for ' + str(workers) + ' workers')
+        if type(out['hours']) not in (int, float) or not 0 < out['hours'] < 1000:
+            raise ValueError('hours must be a positive number')
+        cap = subfleet.limits(self.cfg, job=True)['child_workers_max']  # §58: no default cap for a job
+        if cap is not None and workers > cap:
+            raise ValueError('child_workers_max ' + str(cap) + ': the job asks for ' + str(workers) + ' workers')
+        sup = out['supervisor_profile']
+        if sup is not None and not isinstance(sup, str):
+            raise ValueError('supervisor_profile must be an agent card id')
+        if sup or wps or cards:
+            try:
+                registry = AgentRegistry(self.cfg.get('agent_registry') or None)
+            except (AgentRegistryError, OSError) as exc:
+                raise ValueError('cannot read agent cards: ' + str(exc))
+            for card_id in ([sup] if sup else []) + wps + cards:
+                try:
+                    card = registry.get(card_id)
+                except KeyError:
+                    raise ValueError('unknown agent card ' + card_id)
+                if card_id == sup and card.cli != 'claude':
+                    raise ValueError('supervisor_profile ' + sup + ' runs ' + card.cli + ': only an official Claude '
+                                     'Code session can become a sub-fleet supervisor')
+        return out
+
+    def job_root_busy(self):
+        """§19 "Task root": a root task fleet (v2) whose own task runs takes a `task` as a job."""
+        return (not self.service and self.v2 is not None and not self.cfg.get('parent_config')
+                and self.task().get('status') == 'running')
+
+    def job_submit(self, spec):
+        """§58: register a job and return its id at once. The job never goes to the supervisor's routing queue:
+        job_tick gives it a slot and a sub-fleet. Every check that does not depend on a free slot runs here, so a
+        job that can never start is refused now instead of waiting forever."""
+        if not isinstance(spec, dict) or not isinstance(spec.get('goal'), str) or not spec['goal'].strip():
+            raise ValueError('a job needs a goal')
+        extra = sorted(set(spec) - set(JOB_KEYS))
+        if extra:
+            raise ValueError('a job spec takes only ' + ', '.join(JOB_KEYS) + ' (not ' + ', '.join(extra) + ')')
+        if not self.v2 or self.cfg.get('parent_config'):
+            raise ValueError('jobs run only on a root fleet of transport v2')
+        if not self.service and not self.job_root_busy():
+            raise ValueError('this task fleet runs no task of its own now; it takes jobs only while its task runs. '
+                             'Nothing was submitted. Start a fleet of its own (`fleetmux start --no-join`), or stop '
+                             'this one')
+        problem = subfleet.backend_problem(self.cfg)
+        if problem:
+            raise ValueError(problem)
+        if self.cfg.get('adopted_supervisor_hook_delivery') is not True:
+            raise ValueError('no worker of this run can become a sub-fleet supervisor (the run predates '
+                             'adopted_supervisor_hook_delivery); start a new run for jobs')
+        if not any(agent_cli(self.runtime_cfg(w), w) == 'claude' for w in self.active_workers()):
+            raise ValueError('no worker of this fleet runs the official Claude Code CLI: only such a worker can '
+                             'become the supervisor of a job sub-fleet')
+        fields = self.job_spawn_fields(spec)
+        settings = self.job_settings(spec, fields)
+        if 'artifacts' in spec:
+            validate_artifacts(spec['artifacts'])
+        budget = brake.validate_budget(spec.get('budget'))
+        life = spec.get('lifecycle')
+        if life is not None and (life not in lifecycle.MODE_NAMES or lifecycle.base_mode(life) != 'task'):
+            raise ValueError('lifecycle must be a task lifecycle (' + ', '.join(
+                m for m in lifecycle.MODE_NAMES if lifecycle.base_mode(m) == 'task') + ') or null')
+        jid = JOB_PREFIX + uuid.uuid4().hex[:10]
+        goal, now = spec['goal'].strip(), time.time()
+        req_spec = {'id': jid, 'payload': {'goal': goal}, 'instruction': 'Job: ' + goal.splitlines()[0][:200],
+                    'reply': {'required': ['reply']}}
+        self.r.hset(REQ + jid, mapping={'spec': json.dumps(req_spec, ensure_ascii=False), 'status': 'job_queued',
+                                        'created': awake.now(), 'attempts': 0, 'worker': '', 'job': 1})
+        jobs = self.job_state()
+        jobs[jid] = {'goal': goal, 'settings': settings, 'artifacts': spec.get('artifacts'), 'budget': budget,
+                     'lifecycle': life, 'state': 'queued', 'slot': '', 'task': '', 'run': '', 'waiting': '',
+                     'tries': 0, 'created': now, 'spawn': fields, 'hot_slot': ''}
+        self.save_jobs(jobs)
+        head = ('[job ' + jid + '] accepted: the program runs it in its own task-mode sub-fleet on a free worker ('
+                + str(settings['workers']) + ' sub-fleet workers, ' + str(settings['hours']) + ' h). Goal: '
+                + goal.splitlines()[0][:300])
+        if self.service:
+            self.queue('supervisor', head + '\nThis is not a request for you: do not dispatch, answer or skip ' + jid
+                       + ' (a decision that does is invalid). Its result is published under ' + jid + ' when the '
+                       'sub-fleet ends. Reply with the usual service decision JSON: status RUNNING, dispatch [], '
+                       'skip [].', request_id=jid, kind='followup')
+        else:  # §19 "Task root": a job beside this fleet's own task
+            self.queue('supervisor', head + '\nThis is not part of your task: do not dispatch to the worker that '
+                       'supervises it, use its M<n> or withdraw it (a decision that does is invalid). Its result is '
+                       'published under ' + jid + ' when the sub-fleet ends. While a job is open your COMPLETED is '
+                       'held: the task closes when the last job ends. Continue the current task using the AGENTS.md '
+                       'decision JSON.')
+        self.log('job.submitted', job=jid, workers=settings['workers'], hours=settings['hours'],
+                 **{k: v for k, v in fields.items() if k in ('name', 'roster', 'roles')})
+        return jid
+
+    def job_spawn_args(self, jid):
+        """The sub-fleet request fields of job ``jid`` (escalation_apply): its hours, lifecycle, artifacts, budget,
+        and ``job`` (its id, name, roster, roles, deliver / review_file: subfleet.spawn_child)."""
+        job = self.job_state().get(jid) or {}
+        out = {'hours': (job.get('settings') or {}).get('hours') or subfleet.limits(self.cfg)['split_budget_h'],
+               'lifecycle': job.get('lifecycle'),
+               'job': dict(job.get('spawn') or {}, id=jid, submitted=job.get('created'))}
+        if job.get('artifacts') is not None:
+            out['artifacts'] = job['artifacts']
+        if job.get('budget'):
+            out['budget'] = job['budget']
+        return out
+
+    def job_slot_busy(self, slot, jid=''):
+        """Why ``slot`` cannot take job ``jid`` now apart from subfleet.check, else ''."""
+        if applet_lease.taken(self, slot):
+            return 'leased by an applet'
+        if named_subfleet.reserved(self, slot, attached_only=True):
+            return 'supervisor slot of attached sub-fleet ' + named_subfleet.reserved(self, slot, attached_only=True)
+        other = next((j for j, x in self.job_state().items() if x.get('hot_slot') == slot and j != jid), '')
+        if other:
+            return 'added for job ' + other
+        held = next((k for k, v in self.escalation_state().items() if v.get('slot') == slot
+                     and v.get('kind', 'split') == 'split' and v.get('status') in ('approved', 'rotating', 'delegated')), '')
+        if held:
+            return 'held by the split of ' + held
+        mine = next((rid for rid in self.r.lrange(REQQ, 0, -1)
+                     if self.r.hmget(REQ + rid, 'status', 'worker') == ['dispatched', slot]), '')
+        if mine:
+            return 'working on request ' + mine
+        if self.inbox_depth(slot):
+            return 'has queued work'
+        return ''
+
+    def job_tick(self):
+        """§58, daemon tick, outside transactions: queued jobs (oldest first) take a free slot each."""
+        if not self.v2:
+            return
+        if not self.service and not self.job_task_root_tick():
+            return
+        if self.paused():
+            return
+        jobs = self.job_state()
+        for jid in sorted((j for j, x in jobs.items() if x.get('state') == 'queued'), key=lambda j: jobs[j]['created']):
+            self.job_start(jid)
+
+    def job_task_root_tick(self):
+        """§19 "Task root": a task root's own task ended: the jobs that have no sub-fleet yet fail (a running one
+        is stopped and collected with the task, and fails there). Its COMPLETED was held for the jobs: the last one
+        ended, so the task completes now (lifecycle_close then closes the run as usual). True: jobs may start."""
+        if self.cfg.get('parent_config'):
+            return False
+        jobs = self.job_state()
+        task = self.task()
+        if task.get('status') != 'running':
+            for jid in [j for j, x in jobs.items() if x.get('state') in ('queued', 'starting')]:
+                job = jobs.pop(jid)
+                esc = self.escalation_state()
+                if job.get('task') and esc.pop(job['task'], None) is not None:
+                    self.save_escalations(esc)
+                self.job_hot_drop(job)
+                self.save_jobs(jobs)
+                why = 'the task of this fleet ended (' + str(task.get('status') or 'none') + ') before the job started'
+                if self.r.hgetall(REQ + jid):
+                    self.publish(jid, 'failed', worker='fleet', error=why,
+                                 result={'job': jid, 'outcome': 'not_started', 'reason': why})
+                self.log('job.failed', job=jid, reason=why)
+            return False
+        if task.get('jobs_hold') and not jobs and not self.unsettled_workers():  # own work out again: wait for it
+            self.log('task.jobs_released', task=task.get('id', ''))
+            self.finish('completed', task.get('jobs_hold'))
+            return False
+        return True
+
+    def job_start(self, jid):
+        """Give queued job ``jid`` an idle worker slot that no lease, split or request holds, and approve the
+        sub-fleet on it with the §44 machinery (no proposal: the sub-fleet's supervisor plans the pieces). No such
+        slot: the job stays queued and the reason shows in status. True when a slot was taken."""
+        jobs = self.job_state()
+        job = jobs.get(jid)
+        if not job or job.get('state') != 'queued':
+            return False
+        if not self.r.hgetall(REQ + jid):  # published meanwhile: nothing left to run
+            self.job_hot_drop(jobs.pop(jid, None))
+            self.save_jobs(jobs)
+            return False
+        st = job['settings']
+        profiles = {'worker-' + str(i + 1): p for i, p in enumerate(st['worker_profiles'])}
+        taken = []  # a number with a sub-fleet directory (a failed spawn too) is never given to a job again
+        key_ = self.next_item_id(taken)
+        while subfleet.attempts_used(self.run_dir, key_):
+            taken.append({'id': key_})
+            key_ = self.next_item_id(taken)
+        spawn = dict(job.get('spawn') or {}, id=jid, submitted=job.get('created'))
+        full = self.job_tree_full(job)
+        if full:
+            if job.get('waiting') != full:
+                self.job_update(jid, waiting=full)
+                self.log('job.waiting', job=jid, reason=full)
+            return False
+        why, slot = [], None
+        hot = job.get('hot_slot') or ''
+        for w in sorted(self.active_workers(), key=lambda w: w != hot):  # its own added worker first
+            reason = (self.job_slot_busy(w, jid)
+                      or subfleet.check(self, w, key_, st['workers'], ready=True, profiles=profiles, job=spawn)
+                      or (st['supervisor_profile'] and self.split_supervisor_launch(w, st['supervisor_profile'])[1]))
+            if reason:
+                why.append(self.label(w) + ': ' + reason)
+                continue
+            slot = w
+            break
+        if slot is None:
+            waiting = '; '.join(why) or 'no active worker'
+            added = self.job_hot_add(jid, job, key_, profiles, spawn)
+            if added:
+                waiting = added + '; ' + waiting
+            if job.get('waiting') != waiting:
+                self.job_update(jid, waiting=waiting)
+                self.log('job.waiting', job=jid, reason=waiting[:500])
+            return False
+        if hot and slot != hot:  # another worker came free first: the one added for this job goes again
+            self.job_hot_drop(job)
+            self.job_update(jid, hot_slot='')
+        goal = job['goal']
+        self.r.hset(REQ + jid, mapping={'status': 'dispatched', 'worker': slot})
+        items_ = json.loads(self.r.get(ITEMS) or '{}')
+        items_[key_] = {'to': slot, 'request': jid, 'instruction': goal}
+        self.r.set(ITEMS, json.dumps(items_, ensure_ascii=False))
+        stale = json.loads(self.r.get(SPLIT_STALE) or '{}')
+        if stale.pop(key_, None) is not None:  # the number is in use again
+            self.r.set(SPLIT_STALE, json.dumps(stale, ensure_ascii=False))
+        esc = self.escalation_state()
+        esc[key_] = {'slot': slot, 'reason': 'job ' + jid, 'proposal': [], 'workers': st['workers'],
+                     'instruction': goal, 'status': 'escalated', 'request': jid, 'job': jid, 'message_id': '',
+                     'asked_at': time.time()}
+        self.save_escalations(esc)
+        self.job_update(jid, state='starting', slot=slot, task=key_, waiting='')
+        answer = {'task': key_, 'decision': 'approve', 'note': '', 'workers': st['workers']}
+        if st['supervisor_profile']:
+            answer['supervisor_profile'] = st['supervisor_profile']
+        if st['worker_profiles']:
+            answer['worker_profiles'] = list(st['worker_profiles'])
+        self.escalation_apply({}, None, key_, esc[key_], answer)
+        esc = self.escalation_state()
+        if esc.get(key_, {}).get('status', 'escalated') == 'escalated':  # refused by the program after all
+            rec = esc.pop(key_, None) or {'slot': slot, 'request': jid, 'job': jid}
+            self.split_drop(esc, key_, rec, 'the program refused the sub-fleet on ' + self.label(slot))
+            self.save_escalations(esc)
+            return False
+        self.log('job.started', job=jid, slot=slot, task=key_, status=esc[key_]['status'])
+        return True
+
+    def job_hot_add(self, jid, job, task_id='', profiles=None, spawn=None):
+        """§58: no worker can take queued job ``jid``: add one worker row to the root roster (the applet supply
+        writer, applet_ops.write_worker_row); the roster reload (§16) starts the slot and the next job_start makes it
+        the job's sub-fleet supervisor. One added worker per job; none while a reclaimed worker can be woken
+        (lifecycle_hold wakes one per queued job), without a roster file, at ``limits.job_hot_add_max``, or when a
+        refusal that does not depend on the slot (limits, cards, the supervisor card gate) would stop a new worker
+        too. An added slot that ends dead is dropped. Returns the line for ``waiting`` ('' when nothing was done)."""
+        from fleetmux import applet_ops
+        hot = job.get('hot_slot') or ''
+        if hot:
+            if hot in self.workers and self.agent(hot).get('state') == 'dead':  # its spawn failed: do not wait on it
+                self.job_hot_drop(job)
+                self.job_update(jid, hot_slot='', hot_failed='added worker ' + hot + ' did not start')
+                return 'added worker ' + hot + ' did not start'
+            if hot in self.workers:
+                return 'added worker ' + hot + ' for this job'
+            refused = self.r.hget(ROSTER, 'rejected') or ''
+            if refused and hot not in self.desired:  # the reload refused the file with the row: take the row out
+                self.job_hot_drop(job)
+                self.job_update(jid, hot_slot='', hot_failed=refused[:300])
+                self.log('job.hot_add_refused', job=jid, slot=hot, reason=refused[:300])
+                return 'the roster reload refused added worker ' + hot + ': ' + refused[:300]
+            return 'added worker ' + hot + ' for this job; waiting for the roster reload to start it'
+        if job.get('hot_failed'):
+            return 'adding a worker failed earlier: ' + job['hot_failed']
+        if any(self.agent(w).get('state') == 'reclaimed' for w in self.active_workers()):
+            return ''  # lifecycle_hold.service_tick wakes a reclaimed worker for it
+        lim = subfleet.limits(self.cfg, job=True)
+        if self.job_tree_full(job, lim, added=1):
+            return ''  # a tree-wide cap: another worker would not start the job
+        paths = applet_ops.roster_paths(self)
+        if not paths:
+            return 'no worker added: this run has no roster file'
+        st = job.get('settings') or {}
+        like = next((w for w in self.active_workers() if agent_cli(self.runtime_cfg(w), w) == 'claude'), None)
+        if like and task_id:  # limits and cards only (ready=False): what a new Claude worker would meet as well
+            same = (subfleet.check(self, like, task_id, st.get('workers', 1), ready=False, profiles=profiles,
+                                   job=spawn)
+                    or (st.get('supervisor_profile') and self.split_supervisor_launch(like, st['supervisor_profile'])[1]))
+            if same:
+                return 'no worker added: ' + str(same)
+        cap = lim.get('job_hot_add_max')
+        count = len([j for j in self.job_state().values() if j.get('hot_slot')])
+        if cap is not None and count >= cap:
+            return 'no worker added: job_hot_add_max ' + str(cap) + ' reached (' + str(count) + ' added)'
+        name = applet_ops.free_name(self, JOB_HOT_BASE)
+        try:
+            for path in paths:
+                applet_ops.write_worker_row(path, name, None)
+        except (OSError, ValueError) as exc:
+            for path in paths:
+                try:
+                    applet_ops.remove_worker_row(path, name)
+                except (OSError, ValueError):
+                    pass
+            self.job_update(jid, hot_failed=str(exc)[:300])
+            return 'no worker added: ' + str(exc)[:300]
+        self.r.hset(applet_ops.USED, mapping={name: jid})  # never given out again in this run
+        self.job_update(jid, hot_slot=name)
+        self.log('job.worker_added', job=jid, slot=name, count=count + 1, cap=cap)
+        return 'added worker ' + name + ' for this job; waiting for the roster reload to start it'
+
+    def job_tree_full(self, job, lim=None, added=0):
+        """§58: the tree-wide cap (roster / config ``limits:``) that job ``job`` would cross now, counting the jobs
+        whose sub-fleet is approved but not spawned yet (state ``starting``), else ''. Checked before a slot is
+        taken, so capped jobs start in submit order instead of racing in the spawn queue."""
+        lim = lim or subfleet.limits(self.cfg, job=True)
+        pending = [j for j in self.job_state().values() if j.get('state') == 'starting']
+        if lim['max_children'] is not None:
+            live = len(subfleet.active_children(self.run_dir))
+            if live + len(pending) >= lim['max_children']:
+                return ('max_children ' + str(lim['max_children']) + ': ' + str(live) + ' sub-fleets run, '
+                        + str(len(pending)) + ' starting')
+        if lim['max_agents_total'] is not None:
+            total = (subfleet.tree_agents(self.run_dir) + added + (job.get('settings') or {}).get('workers', 1)
+                     + sum((j.get('settings') or {}).get('workers', 0) for j in pending))
+            if total > lim['max_agents_total']:
+                return 'max_agents_total ' + str(lim['max_agents_total']) + ': this job would make ' + str(total)
+        return ''
+
+    def job_hot_drop(self, job):
+        """Take the worker row added for ``job`` out of the roster again: the roster reload retires the slot once it
+        is idle (§16). Called when the job ends, fails or is gone."""
+        from fleetmux import applet_ops
+        hot = (job or {}).get('hot_slot')
+        if not hot:
+            return
+        for path in applet_ops.roster_paths(self):
+            try:
+                applet_ops.remove_worker_row(path, hot)
+            except (OSError, ValueError) as exc:
+                self.log('job.worker_remove_failed', slot=hot, path=str(path), error=str(exc)[:200])
+        self.log('job.worker_removed', slot=hot)
+
+    def job_release(self, jid, why):
+        """A job whose sub-fleet did not start goes back to the queue (its split record and M<n> row are already
+        gone: split_drop). After JOB_TRIES such returns it fails with the last reason."""
+        jobs = self.job_state()
+        job = jobs.get(jid)
+        if job is None:
+            return
+        if not self.r.hgetall(REQ + jid):
+            self.job_hot_drop(jobs.pop(jid))
+            self.save_jobs(jobs)
+            return
+        tries = int(job.get('tries') or 0) + 1
+        if tries >= JOB_TRIES:
+            self.job_hot_drop(jobs.pop(jid))
+            self.save_jobs(jobs)
+            self.publish(jid, 'failed', worker='fleet', error='job sub-fleet could not start ' + str(tries)
+                         + ' times; last: ' + why, result={'job': jid, 'outcome': 'not_started', 'reason': why})
+            self.log('job.failed', job=jid, reason=why)
+            return
+        self.r.hset(REQ + jid, mapping={'status': 'job_queued', 'worker': ''})
+        job.update(state='queued', slot='', task='', run='', waiting=why, tries=tries)
+        self.save_jobs(jobs)
+        self.log('job.requeued', job=jid, tries=tries, reason=why)
+
+    def job_finished(self, jid, task_id, slot, child_run, outcome, reason, replace=False):
+        """§58: the sub-fleet of job ``jid`` was collected: its outcome becomes the job's one result (ok /
+        blocked / failed, with the child's reason, run and workspace paths and artifacts). Returns the line the
+        collect notice to the supervisor carries. ``replace``: a gate recheck publishes the job again."""
+        jobs = self.job_state()
+        self.job_hot_drop(jobs.pop(jid, None))
+        self.save_jobs(jobs)
+        child = subfleet.child_result(child_run) or {}
+        status = 'ok' if outcome == 'completed' else 'blocked' if outcome == 'blocked' else 'failed'
+        fields = {'reply': reason or outcome, 'job': jid, 'subfleet': task_id, 'outcome': outcome, 'reason': reason,
+                  'run': str(child_run), 'workspace': str(Path(child_run) / 'workspace'),
+                  'artifacts': child.get('artifacts') or []}
+        if child.get('delivery'):  # §58: the child's lifecycle gate record (dev_task: sha, queue entry, tests)
+            fields['delivery'] = child['delivery']
+        extra = {} if status == 'ok' else {'error': 'job sub-fleet ' + task_id + ' ended ' + outcome
+                                           + (': ' + reason if reason else '')}
+        self.publish(jid, status, worker=self.label(slot), result=fields, replace=replace, **extra)
+        self.log('job.done', job=jid, task=task_id, outcome=outcome, status=status)
+        return (' Job ' + jid + ' ended ' + status + '; its result is published under ' + jid
+                + '. Do not dispatch, answer or skip it.')
+
+    def job_guard(self, decision):
+        """§58: a service decision may not dispatch, answer or skip a job, answer its sub-fleet's split, or
+        dispatch to the slot that supervises it (ValueError: an invalid decision). A task root's decision (§19
+        "Task root") also may not use a job's M<n> as a dispatch id or withdraw a job's slot."""
+        jobs = self.job_state()
+        if not jobs:
+            return
+        for field in ('dispatch', 'answer', 'skip'):
+            for item in decision.get(field) or []:
+                rid = item.get('request_id')
+                if rid in jobs:
+                    raise ValueError(field + ' of ' + rid + ': ' + rid + ' is a job, run by the program in its own '
+                                     'sub-fleet; do not dispatch, answer or skip it')
+        for item in decision.get('dispatch') or []:
+            held = self.job_holding(self.resolve(item.get('to') or ''))
+            if held:
+                raise ValueError('dispatch to ' + item['to'] + ': it supervises the sub-fleet of job ' + held
+                                 + '; route to another worker')
+        tasks = {job.get('task'): jid for jid, job in jobs.items() if job.get('task')}
+        for item in decision.get('dispatch') or []:  # task mode: a dispatch id names a plain task M<n>
+            if item.get('id') in tasks:
+                raise ValueError('dispatch id ' + item['id'] + ' is the sub-fleet of job ' + tasks[item['id']]
+                                 + '; give your own work another id')
+        for name in decision.get('withdraw') or []:
+            held = self.job_holding(self.resolve(name))
+            if held:
+                raise ValueError('withdraw ' + name + ': it supervises the sub-fleet of job ' + held + ', which is '
+                                 'not your task\'s work; leave it out')
+        for item in decision.get('escalations') or []:
+            if item.get('task') in tasks:
+                raise ValueError('escalations: ' + item['task'] + ' is the sub-fleet of job ' + tasks[item['task']]
+                                 + ' and is a job, run by the program; there is nothing to answer')
 
     def escalation_finished(self, rec, ok):
         """A delegated task came back (subfleet.collect). Returns extra lines for the supervisor."""
@@ -4251,10 +5020,41 @@ class Fleet:
         save(folder / (uuid.uuid4().hex[:12] + '.json'),
              {'origin_run': str(self.run_dir), 'task': self.cfg.get('task_id'), 'interfaces': items})
 
+    def held_notice(self, path):
+        """A sub-fleet's held watchdog (docs/design.md §24) could not recover a slot: tell this fleet's supervisor (a
+        notice, nothing to rule on) and, at a managed root, the tg / parent channels."""
+        try:
+            note = load(path)
+        except (OSError, ValueError):
+            note = None
+        path.unlink(missing_ok=True)
+        if not note:
+            return
+        text = ('[sub-fleet held] sub-fleet ' + str(note.get('task') or '') + ' (' + str(note.get('origin_run') or '')
+                + '): its ' + str(note.get('label') or note.get('slot') or 'slot') + ' is held: ' + str(note.get('text') or '')
+                + '. Its daemon could not recover it by itself. Look at that sub-fleet (status / its panes); take it back '
+                'or stop it if it cannot go on.')
+        self.log('subfleet.held', task=note.get('task'), slot=note.get('slot'), reason=note.get('reason'))
+        if self.running() and not self.service:
+            self.queue('supervisor', text)
+        if lifecycle_close.managed(self):
+            from fleetmux import lifecycle
+            try:
+                policy = lifecycle.get_mode(self.cfg['lifecycle'])
+            except ValueError:
+                policy = {}
+            try:
+                lifecycle_close.notify(self, 'slot_held', '[fleet ' + lifecycle_close.fleet_name(self) + '] ' + text, policy)
+            except Exception as exc:  # a notice never takes the daemon down
+                self.log('subfleet.held_notify_failed', level='error', error=str(exc)[:300])
+
     def relay_notices(self):
         """Parent tick: pass a sub-fleet notice up the tree; the top fleet tells its supervisor."""
         folder = self.run_dir / 'subfleet-notices'
         for path in sorted(folder.glob('*.json')) if folder.is_dir() else []:
+            if path.name.startswith('held-'):
+                self.held_notice(path)  # §24 held watchdog: the nearest parent's supervisor, not the top only
+                continue
             if self.cfg.get('parent_config'):
                 up = Path(load(self.cfg['parent_config'])['run']) / 'subfleet-notices'
                 up.mkdir(parents=True, exist_ok=True)
@@ -4331,12 +5131,51 @@ class Fleet:
             pending[key_] = {'what': note['what'], 'who': note['who'], 'paths': item.get('paths') or []}
             self.log('report.up', report=key_, who=item.get('who', ''), what=item['what'][:300], paths=item.get('paths') or [])
         self.r.set(REPORTS_UP, json.dumps(pending, ensure_ascii=False))
+        self.report_clock(pending)
+
+    def report_clock(self, pending):
+        """§46: the task clock stops while a report_up waits for the top ruling and runs again when the last
+        ruling arrives (the deadline moves by the time waited; ``report_wait_s`` sums it for status)."""
+        t = self.task()
+        since, now = t.get('report_wait_at'), awake.now()  # awake time, like the deadline it moves
+        if pending and not since and t.get('status') == 'running' and t.get('deadline'):
+            self.r.hset(TASK, mapping={'report_wait_at': now})
+            self.log('task.clock_paused', reason='report_up awaiting the top ruling', reports=len(pending))
+        elif not pending and since:
+            waited = max(0.0, now - float(since))
+            self.r.hset(TASK, mapping={'report_wait_at': '', 'deadline': float(t.get('deadline') or 0) + waited,
+                                       'report_wait_s': round(float(t.get('report_wait_s') or 0) + waited, 3)})
+            self.log('task.clock_resumed', waited_s=round(waited, 1))
 
     def report_intake(self, note):
         """Top fleet: a sub-fleet report becomes an open escalation its supervisor must rule on (never auto-approved)."""
         key_ = note['id']
         paths = note.get('paths') or []
-        text = ('[sub-fleet report] sub-fleet ' + str(note.get('task')) + ' (' + str(note.get('supervisor')) + '): '
+        mid = self.queue('supervisor', self.report_notice(key_, note))
+        esc = self.escalation_state()
+        esc[key_] = {'kind': 'report', 'origin_run': note['origin_run'], 'task': note.get('task'),
+                     'supervisor': note.get('supervisor'), 'what': note['what'], 'why': note['why'],
+                     'who': note.get('who', ''), 'paths': paths, 'status': 'escalated', 'asked_at': time.time(),
+                     'message_id': mid or ''}
+        self.save_escalations(esc)
+        self.log('report.asked', report=key_, task=note.get('task'), what=note['what'][:300])
+
+    def report_reask(self, key_, rec):
+        """escalation_tick: an open report whose notice was cancelled while still queued (start --resume
+        reconciles the queues) never reached the supervisor: ask again. ``rec`` is changed in place."""
+        mid = rec.get('message_id') or ''
+        if (rec.get('status') != 'escalated' or not self.v2 or not mid
+                or not self.v2.bus.r.hget(self.v2.bus.msg_key(mid), 'cancel_reason')):
+            return False
+        rec['message_id'] = self.queue('supervisor', self.report_notice(key_, rec)) or ''
+        self.log('report.reasked', report=key_, cancelled=mid)
+        return True
+
+    @staticmethod
+    def report_notice(key_, note):
+        """The [sub-fleet report] text for report ``key_`` (a relayed note, or its open escalation record)."""
+        paths = note.get('paths') or []
+        return ('[sub-fleet report] sub-fleet ' + str(note.get('task')) + ' (' + str(note.get('supervisor')) + '): '
                 + note['what'] + ' — ' + note['why'] + (' (worker: ' + note['who'] + ')' if note.get('who') else '')
                 + ('\nPaths ' + note['who'] + ' asks to write: ' + ', '.join(paths) + '. An approve makes the program '
                    'grant exactly these to that worker until the sub-fleet ends; to grant less, add "paths": [...] with '
@@ -4347,14 +5186,6 @@ class Fleet:
                 'how far it goes); a delete / move, a push, credentials or keys, or anything only the user may decide: '
                 'reject, and reply BLOCKED for the user if the task cannot go on without it. Reply with the JSON format '
                 'from AGENTS.md.')
-        mid = self.queue('supervisor', text)
-        esc = self.escalation_state()
-        esc[key_] = {'kind': 'report', 'origin_run': note['origin_run'], 'task': note.get('task'),
-                     'supervisor': note.get('supervisor'), 'what': note['what'], 'why': note['why'],
-                     'who': note.get('who', ''), 'paths': paths, 'status': 'escalated', 'asked_at': time.time(),
-                     'message_id': mid or ''}
-        self.save_escalations(esc)
-        self.log('report.asked', report=key_, task=note.get('task'), what=note['what'][:300])
 
     def report_ruling(self, task_id, rec, answer):
         """Top fleet: the ruling goes back down to the origin sub-fleet (its next tick, apply_vetoes)."""
@@ -4375,6 +5206,7 @@ class Fleet:
         pending = json.loads(self.r.get(REPORTS_UP) or '{}')
         asked = pending.pop(ruling.get('ref'), None)
         self.r.set(REPORTS_UP, json.dumps(pending, ensure_ascii=False))
+        self.report_clock(pending)  # before the [top ruling] delivery takes the task deadline
         if not self.running():
             return
         self.log('report.ruling', report=ruling.get('ref'), decision=ruling.get('decision'))
@@ -4537,7 +5369,7 @@ class Fleet:
             self.log('turn.empty', agent=name, tries=tries)
             if tries <= 3:
                 self.r.lpush(key('inbox', name), info['last_msg'])
-                self.setf(name, empty_tries=tries, retry_at=time.time() + 30 * tries)
+                self.setf(name, empty_tries=tries, retry_at=awake.deadline(30 * tries))
                 return
         self.setf(name, empty_tries=0)
         self.r.rpush(key('replies', name), text[-4000:])
@@ -4598,6 +5430,8 @@ class Fleet:
         # on a report_up (§46): the [top ruling] line comes as a delivery.
         if json.loads(self.r.get(REPORTS_UP) or '{}'):
             return True
+        if self.job_state():  # §19 "Task root": an open job ends with a notice to the supervisor
+            return True
         return bool(self.inbox_depth('supervisor')) or any(
             busy(self.agent(w)) or self.inbox_depth(w) for w in self.workers)
 
@@ -4620,6 +5454,7 @@ class Fleet:
                 raise ValueError(invalid)
             decision = parse_decision(text, self.dispatch_targets(), self.others_active())
             self.report_up_guard(decision)
+            self.job_guard(decision)  # §19 "Task root": a job is the program's, as in a service fleet (§58)
             state = self.contract_state()
             if state is not None:
                 state, rows, held, changes, skeleton = self.contract_decision(state, decision)
@@ -4665,6 +5500,8 @@ class Fleet:
         self.r.hset(TASK, mapping={'bad_replies': 0, 'completion': decision['completion'],
                                    'reason': decision.get('reason', ''),
                                    'artifacts': json.dumps(artifacts, ensure_ascii=False)})
+        if decision['status'] == 'RUNNING' and decision['dispatch'] and t.get('jobs_hold'):
+            self.r.hset(TASK, mapping={'jobs_hold': ''})  # §19 "Task root": new own work, the held COMPLETED lapses
         self.apply_waiting(decision)  # explicit dependency wait (M15): persisted here, cleared by any later reply
         self.advisor_decision(decision)  # before the dispatches below: `advisor: "on"` advises them already
         if decision['status'] == 'BLOCKED':
@@ -4672,7 +5509,9 @@ class Fleet:
             return
         if decision['status'] == 'COMPLETED':
             withdrawn = {self.resolve(w) for w in decision['withdraw']}
-            pending = [w for w in self.unsettled_workers() if w not in withdrawn]
+            # §19 "Task root": a slot that supervises a job's sub-fleet is the job's, not this task's work (the
+            # hold below waits for it); every other unsettled slot bounces as before.
+            pending = [w for w in self.unsettled_workers() if w not in withdrawn and not self.job_holding(w)]
             if pending:
                 # Never end a task over work still out: every dispatched delivery settles first, or the
                 # supervisor withdraws it explicitly (10/13: COMPLETED while workers still ran).
@@ -4694,6 +5533,20 @@ class Fleet:
             failures = (check_artifacts(artifacts, self.workspace(), extended, extended, caller_commands(t))
                         if artifacts else ['no artifacts were declared, nothing to verify'])
             failures += self.contract_gate(state) if state is not None else []
+            if not failures and self.job_state():
+                # §19 "Task root": own work done, jobs still open: held, not bounced (no strike). The task stays
+                # running (its job sub-fleets run on) and completes when the last job ends (job_task_root_tick).
+                reason = decision.get('reason', 'artifacts verified')
+                first = not t.get('jobs_hold')
+                self.r.hset(TASK, mapping={'jobs_hold': reason})
+                if first:
+                    open_ = sorted(self.job_state())
+                    self.log('complete.held_for_jobs', jobs=open_)
+                    self.queue('supervisor', 'COMPLETED recorded: your own work passed verification. ' + str(len(open_))
+                               + ' job(s) still run in their own sub-fleets (' + ', '.join(open_) + '); this task '
+                               'closes by itself when the last one ends. Nothing to dispatch for them: reply RUNNING '
+                               'with an empty dispatch to any job notice, or dispatch new work if you have some.')
+                return
             if not failures:
                 self.finish('completed', decision.get('reason', 'artifacts verified'))
                 return
@@ -4714,6 +5567,8 @@ class Fleet:
             # A busy worker records intent only; delivery re-evaluates at idle.
             # §46: a program grant is pointed to by the program's own line, ahead of the supervisor's text
             advisory = self.take_grant_note(slot) + profile_runtime.profile_advisory(slot, application)
+            if item.get('review'):
+                advisory = self.mark_review(slot) + advisory
             if self.advisor_online():
                 # Only supervisor dispatches are advised (never [contract] notices or report corrections).
                 # Registered before the depends_on hold: a held row is advised when the daemon releases it.
@@ -4728,7 +5583,7 @@ class Fleet:
                 row['attempts'] = row.get('attempts', 0) + 1
             if not self.inbox_depth(slot):
                 self.record_worker_profile(slot, application)
-            self.mark_dispatch(slot, item.get('fresh'))
+            self.mark_dispatch(slot, item.get('fresh'), item['instruction'])
             if state is not None:
                 self.contract_queue(state, slot, row['message'], row['id'])
                 continue
@@ -4770,13 +5625,13 @@ class Fleet:
                 self.r.hset(TASK, mapping={'waiting': ''})
                 self.log('task.waiting_cleared')
             return
-        now = time.time()
+        now = awake.now()  # until: awake time, like the budget (§35); since: Unix time, shown only
         until = now + float(declared['for_hours']) * 3600
-        deadline = float(t.get('deadline') or 0)
+        deadline = task_deadline(t, now)
         if deadline:
-            until = min(until, deadline)  # never outlive the wall-clock budget: waiting does not pause it
+            until = min(until, deadline)  # never outlive the budget: waiting does not pause it
         previous = task_waiting(t)
-        record = dict(declared, since=previous.get('since') or now, until=until,
+        record = dict(declared, since=previous.get('since') or time.time(), until=until,
                       renewals=int(previous.get('renewals') or 0) + (1 if previous else 0), nudged=False)
         self.r.hset(TASK, mapping={'waiting': json.dumps(record, ensure_ascii=False)})
         self.log('task.waiting_renewed' if previous else 'task.waiting', until=until,
@@ -4790,7 +5645,7 @@ class Fleet:
         w = task_waiting(self.task())
         if not w or w.get('nudged'):
             return
-        if not w.get('until') or time.time() < float(w['until']):
+        if not w.get('until') or not awake.passed(w['until']):
             return
         if self.inbox_depth('supervisor') or self.agent('supervisor').get('state') != 'idle':
             return  # a turn is already coming: it sees the waiting line instead of a second reminder
@@ -4808,7 +5663,8 @@ class Fleet:
         if not w:
             return ''
         stamp = lambda ts: time.strftime('%Y-%m-%d %H:%M', time.localtime(float(ts))) if ts else '?'
-        return ('\nTask waiting since ' + stamp(w.get('since')) + ' until ' + stamp(w.get('until')) + ' for: '
+        until = float(w['until']) - awake.now() + time.time() if w.get('until') else None  # awake -> clock time
+        return ('\nTask waiting since ' + stamp(w.get('since')) + ' until ' + stamp(until) + ' for: '
                 + str(w.get('for') or '') + ' (check: ' + str(w.get('check') or '') + ')'
                 + (' [horizon reached, reminder sent]' if w.get('nudged') else ''))
 
@@ -4852,7 +5708,8 @@ class Fleet:
         if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours < 1000:
             raise ValueError('hours must be a positive number')
         life_spec = {}
-        if not self.cfg.get('parent_config'):  # a sub-fleet's deliverable is checked by its parent
+        # A sub-fleet's deliverable is checked by its parent; a job's sub-fleet (§58) runs its own lifecycle gate.
+        if not self.cfg.get('parent_config') or self.cfg.get('job'):
             if self.cfg.get('lifecycle') == 'dev_task':
                 life_spec['deliver'] = lifecycle_deliver.validate_deliver(spec.get('deliver'))
             elif self.cfg.get('lifecycle') == 'review_loop':
@@ -4879,7 +5736,7 @@ class Fleet:
         self.r.delete(TASK)
         fields = {'id': task_id, 'goal': spec['goal'], 'status': 'running', 'completion': 0,
                   'lifecycle_spec': json.dumps(life_spec, ensure_ascii=False),
-                  'reason': '', 'deadline': time.time() + hours * 3600, 'bad_replies': 0,
+                  'reason': '', 'deadline': awake.deadline(hours * 3600), 'budget_s': hours * 3600, 'bad_replies': 0,
                   'bounces': 0, 'artifacts': json.dumps(spec.get('artifacts', []), ensure_ascii=False),
                   'caller_artifacts': json.dumps(spec.get('artifacts', []), ensure_ascii=False),
                   'apply_profiles_live': json.dumps(spec.get('apply_profiles_live', False))}
@@ -4903,6 +5760,14 @@ class Fleet:
                   + ' (artifact paths are relative to it, e.g. worker-1/report.md)'
                   + '\nArtifacts pre-declared by the operator: '
                   + json.dumps(spec.get('artifacts', []), ensure_ascii=False))
+        review_file = (life_spec.get('deliver') or {}).get('review_file') or life_spec.get('review_file')
+        if review_file:
+            prompt += ('\nReview verdict: the delivery gate reads ' + str(self.workspace() / review_file) + ', else '
+                       + str(self.workspace() / '<review worker>' / review_file) + '. You choose the reviewer: add '
+                       '"review": true to the dispatch item that gives the review; the program then tells that worker '
+                       'the exact path (its REVIEWER.md, section R6). Without a review dispatch the gate searches every '
+                       'worker directory and accepts exactly one match. It checks only the verdict (PASS, zero open '
+                       'P0/P1), never who reviewed.')
         if frozen:
             prompt += ('\nThese artifacts are frozen by the caller: they are the acceptance contract. Artifacts you '
                        'add in a decision are ignored and audited; to change them, reply BLOCKED and say why.')
@@ -4982,15 +5847,23 @@ class Fleet:
             raise ValueError('requests need a fleet started with --mode service')
         if named_subfleet.is_op(spec):  # §29: own branch, never REQQ / validate_request / request_timeout
             return named_subfleet.request(self, spec)
+        if applet_lease.is_op(spec):  # applet-interface.md 3.2: own branch, like the sub-fleet ops
+            return applet_lease.request(self, spec)
         validate_request(spec, self.dispatch_targets())
+        if (refused := applet_lease.screen(self, spec)):  # a leased `to`: slot_leased / the lease's own checks
+            return refused
         rid = spec['id']
+        held = self.job_holding(self.resolve(spec['to'])) if spec.get('to') else ''
+        if held:
+            raise ValueError(spec['to'] + ' is the supervisor of the sub-fleet of job ' + held + '; send the request '
+                             'to another worker or without "to"')
         if (self.r.hgetall(REQ + rid) or self.r.get(RESULT + rid)
                 or (self.v2 and self.r.get(self.v2.prefix + ':public:' + runtime_v2.digest(rid)))):
             raise ValueError('duplicate request id: ' + rid)
         if rid.endswith('.done') and self.split_owns(rid[:-len('.done')]):
             raise ValueError('duplicate request id: ' + rid + ' (reserved for the follow-up result of a split)')
         self.r.hset(REQ + rid, mapping={'spec': json.dumps(spec, ensure_ascii=False), 'status': 'routing',
-                                        'created': time.time(), 'attempts': 0, 'worker': ''})
+                                        'created': awake.now(), 'attempts': 0, 'worker': ''})  # awake seconds (§35)
         self.r.rpush(REQQ, rid)
         self.route(rid, spec)
         self.log('request', id=rid, to=spec.get('to') or 'supervisor')
@@ -5047,6 +5920,8 @@ class Fleet:
             task = self.last_task(info)
             if task:
                 line += ', last task: ' + task
+            if self.fresh_always(w):  # §45
+                line += ', fresh: always'
             lines.append(line)
         return '\n'.join(lines)
 
@@ -5059,10 +5934,16 @@ class Fleet:
         text = SUPERVISOR_INSTRUCTION_HEAD.sub('', text)
         return next((' '.join(x.split()) for x in text.splitlines() if x.strip()), '')[:80]
 
-    def mark_dispatch(self, slot, fresh):
+    def mark_dispatch(self, slot, fresh, instruction=None):
         """§37, as a validated dispatch to ``slot`` is queued: ``fresh`` marks the slot for a clean generation at
         its delivery (none for a new or §28-cleared session); without it, one [Hint] line when the slot is
-        already over fresh_hint_ratio of its window."""
+        already over fresh_hint_ratio of its window. §45: an always slot only records an explicit true / false
+        for this one dispatch (``deliver`` decides; no mark, no hint)."""
+        if self.fresh_always(slot):
+            if fresh is not None and (instruction or '').strip():
+                self.r.rpush(FRESH_INTENT + slot, json.dumps([instruction.strip(), bool(fresh)]))
+                self.r.ltrim(FRESH_INTENT + slot, -32, -1)
+            return
         info = self.agent(slot)
         if not int(info.get('delivered') or 0) or (self.v2 and self.v2.clear_enabled(slot)):
             if fresh:
@@ -5088,6 +5969,8 @@ class Fleet:
 
     def fresh_refusal(self, slot):
         """Why a `"fresh": true` dispatch to ``slot`` is refused (docs/design.md §37), '' when it is taken."""
+        if self.fresh_always(slot):
+            return ''  # §45: an always worker is reset when this dispatch's turn comes, never refused
         info = self.agent(slot)
         if not int(info.get('delivered') or 0) or (self.v2 and self.v2.clear_enabled(slot)):
             return ''  # nothing to drop: no reset, plain delivery
@@ -5108,11 +5991,34 @@ class Fleet:
         return ('"fresh": true to ' + self.label(slot) + ' refused: ' + why + '. A fresh session only replaces an '
                 'idle worker with nothing queued; send it to an idle worker, or drop "fresh" to queue behind its work')
 
+    def fresh_always(self, slot):
+        """§45: the roster row says `fresh: always` (read per call, so a hot reload applies to the next dispatch)."""
+        return slot in self.workers and (self.cfg.get('worker_fresh') or {}).get(slot) == 'always'
+
+    def fresh_intent(self, slot, text, pop=False):
+        """§45: the supervisor's explicit `fresh` (True / False) for the dispatch ``text``, None when it wrote none."""
+        for raw in self.r.lrange(FRESH_INTENT + slot, 0, -1):
+            instruction, value = json.loads(raw)
+            if instruction in text:
+                if pop:
+                    self.r.lrem(FRESH_INTENT + slot, 1, raw)
+                return value
+        return None
+
+    def is_dispatch(self, text, msg):
+        """§45: ``text`` (the next message for a worker) is a supervisor dispatch / service request, not a notice."""
+        if self.service:
+            head = REQ_HEAD.match(text)
+            rid = msg.get('request_id') if self.v2 else head.group(1) if head else ''
+            return bool(rid and self.r.exists(REQ + rid))
+        return bool(SUPERVISOR_INSTRUCTION_HEAD.search(text))
+
     def assign(self, rid, slot, instruction=None):
         spec = json.loads(self.r.hget(REQ + rid, 'spec'))
         self.r.hset(REQ + rid, mapping={'status': 'dispatched', 'worker': slot})
         # §46: behind the [Request <id>] header the transport binds, the program's [Fleet grant] line if any
-        self.queue(slot, self.request_message(rid, spec, instruction, prefix=self.take_grant_note(slot), slot=slot))
+        self.queue(slot, self.request_message(rid, spec, instruction, slot=slot,
+                                              prefix=applet_lease.frame(self, spec, slot) + self.take_grant_note(slot)))
 
     def request_message(self, rid, spec, instruction=None, prefix='', slot=None):
         reply = spec['reply']
@@ -5130,12 +6036,14 @@ class Fleet:
                 + '\nYour final reply must be exactly one JSON object with the keys: ' + keys
                 + '. No text outside the JSON object.')
 
-    def publish(self, rid, status, **fields):
+    def publish(self, rid, status, replace=False, **fields):
+        """``replace`` (v2): publish again over an earlier result of ``rid`` (a delivery gate recheck)."""
         if self.v2:
-            return self.v2.publish(rid, status, **fields)
+            return self.v2.publish(rid, status, replace=replace, **fields)
         req = self.r.hgetall(REQ + rid)
         now = time.time()
-        rec = dict(id=rid, status=status, at=now, elapsed_s=round(now - float(req.get('created') or now), 1), **fields)
+        rec = dict(id=rid, status=status, at=now, elapsed_s=round(awake.since(req.get('created') or awake.now()), 1),
+                   **fields)
         raw = json.dumps(rec, ensure_ascii=False)
         self.r.set(RESULT + rid, raw, ex=RESULT_TTL)
         self.r.rpush(RESULTS, raw)
@@ -5178,12 +6086,14 @@ class Fleet:
                 raise ValueError(invalid)
             decision = parse_service_decision(text, self.dispatch_targets())
             self.report_up_guard(decision)
+            self.job_guard(decision)  # §58: a job is the program's; the supervisor never routes or answers it
             for item in decision['dispatch']:
                 if item.get('fresh') and self.fresh_refusal(self.resolve(item['to'])):
                     raise ValueError(self.fresh_refusal(self.resolve(item['to'])))
                 if 'split' in item and not self.cfg.get('supervisor_split'):
                     raise ValueError('dispatch.split: this fleet does not let the supervisor start a sub-fleet '
                                      '(supervisor_split is off); dispatch without split')
+            applet_lease.check_decision(self, decision)  # leased slots, applet answers (applets.md section 4)
             answers = self.service_answers(decision)
             escalations = self.escalation_decision(decision, None) if decision['status'] == 'RUNNING' else []
             self.escalations_missed(decision)
@@ -5207,7 +6117,7 @@ class Fleet:
             if item.get('split'):
                 self.supervisor_split(item['request_id'], self.resolve(item['to']), item)
                 continue
-            self.mark_dispatch(self.resolve(item['to']), item.get('fresh'))
+            self.mark_dispatch(self.resolve(item['to']), item.get('fresh'), item['instruction'])
             self.assign(item['request_id'], self.resolve(item['to']), item['instruction'])
         for item in decision['skip']:
             if self.r.hget(REQ + item['request_id'], 'status') == 'routing':
@@ -5220,6 +6130,8 @@ class Fleet:
         self.report_up(decision['report_up'])
         if decision.get('subfleet'):
             named_subfleet.decide(self, decision['subfleet'])
+        if decision.get('applet'):
+            applet_lease.decide(self, decision['applet'])
         if decision['status'] == 'BLOCKED':
             self.pause(decision.get('reason') or 'supervisor needs a human')
 
@@ -5282,10 +6194,11 @@ class Fleet:
         card = (self.brake_budget() or {}).get('max_busy')
         if card:  # the budget card can only tighten --max-busy
             cap = min(cap, card) if cap else card
-        busy = sum(self.agent(w).get('state') in ('busy', 'handoff', 'held') for w in self.workers)
+        busy = sum(self.agent(w).get('state') in ('busy', 'handoff', 'held') or bool(applet_lease.taken(self, w))
+                   for w in self.workers)  # a leased (or reviewing) slot is busy for its whole lease
         for name in self.names:
             info = self.agent(name)
-            if name in self.workers and cap and busy >= cap:
+            if name in self.workers and cap and busy >= cap and not applet_lease.taken(self, name):
                 continue  # e.g. a local model server that rejects concurrent large requests
             if (info.get('advice_hold') == '1' and info.get('state') == 'starting'
                     and info.get('launch_ready') == '0' and (self.inbox_depth(name) or not self.advisor_online())):
@@ -5294,8 +6207,10 @@ class Fleet:
                 else:
                     self.release_default(name)  # advisor went offline: never stay held
                 continue
+            if info.get('state') == 'idle' and self.inbox_depth(name) and session_env.hold_delivery(self, name, info):
+                continue  # applet route port closed (distributed-development.md): queue kept, delivered once it answers
             if (info.get('state') == 'idle' and self.inbox_depth(name)
-                    and time.time() >= float(info.get('retry_at') or 0)):
+                    and awake.passed(info.get('retry_at') or 0)):
                 self.deliver(name)
                 if name in self.workers and self.agent(name).get('state') in ('busy', 'handoff'):
                     busy += 1
@@ -5312,15 +6227,17 @@ class Fleet:
         info = self.agent(name)
         if info.get('fresh_pending') == '1' and info.get('stopfail_fresh') == '1':
             # §24 service: a session that ended in a model refusal never takes more work; rotate it now.
-            self.fresh_rotation(name, *self.usage(name))
+            self.fresh_rotation(name, *self.usage(name), source='stopfail')
             return
         if info.get('fresh_pending') == '1' and info.get('result_fresh') == '1':
             # §51 fresh_after_result: a published result, not a cancelled dispatch; rotate once settled on the bus
             if not self.v2 or runtime_v2.tui_slot(self.runtime_cfg(name), name) or info.get('bridge_available') == '1':
-                self.fresh_rotation(name, *self.usage(name))
+                self.fresh_rotation(name, *self.usage(name), source='after_result')
             return
         if info.get('fresh_pending') == '1':
             self.setf(name, fresh_pending=0)  # §37: its fresh dispatch was cancelled before delivery
+        if self.fresh_always(name):
+            self.r.delete(FRESH_INTENT + name)  # §45: nothing queued, so no recorded true / false is still due
         mark = str(info.get('generation') or 0) + ':' + str(info.get('delivered') or 0)
         if int(info.get('delivered') or 0) == 0 or info.get('idle_rotate_mark') == mark:
             return  # a fresh session (READY only) is never rotated here; rotate.impossible stays deliver's
@@ -5492,7 +6409,7 @@ class Fleet:
         if self.service:
             req = self.r.hgetall(REQ + msg['request_id'])
             limit = request_limit(json.loads(req['spec']), self.cfg) if req else None
-            if limit is not None and midturn.effective_age(req, now) >= limit:
+            if limit is not None and midturn.effective_age(req, awake.now()) >= limit:
                 return
         hid = 'fx-' + uuid.uuid4().hex[:16]
         draft = agent_cwd(self.cfg, name) / '.handoff' / ('draft-' + hid + '.md')
@@ -5519,7 +6436,7 @@ class Fleet:
                       midturn_tries=1, midturn_prompt=prompt, midturn_send_pending=1, midturn_type_attempts=0,
                       midturn_request=msg['request_id'], midturn_message=msg['message_id'],
                       midturn_instruction=msg.get('midturn_instruction') or msg['body']['text'], midturn_wait_at='')
-            self.v2.midturn_pause_request(msg['request_id'], now)
+            self.v2.midturn_pause_request(msg['request_id'], awake.now())
             self.v2.audit('midturn.ordered', slot=name, message_id=msg['message_id'], detail=fields)
             self.v2.midturn_card(name, self.label(name) + ' 上下文 ' + str(used) + '/' + str(window) + '，已发中途交接指令')
         self.v2.transaction('midturn-order-' + hid, order)
@@ -5761,6 +6678,31 @@ class Fleet:
             else:
                 self.fresh_rotation(name, used, window)
                 return
+        elif not continuing and self.fresh_always(name) and self.is_dispatch(text, next_msg):
+            # §45 roster `fresh: always`: a clean generation before every dispatch once this one has delivered work.
+            explicit = self.fresh_intent(name, text)
+            mark = str(info.get('generation') or 0) + ':' + str(info.get('delivered') or 0)
+            skip = ('clear_after_result' if self.v2 and self.v2.clear_enabled(name)
+                    else 'explicit_false' if explicit is False
+                    else 'delivered_0' if not int(info.get('delivered') or 0)
+                    else 'fresh_failed' if info.get('fresh_always_failed') == mark else '')
+            wait = ('' if skip else 'adopted' if subfleet.adopted(self.cfg, name, info.get('generation'))
+                    else 'clearing' if info.get('clear_required') == '1'
+                    else 'native subagents still running' if agent_cli(self.runtime_cfg(name), name) == 'codex'
+                    and active_children(info.get('thread'), self.sessions) else '')
+            if wait:  # §37's guards postpone the reset; the dispatch never goes to this session
+                if info.get('fresh_deferred') != mark + ':' + wait:
+                    self.setf(name, fresh_deferred=mark + ':' + wait)
+                    self.log('dispatch.fresh_deferred', agent=name, reason=wait)
+                return
+            self.fresh_intent(name, text, pop=True)
+            if skip:
+                self.log('dispatch.fresh_skipped', agent=name, reason=skip,
+                         source='always' if explicit is None else 'explicit')
+            else:
+                if self.fresh_rotation(name, used, window, source='explicit' if explicit else 'always') is False:
+                    self.setf(name, fresh_always_failed=mark)  # after the restore: this dispatch goes to the old session
+                return
         ratio = float(self.agent(name).get('handoff_ratio') or self.cfg['handoff_ratio'])  # set by usage()
         if subfleet.adopted(self.cfg, name, info.get('generation')):
             window = 0  # an adopted pane goes back to its parent fleet: never replace it with a successor
@@ -5816,6 +6758,7 @@ class Fleet:
         when the kit is a domain kit (a domain kit has no .claude/: without a floor only mcp.json is copied).
         installed_domains stays '' (default layout)."""
         install_kit(self.cfg.get('worker_kit'), cwd)
+        install_imported_mcp(self.cfg, cwd)  # roster `import_mcp`, after the kit copy
         floor = self.floor_domains()
         if not floor or not self.cfg.get('worker_kit'):
             return
@@ -5848,6 +6791,7 @@ class Fleet:
             kitmod.Kit.clear(cwd)
             domains = []
             (cwd / 'CLAUDE.md').write_text(scope)
+        install_imported_mcp(self.cfg, cwd)  # roster `import_mcp`, after the kit's mcp.json
         if record:
             self.setf(name, installed_domains=json.dumps(domains, ensure_ascii=False), advice_domains='')
 
@@ -6024,7 +6968,7 @@ class Fleet:
         mid = self.advisor_send(ticket, request)
         self.r.hset(ADVICE + ticket, mapping={
             'slot': slot, 'task': self.task().get('id', ''), 'kind': kind, 'input': view, 'request': request,
-            'status': 'pending', 'mid': mid, 'attempt': 1, 'phase': 'queued', 'deadline': now + ADVICE_WAIT,
+            'status': 'pending', 'mid': mid, 'attempt': 1, 'phase': 'queued', 'deadline': awake.deadline(ADVICE_WAIT),
             'started': now, 'errors': '[]', 'at': now})
         self.log('advice.queued', agent=slot, ticket=ticket, path=kind, advisor=state, ahead=ahead)
         if state != 'idle' or ahead:  # merge seam M1: say once why the supervisor hears nothing for a while
@@ -6051,7 +6995,7 @@ class Fleet:
             request = request or t.get('request') or ''
             mid = self.advisor_send(ticket, request, error=errors[-1])
             self.r.hset(ADVICE + ticket, mapping={'status': 'pending', 'mid': mid, 'attempt': attempt + 1, 'request': request,
-                                                  'phase': 'queued', 'deadline': now + ADVICE_WAIT, 'raw': '',
+                                                  'phase': 'queued', 'deadline': awake.deadline(ADVICE_WAIT), 'raw': '',
                                                   'errors': json.dumps(errors, ensure_ascii=False)})
             self.log('advice.correction', ticket=ticket, attempt=attempt + 1, error=errors[-1])
             return 'wait', None, errors
@@ -6069,9 +7013,9 @@ class Fleet:
             return 'unavailable', None, errors
         if status in ('offered', 'received') and t.get('phase') == 'queued':
             # The advisor has it now: the time limit starts again for the answer itself.
-            self.r.hset(ADVICE + ticket, mapping={'phase': 'answering', 'deadline': now + ADVICE_WAIT})
+            self.r.hset(ADVICE + ticket, mapping={'phase': 'answering', 'deadline': awake.deadline(ADVICE_WAIT)})
             return 'wait', None, errors
-        if now >= float(t.get('deadline') or 0):
+        if awake.passed(t.get('deadline') or 0):  # awake time (§35)
             errors.append('advisor gave no sheet within ' + str(ADVICE_WAIT) + ' s ('
                           + ('waiting for the advisor' if t.get('phase') == 'queued' else 'answering') + ')')
             if status == 'queued':
@@ -6134,7 +7078,7 @@ class Fleet:
         info = self.agent(ADVISOR)
         generation = int(info['generation']) + 1 if info.get('generation') else 0
         self.setf(ADVISOR, label='advisor' if generation == 0 else slot_base(ADVISOR) + '.' + str(generation),
-                  generation=generation, handoff_id='', restart_at=time.time() + ADVISOR_RESTART_GAP)
+                  generation=generation, handoff_id='', restart_at=awake.deadline(ADVISOR_RESTART_GAP))
         self.advisor_slot = True
         self.names = self.slot_names()
         try:
@@ -6171,7 +7115,7 @@ class Fleet:
                 self.advisor_retire()
             return
         failed = info.get('state') in ('dead', 'held') or info.get('advisor_fault')
-        if failed and not self.paused() and time.time() >= float(info.get('restart_at') or 0):
+        if failed and not self.paused() and awake.passed(info.get('restart_at') or 0):
             self.advisor_restart(info.get('advisor_fault') or ('startup failed' if info.get('state') == 'dead'
                                                                 else 'held'))
 
@@ -6198,7 +7142,7 @@ class Fleet:
         pump) and advisor_tick tries the next generation again after ADVISOR_RESTART_GAP."""
         info = self.agent(ADVISOR)
         generation, old, prev = int(info.get('generation') or 0), info.get('pane'), self.label(ADVISOR)
-        self.setf(ADVISOR, restart_at=time.time() + ADVISOR_RESTART_GAP, advisor_fault='', handoff_id='')
+        self.setf(ADVISOR, restart_at=awake.deadline(ADVISOR_RESTART_GAP), advisor_fault='', handoff_id='')
         try:
             alive = bool(old) and self.mgr.get_pane_status(old) is not None
             hid = ('handoff-' if source == 'handoff' else 'restart-') + uuid.uuid4().hex[:8]
@@ -6434,9 +7378,9 @@ class Fleet:
         self.record_advice(name, sheet, 'launch')  # the held first generation starts with this sheet
         fields = dict(advice_hold=0, launch_ready=1)
         if self.v2:
-            fields['startup_deadline'] = time.time() + float(self.cfg['profile_ready_timeout'])
+            fields['startup_deadline'] = awake.deadline(self.cfg['profile_ready_timeout'])
         if launch:
-            fields['profile_ready_deadline'] = time.time() + float(self.cfg['profile_ready_timeout'])
+            fields['profile_ready_deadline'] = awake.deadline(self.cfg['profile_ready_timeout'])
         self.setf(name, **fields)
         self.log('advice.released', agent=name, ticket=sheet['ticket'])
 
@@ -6465,7 +7409,7 @@ class Fleet:
             return
         fields = dict(advice_hold=0, launch_ready=1)
         if self.v2:
-            fields['startup_deadline'] = time.time() + float(self.cfg['profile_ready_timeout'])
+            fields['startup_deadline'] = awake.deadline(self.cfg['profile_ready_timeout'])
         self.setf(name, **fields)
         self.log('advice.released_default', agent=name)
 
@@ -6911,7 +7855,7 @@ class Fleet:
             self.setf(name, rescue_relay='', rescue_hint='')
             self.r.rpush(ADVICE_NOTES, '[advisor] respawn ' + prev + ' → ' + label + ' done')
 
-    def fresh_rotation(self, name, used, window):
+    def fresh_rotation(self, name, used, window, source='explicit'):
         """§37: the next generation of an idle slot for a `fresh` dispatch, in place, in finish_rotation's order but
         with no handoff turn, no note and no takeover text; the queued instruction is delivered after READY.
         A successor that cannot start (or take the tab) is removed and the old session keeps the slot."""
@@ -6944,7 +7888,7 @@ class Fleet:
             self.log('dispatch.fresh_failed', level='error', agent=name, reason=why)
             self.r.rpush(FRESH_HINTS, '[Fresh failed] ' + prev + ': a clean session did not start (' + why + '); '
                          'your instruction went to the existing session ' + prev + '.')
-            return
+            return False
         if not self.v2:
             self.mgr.tab_into(new, old)
         if not self.mgr.kill_pane(old) or (self.v2 and self.mgr.get_pane_status(old) is not None):
@@ -6960,8 +7904,9 @@ class Fleet:
                        snapshot=str(snapshot), source='fresh', timed_out=False)
         self.refresh_history()
         self.log('dispatch.fresh', agent=name, label=label, prev=prev, from_generation=generation,
-                 generation=generation + 1, dropped_tokens=used, window=window,
+                 generation=generation + 1, dropped_tokens=used, window=window, source=source,
                  transcript=info.get('transcript') or info.get('thread') or '')
+        return True
 
     def refresh_history(self):
         history.write_page(self.run_dir, self.history_slots(), self.history_links())
@@ -7033,11 +7978,18 @@ class Fleet:
             workers, roles, profiles = roster.parse_entries(raw, Path(path).parent)
             table, per_worker = roster.handoff(raw)
             split_table, split_workers = roster.split(raw)  # §44, validated with the rest above
+            fresh = roster.fresh(raw)  # §45
             subfleets = roster.subfleets(raw, Path(path).parent)  # §29 (exempt from the used-name rule)
             if roster.has_channels(raw) and (not self.service or self.cfg.get('parent_config')
                                              or self.cfg.get('transport_version', 1) != 2):
                 raise ValueError(roster.SERVICE_ONLY)  # §53: a task fleet / sub-fleet never gets channels
             new_channels = roster.channels(raw)  # [] = none
+            new_applets = roster.applets(raw, Path(path).parent)  # applet-interface.md section 1
+            from fleetmux import relay_applet  # a roster row may not take a built-in applet's name
+            if relay_applet.reserved(new_applets):
+                raise ValueError('\n'.join(relay_applet.reserved(new_applets)))
+            if new_applets and not self.service:
+                raise ValueError('applets: only a service fleet (a root service fleet or a named sub-fleet) hosts applets')
             if subfleets and subfleet.backend_problem(self.cfg):  # §33.4: none on WezTerm; keep the old roster
                 raise ValueError(subfleet.backend_problem(self.cfg))
             # A slot name used earlier in this run still has Redis state and a workspace.
@@ -7093,6 +8045,10 @@ class Fleet:
             changed['split'] = {'before': {'table': self.split_table, 'workers': self.worker_split},
                                 'after': {'table': split_table, 'workers': split_workers}}
         self.split_table, self.worker_split = split_table, split_workers
+        old_fresh = dict(self.cfg.get('worker_fresh') or {})  # §45: the next delivery reads the new value
+        results.update({n: 'fresh ' + (fresh.get(n) or 'off') + '; applies to its next dispatch' for n in workers
+                        if n in self.workers and n not in results and fresh.get(n) != old_fresh.get(n)})
+        self.cfg['worker_fresh'] = fresh
         # max_busy (11-09): read by every pump(); the roster value wins, a removed key restores --max-busy.
         cap = roster.max_busy(raw)
         cap = self.max_busy_start if cap is None else cap
@@ -7123,6 +8079,8 @@ class Fleet:
         # §29: a hot-added supervisor_slot must be known before it spawns (tmux slot + no advisor hold read
         # cfg['subfleets']); written after the adds, it started as a plain held tab and its sub-fleet waited (10-14).
         self.tab_specs = roster.tabs(raw, Path(path).parent)  # opened once by tabs.open_all (§31)
+        self.applet_specs = new_applets  # started / watched / stopped by applet_host.tick
+        self.builtin_applets()  # relay.enabled, read again on every roster reload
         subs_changed = subfleets != (self.cfg.get('subfleets') or [])
         if subs_changed:
             self.cfg['subfleets'] = subfleets
@@ -7135,8 +8093,9 @@ class Fleet:
                 self.cfg.pop('channels', None)
             changed['channels'] = {'before': [e['type'] + ':' + e['account'] for e in old_channels],
                                    'after': [e['type'] + ':' + e['account'] for e in new_channels]}
+        routes_changed = session_env.update_config(self.cfg, new_applets, subfleets)  # root: union of the tree
         if (adds or roles != old_roles or profiles != old_profiles or pi_changed or subs_changed
-                or channels_changed):
+                or channels_changed or routes_changed or fresh != old_fresh):
             # Hooks and bridges check membership in the config file: write it before spawning.
             self.persist_roster()
         # Before the adds: a worker added together with `advisor: on` is spawned advised (held for its sheet).
@@ -7175,7 +8134,7 @@ class Fleet:
         fields = {'workers': list(self.workers), 'worker_roles': self.cfg.get('worker_roles') or {},
                   'worker_profiles': self.cfg.get('worker_profiles') or {},
                   'pi_models': self.cfg.get('pi_models') or {}, 'pi_thinkings': self.cfg.get('pi_thinkings') or {},
-                  'subfleets': self.cfg.get('subfleets') or []}
+                  'subfleets': self.cfg.get('subfleets') or [], 'worker_fresh': self.cfg.get('worker_fresh') or {}}
 
         def merged(stored):  # §53: `channels` written when the roster has some, removed when it has none
             out = dict(stored, **fields)
@@ -7183,7 +8142,7 @@ class Fleet:
                 out['channels'] = self.cfg['channels']
             else:
                 out.pop('channels', None)
-            return out
+            return session_env.carry(out, self.cfg)
         save(self.path, merged(load(self.path)))
         try:
             latest = load(LATEST)
@@ -7208,6 +8167,7 @@ class Fleet:
         return 'added' if placed else 'added; could not move it into the worker column'
 
     def retire_worker(self, name):
+        applet_lease.slot_retired(self, name)  # applets.md section 4: the lease is revoked first
         info, label = self.agent(name), self.label(name)
         generation, pane = int(info.get('generation') or 0), info.get('pane')
         snapshot = ''
@@ -7477,6 +8437,17 @@ class Fleet:
                         'idle again. Dispatch a smaller, concrete instruction, or reply BLOCKED if a human is needed.')
 
     # -- brake (fleetmux/brake.py): budget card per pool + wall table
+    def quota_reading(self):
+        """The pool readings of every brake reader: the hot quota block (fleetmux/fleet_superpowers_hot.py)."""
+        from fleetmux import fleet_superpowers_hot
+        return fleet_superpowers_hot.quota(self.r)
+
+    def quota_source(self):
+        """The treasurer's quota.json the daemon ingests: config ``quota_file``, else the default location."""
+        from fleetmux import fleet_superpowers
+        path = self.cfg.get('quota_file')
+        return Path(path).expanduser() if path else fleet_superpowers.old_location('quota')
+
     def brake_budget(self):
         return json.loads(self.r.hget(BRAKE, 'budget') or 'null')
 
@@ -7484,7 +8455,7 @@ class Fleet:
         """A new card: counters restart (task submit; service: first tick)."""
         if self.paused() and (self.r.hget(SERVICE, 'reason') or '').startswith('brake: '):
             self.resume()  # a brake pause belongs to the card it tripped, not to the next task
-        base = brake.pool_reading(brake.read_quota(self.cfg.get('quota_file')), (budget or {}).get('pool'))
+        base = brake.pool_reading(self.quota_reading(), (budget or {}).get('pool'))
         self.r.delete(BRAKE)
         self.r.hset(BRAKE, mapping={'budget': json.dumps(budget), 'calls': 0, 'rounds': 0, 'started': time.time(),
                                     'usd_base': '' if base is None else base, 'tripped': ''})
@@ -7500,7 +8471,7 @@ class Fleet:
         budget = json.loads(state.get('budget') or 'null')
         if not budget or not self.running() or self.paused():
             return None
-        quota = brake.read_quota(self.cfg.get('quota_file'))
+        quota = self.quota_reading()
         if brake.pool_meter(budget.get('pool')) == 'usd_equiv' and state.get('usd_base') in (None, ''):
             base = brake.pool_reading(quota, budget['pool'], now)
             if base is not None:  # the first known reading is the baseline: spend before it is not ours
@@ -7531,7 +8502,7 @@ class Fleet:
         state = self.r.hgetall(BRAKE)
         card = json.loads(state.get('budget') or 'null')
         save(self.run_dir / 'brake.json', dict(record, budget=card, effective_budget=self.brake_card(card),
-             counters=brake.counters(state, brake.read_quota(self.cfg.get('quota_file')))))
+             counters=brake.counters(state, self.quota_reading())))
         argv = self.cfg.get('brake_notify')
         if argv:
             try:
@@ -7554,7 +8525,7 @@ class Fleet:
             if budget.get('pool') != json.loads(state['budget']).get('pool'):
                 raise ValueError('--raise cannot change the pool')
         if budget:  # any resume, whatever paused the run (a later wall trip or a hold can overwrite the record)
-            found = brake.trips(self.brake_card(budget), brake.counters(state, brake.read_quota(self.cfg.get('quota_file'))))
+            found = brake.trips(self.brake_card(budget), brake.counters(state, self.quota_reading()))
             if found:
                 raise ValueError('budget still over the line (' + brake.describe(found)
                                  + '); resume with --raise LIMIT=<higher value>')
@@ -7760,14 +8731,14 @@ class Fleet:
         if attempt > self.STARTUP_RETRY_MAX:
             return None
         wait = self.STARTUP_RETRY_BACKOFF[min(attempt, len(self.STARTUP_RETRY_BACKOFF)) - 1]
-        self.setf(name, startup_retries=attempt, startup_retry_at=time.time() + wait)
+        self.setf(name, startup_retries=attempt, startup_retry_at=awake.deadline(wait))
         return attempt, wait
 
     def startup_retry_tick(self):
         """Start the next generation of a slot whose startup failed on the network, once its backoff is due and
         the network answers. While it does not (lid closed, the daemon ticking in a dark wake) the retry waits:
-        no attempt spent, no new generation."""
-        now = time.time()
+        no attempt spent, no new generation. The backoff is awake time (§35)."""
+        now = awake.now()
         online = None
         for name in ['supervisor'] + self.active_workers():
             info = self.agent(name)
@@ -7827,7 +8798,7 @@ class Fleet:
                 and self.r.hget(SERVICE, 'reason') == owner.get('reason'))
         budget = self.brake_budget()
         over = budget and brake.trips(self.brake_card(budget), brake.counters(
-            self.r.hgetall(BRAKE), brake.read_quota(self.cfg.get('quota_file'))))
+            self.r.hgetall(BRAKE), self.quota_reading()))
         self.log('brake.downgraded', agent=name, label=self.label(name), cli=req['to_cli'], to=req['to'],
                  from_cli=req['cli'], from_model=req['from'], resumed=bool(self.paused() and ours and not over))
         if self.paused() and ours and not over:
@@ -7967,9 +8938,50 @@ class Fleet:
         from fleetmux.channels import stop
         return stop.keep_pause_on_resume(self)
 
+    def superpowers_refresh(self):
+        """A root fleet daemon keeps this machine's machines entry fresh (fleet_superpowers_refresh.daemon_tick:
+        at start, then every hot.refresh_seconds, in a background thread, one daemon per machine at a time)."""
+        if getattr(self, 'r', None) is None or self.cfg.get('parent_config'):  # no bus: not a running daemon
+            return
+        from fleetmux import fleet_superpowers_refresh
+        if not hasattr(self, 'superpowers_refresh_state'):
+            self.superpowers_refresh_state = {}
+        done = fleet_superpowers_refresh.daemon_tick(self.superpowers_refresh_state)
+        if done.startswith('failed: '):
+            self.log('tick.error', part='superpowers_refresh', error=done[len('failed: '):])
+
+    def builtin_applets(self):
+        """The built-in applets join the roster's applets (relay_applet: the relay when relay.enabled, on a root
+        v2 service fleet only). Read at daemon start and resume and at every roster reload: a change of the switch
+        takes effect at the next daemon restart or roster reload."""
+        from fleetmux import relay_applet
+        current = getattr(self, 'applet_specs', None)
+        try:
+            self.applet_specs = relay_applet.compose(current, getattr(self, 'cfg', None),
+                                                     getattr(self, 'workers', None))
+        except ValueError as exc:  # e.g. no worker row for the applet lease policy: said once per cause
+            self.applet_specs = [e for e in current or [] if e.get('name') not in relay_applet.NAMES]
+            if getattr(self, 'builtin_applet_error', None) != str(exc):
+                self.builtin_applet_error = str(exc)
+                self.log('applet.builtin_error', level='error', error=str(exc)[:300])
+            return
+        self.builtin_applet_error = None
+
+    def superpowers_flush(self):
+        """quota.json into the hot quota block when it changed, then the dirty hot blocks back to the file."""
+        if getattr(self, 'r', None) is None:  # no bus yet: nothing was loaded
+            return
+        from fleetmux import fleet_superpowers_hot
+        fleet_superpowers_hot.ingest_quota(self.r, self.quota_source())
+        fleet_superpowers_hot.flush(self.r)
+
     def tick(self):
         # Each part is guarded: under v2 this runs in the daemon loop, and one failing part (a bad
         # roster, a broken sub-fleet record, a full disk) must not kill the daemon. Bus errors stay fatal.
+        if getattr(self, 'r', None) is not None:  # §35: fold the sleep since the last tick into the awake clock, publish
+            awake.tick(self.r)
+        if self.v2:
+            self.v2.gap_tick()  # a daemon gap (lid-closed sleep) is known before any part judges a wait (§35)
         for part, run in (('roster', self.roster_tick),  # the only place the roster changes
                           ('advisor', self.advisor_tick),  # resident advisor tab: start / retire / restart (§27)
                           ('lifecycle', lambda: lifecycle_close.tick(self)),  # mode policy (done gate, hold, timeouts, idle); before result.json
@@ -7978,10 +8990,17 @@ class Fleet:
                           ('tabs', lambda: tabs.open_all(self)),  # companion tabs (§31): once per daemon start
                           ('tab_watch', lambda: tabs.watch(self)),  # §31 restart: on-exit + `tab restart`
                           ('fleetmux', lambda: fleetmux_sidebar.tick(self)),  # fleetmux sidebar cards (kv sidebar)
+                          ('gui_keep', lambda: gui_keep.tick(self)),  # root only: keep the `fleetmux gui` window open
+                          ('jobs', self.job_tick),  # §58: queued jobs take a free slot (outside transactions)
                           ('escalations', self.escalation_tick), ('waiting', self.waiting_tick),
                           ('notices', self.relay_notices), ('vetoes', self.apply_vetoes),
                           ('channels', self.channel_tick),  # the channel actor process (P1f): spawn / watch / restart
-                          ('security', self.security_tick)):  # P8m /stop (then P8g audit mirror); no policy: no-op
+                          ('security', self.security_tick),  # P8m /stop (then P8g audit mirror); no policy: no-op
+                          ('applets', lambda: applet_host.tick(self)),  # applet processes (applets.md section 2)
+                          ('applet_views', lambda: applet_view.tick(self)),  # one tab per applet in the daemon area
+                          ('applet_leases', lambda: applet_lease.tick(self)),  # leases (applets.md section 3)
+                          ('superpowers', self.superpowers_flush),  # quota.json in, hot inventory blocks back to the file
+                          ('superpowers_refresh', self.superpowers_refresh)):  # root only: machines.<self>
             try:
                 run()
             except BusError:
@@ -8012,16 +9031,16 @@ class Fleet:
         for name in self.names:
             info = self.agent(name)
             if (info.get('state') == 'starting' and info.get('runtime_profile')
-                    and now >= float(info.get('profile_ready_deadline', '0'))):
+                    and awake.passed(info.get('profile_ready_deadline', '0'))):
                 self.block_profile(name, 'profile runtime timed out before READY', dead=True)
                 continue
             if info.get('state') == 'handoff' and now >= float(info.get('handoff_deadline', 0)):
                 self.finish_rotation(name, timed_out=True)
         t = self.task()
-        if t.get('status') == 'running' and now >= float(t.get('deadline', 0)):
+        if t.get('status') == 'running' and awake.now() >= task_deadline(t):  # awake time (§35)
             self.finish('budget_exhausted', 'time budget exhausted')
         if self.service:
-            self.expire_requests(now)
+            self.expire_requests(awake.now())  # the request clock is awake seconds (§35)
         self.check_stalls(now)
         if now >= self.next_liveness:
             self.next_liveness = now + 30
@@ -8056,8 +9075,16 @@ class Fleet:
             why = getattr(self.mgr, 'last_error', '') or 'no reason given'
             self.log('backend.session_failed', backend=run_backend(self.cfg), reason=why)
             raise SystemExit('backend ' + run_backend(self.cfg) + ' could not create its session: ' + why)
+        awake.tick(self.r)  # §35: go on from the fleet's published awake clock before anything is stamped
         sandbox.startup_audits(self)  # P8o / M172: one security.sandbox_off per degraded slot (no policy: no-op)
         self.wall_chains_load()  # start and resume alike: walls read the chains from Redis only
+        self.builtin_applets()  # relay.enabled: the built-in relay applet, also without a roster file
+        try:  # fleet-superpowers hot blocks (models, quota) into this fleet's Redis; never fatal
+            from fleetmux import fleet_superpowers_hot
+            fleet_superpowers_hot.load(self.r)
+            fleet_superpowers_hot.ingest_quota(self.r, self.quota_source())
+        except Exception as exc:
+            self.log('tick.error', part='superpowers_load', error=repr(exc))
         if self.v2:
             return self.v2.run()
         self.start_all()
@@ -8572,6 +9599,16 @@ def resume(run, args):
                 raise ValueError('\n'.join(problems))
         except (OSError, ValueError) as exc:
             raise SystemExit('--roster ' + str(roster_path) + ' rejected:\n' + str(exc)) from exc
+        old_copy = Path(cfg.get('roster') or run / roster.RUN_COPY)
+        old_text = old_copy.read_text() if old_copy.is_file() else None
+        roster_path = roster.copy_into_run(roster_path, run)  # open question 5: the run's own copy
+        if roster_path.read_text() != old_text:  # rebuilt: loaded workflows go back in (design.md §56)
+            from fleetmux import superpowers_peer
+            try:
+                superpowers_peer.reapply(run / superpowers_peer.RECORDS, old_text, run, roster_path,
+                                         refuse=None if cfg.get('mode') == 'service' else 'a task fleet hosts no applet')
+            except Exception as exc:  # never stops the resume
+                print('superpowers: loaded workflows not loaded again: ' + repr(exc), file=sys.stderr)
         cfg['roster'] = str(roster_path)
         cfg['subfleets'] = roster.load_subfleets(roster_path)  # respawned supervisor_slots start in tmux
     if getattr(args, 'advisor', False):  # sugar: writes `advisor: on` into this run's roster (§2.1)
@@ -8659,6 +9696,10 @@ def daemon(cfg_path, resume=False):
     fleet = None
     with (Path(cfg['run']) / 'daemon.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:  # design.md §56 "Releases": the release this daemon runs, for status, refresh and load
+            releases.record(cfg['run'])
+        except OSError as exc:
+            print('cannot record the running release: ' + str(exc), file=sys.stderr)
         # cmux creates a fresh login shell: it does not inherit the start command's
         # FLEETMUX_STATE. Pin the registry in config, never fall back for new runs.
         fleet = Fleet(cfg_path, connect(cfg), manager_for(cfg))
@@ -8671,6 +9712,11 @@ def daemon(cfg_path, resume=False):
         try:
             fleet.run()
         finally:
+            try:  # the hot fleet-superpowers blocks go back to the file before Redis may go down
+                from fleetmux import fleet_superpowers_hot
+                fleet_superpowers_hot.flush(fleet.r, force=True)
+            except Exception:
+                pass
             if not fleet.v2 or fleet.explicit_stop:
                 try:
                     fleet.r.shutdown()
@@ -8745,6 +9791,113 @@ def has_desktop():
     return sys.platform.startswith('linux') and bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
 
 
+def interactive_terminal():
+    """A person ran `start` at a terminal: stdin and stdout are both TTYs (not launchd, not a script's pipe)."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def inside_fleetmux_pane():
+    """`start` runs inside a fleetmux pane: some ancestor process is a `fleetmux server`."""
+    pid = os.getppid()
+    for _ in range(64):
+        if pid <= 1:
+            return False
+        try:
+            out = subprocess.run(['ps', '-o', 'ppid=', '-o', 'command=', '-p', str(pid)],
+                                 capture_output=True, text=True, timeout=5).stdout.split(None, 1)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if not out:
+            return False
+        argv = out[1].split() if len(out) > 1 else []
+        if len(argv) > 1 and Path(argv[0]).name == 'fleetmux' and argv[1] == 'server':
+            return True
+        try:
+            pid = int(out[0])
+        except ValueError:
+            return False
+    return False
+
+
+def viewer_running(runtime):
+    """A `fleetmux gui` / `fleetmux attach` is already open on this runtime directory."""
+    try:
+        out = subprocess.run(['ps', '-axo', 'command='], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for line in out.splitlines():
+        argv = line.split()
+        if (len(argv) > 3 and Path(argv[0]).name == 'fleetmux' and argv[1] in ('gui', 'attach')
+                and argv[2] == '--runtime' and argv[3] == str(runtime)):
+            return True
+    return False
+
+
+def window_here(binary):
+    """A window can open for the person at this terminal: a desktop, `fleetmux-web`, and not an ssh session.
+    Otherwise the view is `fleetmux attach` (auto_view, and bare `fleetmux` in fleetmux/open_window.py)."""
+    return bool(has_desktop() and fleetmux_web_bin(binary) and not os.environ.get('SSH_CONNECTION'))
+
+
+def auto_view(run, binary, gui, attach):
+    """`start` on fleetmux without --attach / --gui / --no-view: open a view for the person at the terminal.
+
+    A desktop with fleetmux-web (and not an ssh session) gets the window, started in the background so `start`
+    still returns; its output goes to <run>/gui.log. Otherwise the attach command is returned for `start` to
+    exec. Nothing is opened (None) without a terminal, inside a fleetmux pane, or when a viewer is already open
+    on this runtime.
+    """
+    if not interactive_terminal() or inside_fleetmux_pane() or viewer_running(gui[-1]):
+        return None
+    if window_here(binary):
+        log = Path(run) / 'gui.log'
+        with open(log, 'ab') as out:
+            proc = subprocess.Popen(gui, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+        if sys.platform == 'darwin':
+            bring_window_to_front(proc.pid)
+        print('Opened a window (log: ' + str(log) + ')')
+        return None
+    return attach
+
+
+def bring_window_to_front(gui_pid, wait_s=5.0):
+    """macOS does not let a window started from a background process take the focus, so the new window opens
+    behind the terminal. Wait for `fleetmux gui`'s `fleetmux-web` child and raise it through System Events.
+    Best effort: any failure leaves the window where it is."""
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        try:
+            pids = subprocess.run(['pgrep', '-P', str(gui_pid), 'fleetmux-web'], capture_output=True, text=True,
+                                  timeout=2).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if pids:
+            script = ('tell application "System Events" to set frontmost of '
+                      '(first process whose unix id is ' + str(int(pids[0])) + ') to true')
+            try:
+                for _ in range(10):  # the process exists before its window does
+                    done = subprocess.run(['osascript', '-e', script], capture_output=True, timeout=5)
+                    if done.returncode == 0:
+                        return True
+                    time.sleep(0.3)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return False
+        time.sleep(0.2)
+    return False
+
+
+def pane_path(cfg, path, pi):
+    """A pane's PATH: the daemon's, plus for a pi agent the directories start pinned so pi's `#!/usr/bin/env node`
+    finds the node of the one lookup (``pi_path_dirs``, docs/design.md §50.3) when the daemon's PATH lacks it."""
+    have = [d for d in (path or '').split(os.pathsep) if d]
+    extra = [d for d in (cfg.get('pi_path_dirs') or []) if d and d not in have] if pi else []
+    return os.pathsep.join([path] + extra) if path and extra else (path or os.pathsep.join(extra))
+
+
 def fleetmux_web_bin(fleetmux):
     """`fleetmux-web` in the order `fleetmux` looks (PROTOCOL.md §9.4): next to the `fleetmux` binary, each PATH
     entry, then $FLEETMUX_WEB_BIN; only an executable regular file counts. None when there is none."""
@@ -8777,21 +9930,33 @@ def gui_live_run():
 
 
 def gui():
-    """`fleetmux gui`: a window on this HOME's resumable runs while no fleet runs (§18.2 / §18.7-2).
+    """`fleetmux gui` and bare `fleetmux`: the root fleet's window, else a window on this HOME's resumable runs
+    (§18.2 / §18.7-2).
 
-    Four steps, in this order: refuse without a desktop / fleetmux; scan the history; with a live daemon let
-    its own cards stand, otherwise write kv `restorable` + kv `sidebar` (grey cards); then become
+    First, when this HOME runs no fleet of its own or runs the root itself, this machine's live root fleet gets its
+    window (`open_window.open_root_window`, design.md section 50: raise it, open it, or attach without a desktop).
+    With no root and no fleet of this HOME's own, the fleet.yaml#bare root fleet is started (resumed when it can be)
+    and its window shown (`open_window.start_bare_root`); `bare.enabled: false` skips that.
+    Otherwise (this HOME runs another fleet, or bare is off), four steps, in this order: refuse without a desktop / fleetmux; scan the history; with a
+    live daemon let its own cards stand, otherwise write kv `restorable` + kv `sidebar` (grey cards); then become
     `fleetmux gui --runtime <this HOME's runtime>`. No history and no daemon: say so and exit 1, without
     starting a server (§18.7-2: kv `sidebar` cannot hold 0 cards, so an empty window is not an option).
     """
-    from fleetmux import cmux_manager, fleetmux_history
+    from fleetmux import cmux_manager, fleetmux_history, open_window
     from fleetmux.backends.fleetmux import fleetmux_bin
+    live = gui_live_run()
+    # Bare `fleetmux` / `fleetmux gui` (design.md section 50): this machine's live root fleet first, also when this
+    # HOME's latest.json is a join stub; before gui_problem, because without a desktop the root view is attach.
+    if open_window.open_root_window(HOME, live) is not None:
+        return
+    # No root fleet, and this HOME runs none of its own: start the fleet.yaml#bare root (section 50, item 5)
+    if live is None and open_window.start_bare_root() is not None:
+        return
     problem = gui_problem()
     if problem:
         raise SystemExit(problem)
     state_dir = str(cmux_manager.STATE_DIR)  # the same value `start` pins into every run's config.json (§18.1)
     runs = fleetmux_history.restorable_runs(HOME, state_dir)
-    live = gui_live_run()
     if live is None and not runs:
         print(GUI_NO_HISTORY)
         raise SystemExit(1)
@@ -8805,6 +9970,34 @@ def gui():
     print('Watch it in a window:', shlex.join(view))
     sys.stdout.flush()
     os.execvp(view[0], view)
+
+
+def run_start(argv, env):
+    """`start <argv>` of this release in a child process with the environment ``env``; its exit code. stdin is
+    /dev/null, so `start`'s automatic view stays off (no terminal) whatever terminal the caller has: bare `fleetmux`
+    (fleetmux/open_window.py) shows the window itself. stdout / stderr are the caller's."""
+    return subprocess.run([sys.executable, str(Path(__file__).resolve()), 'start', *argv], stdin=subprocess.DEVNULL,
+                          env=env).returncode
+
+
+VIEW_NO_RUN = 'no fleet is running in this HOME; start one with `fleetmux start`'
+
+
+def view():
+    """`fleetmux view`: the live page of this HOME's running fleet, in this terminal (design.md section 55).
+
+    `fleetmux attach` needs the runtime directory; this finds it from latest.json, so a person (or `fleetmux
+    remote` over ssh) need not know it. No live daemon, or a run on another backend: one line, exit 1.
+    """
+    from fleetmux.backends.fleetmux import fleetmux_bin
+    if gui_live_run() is None:
+        raise SystemExit(VIEW_NO_RUN)
+    cfg = pin_paths(load(LATEST))
+    if run_backend(cfg) != 'fleetmux':
+        raise SystemExit('view needs a run on the fleetmux backend (it execs `fleetmux attach`); this run uses '
+                         + str(run_backend(cfg)) + ' -- start the fleet with --backend fleetmux')
+    attach = [fleetmux_bin() or 'fleetmux', 'attach', '--runtime', str(manager_for(cfg).runtime_root)]
+    os.execvp(attach[0], attach)
 
 
 def start(args):
@@ -8822,6 +10015,11 @@ def start(args):
             return
     if args.transport_version != 2:
         raise SystemExit('new fleet instances require Redis transport v2; v1 is only readable for existing runs')
+    # A live root fleet on this machine takes the work (fleetmux/join.py); never on an explicit --resume <run>
+    if not getattr(args, 'no_join', False) and getattr(args, 'resume', None) in (None, 'auto'):
+        from fleetmux import join
+        if join.attach(args):
+            return
     # The private config file is resolved once, here, before the first block read; config.json records it
     # and every process of the run reads that file (pin_paths), not whatever its environment says.
     private_config = fleet_config.from_env()
@@ -8967,7 +10165,7 @@ def start(args):
             sys.stderr.write('start: ' + problem + '\n')
             raise SystemExit(2)
     if why:  # the chosen backend cannot run here: refuse before provisioning
-        if getattr(args, 'backend', None) is None:  # the default (cmux on a Mac with cmux): its own reason
+        if getattr(args, 'backend', None) is None:  # the default (fleetmux): its own reason
             raise SystemExit(why)
         raise SystemExit('--backend ' + str(args.backend) + ' cannot run here: ' + why)
     if not backends_check(backend):
@@ -8975,21 +10173,24 @@ def start(args):
     if roster_path and roster.load_subfleets(roster_path) and subfleet.backend_problem({'backend': backend}):
         raise SystemExit('--roster ' + str(roster_path) + ' rejected:\n' + subfleet.backend_problem({'backend': backend}))
     clis = {args.supervisor_cli, args.worker_cli} | profile_clis  # night cards need their CLI at start
-    codex = args.codex or shutil.which('codex')
-    pi = args.pi or shutil.which('pi')
-    redis_server = args.redis_server or shutil.which('redis-server')
-    opencode = args.opencode or shutil.which('opencode')
+
+    def find(name):  # the process PATH, then the login shell's (discover.search_path, design §50.3) for a needed one
+        return shutil.which(name) or (discover.which(name) if name in clis | {'redis-server'} else None)
+    codex = args.codex or find('codex')
+    pi = args.pi or find('pi')
+    redis_server = args.redis_server or find('redis-server')
+    opencode = args.opencode or find('opencode')
     dsh, dsh_node = dsh_adapter.resolve_binaries(args.dsh or shutil.which('dsh'), shutil.which('node'))
-    binaries = {'codex': codex, 'pi': pi, 'claude': args.claude or shutil.which('claude'),
+    binaries = {'codex': codex, 'pi': pi, 'claude': args.claude or find('claude'),
                 'opencode': opencode, 'dsh': dsh, 'redis-server': redis_server}
     missing = [n for n in sorted(clis | {'redis-server'}) if not binaries[n] or not shutil.which(binaries[n])]
     if missing:
+        last = [n + ' ' + discover.last_found(n) for n in missing if discover.last_found(n)]
         raise SystemExit('binaries not found: ' + ', '.join(missing) + '. Install them with `fleetmux setup --install`'
-                         ' (it asks first), or pass the corresponding binary flag')
+                         ' (it asks first), or pass the corresponding binary flag'
+                         + ''.join('; ' + line for line in last))
+    pi_path_dirs = discover.run_dirs(pi) if 'pi' in clis else []  # pi's node, when only the lookup has it
     queue_ok, codex_version, queue_why = codex_queue.capability(codex)  # pinned for the run (config.json)
-    if 'codex' in clis and not queue_ok:
-        print('official Codex: `codex queue` channel unsupported (' + queue_why + '); Codex slots use typed delivery',
-              file=sys.stderr)
     if 'pi' in clis:
         if not args.allow_unsandboxed_pi:
             raise SystemExit('pi has no sandbox: explicitly pass --allow-unsandboxed-pi after reviewing permissions')
@@ -9000,10 +10201,26 @@ def start(args):
         if unset:
             raise SystemExit('--pi-model provider/model is required for pi agents (or --supervisor-pi-model / '
                              'roster pi_model); no model for: ' + ', '.join(unset))
-        version = subprocess.run([pi, '--version'], text=True, capture_output=True, timeout=15, check=True).stdout.strip()
+        version = subprocess.run([pi, '--version'], text=True, capture_output=True, timeout=15, check=True, env=dict(
+            os.environ, PATH=pane_path({'pi_path_dirs': pi_path_dirs}, os.environ.get('PATH', ''), True))).stdout.strip()
         match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)', version)
         if not match or tuple(map(int, match.groups())) < (1, 1, 0):
             raise SystemExit('pi >= 1.1.0 is required (agent_settled); found: ' + version)
+        if discover.below_min('pi', version):
+            raise SystemExit('start: ' + discover.below_min('pi', version))
+    # An agent CLI below its deps.yaml minimum is not used (design §50.3): refuse with one line, never fall back.
+    too_old = discover.below_min('codex', codex_version) if 'codex' in clis else None
+    if 'claude' in clis and not too_old:
+        try:
+            too_old = discover.below_min('claude', subprocess.run([binaries['claude'], '--version'], text=True,
+                                                                  capture_output=True, timeout=15).stdout)
+        except (OSError, subprocess.SubprocessError):
+            pass  # unreadable: not judged here
+    if too_old:
+        raise SystemExit('start: ' + too_old)
+    if 'codex' in clis and not queue_ok:
+        print('official Codex: `codex queue` channel unsupported (' + queue_why + '); Codex slots use typed delivery',
+              file=sys.stderr)
     if 'opencode' in clis:
         problem = opencode_start_problem(args, opencode)
         if problem:
@@ -9046,12 +10263,28 @@ def start(args):
         redis_cfg = redis_runtime.prepare(args.redis_runtime_dir, token)
     except (OSError, ValueError) as exc:
         raise SystemExit('cannot prepare private Redis runtime: ' + str(exc)) from exc
+    if getattr(args, 'project_dir', None):  # before the first file appears under DIR/.fleetmux
+        exclude_project_fleet_dir(args.project_dir)
     run = Path(getattr(args, 'runs_dir', None) or HOME / 'runs').expanduser() / ('fleet-' + time.strftime('%Y%m%d-%H%M%S-') + token)
     (run / 'workspace').mkdir(parents=True)
     if kit_fleet is not None:  # the kit is read-only and versioned: the run follows (and hot-edits) its own copy
         kit_roster = roster_path
         roster_path = (copy_kit_fleet(kit_roster.parent, run / 'fleet-config') / 'roster.yaml').resolve()
         workers, worker_roles, worker_profiles = roster.load_entries(roster_path)  # role paths into the copy
+    elif roster_path:  # distributed-development.md open question 5: the run follows its own copy, never the source
+        roster_path = roster.copy_into_run(roster_path, run)
+        print('roster copied into the run; edit this copy while the run goes on:', roster_path)
+    carried = previous_loads(run)  # design.md §56: workflows loaded into the previous run of this fleet home
+    if carried:
+        from fleetmux import superpowers_peer
+        refuse = None if args.mode == 'service' else ('this run is a task fleet, which hosts no applet; the next '
+                                                       'service start of this fleet home loads it again')
+        try:
+            if superpowers_peer.reapply(carried[0], carried[1], run, roster_path, refuse=refuse):
+                workers, worker_roles, worker_profiles = roster.load_entries(roster_path)  # a host worker row
+        except Exception as exc:  # never stops the start; the old run keeps its records for the next one
+            print('superpowers: loaded workflows not carried over: ' + repr(exc), file=sys.stderr)
+            carried = None
     from fleetmux import backends, cmux_manager
     cfg = {'run': str(run), 'python': sys.executable, **redis_cfg,
            'backend': backend,  # decided once here; the daemon, actors, --resume and sub-fleets read it
@@ -9089,11 +10322,13 @@ def start(args):
            'claude': args.claude or shutil.which('claude'), 'claude_window': args.claude_window,
            'host': args.host.strip().lower() if args.host and args.host.strip() else None,
            'supervisor_cli': args.supervisor_cli, 'pi': pi, 'pi_model': args.pi_model,
+           **({'pi_path_dirs': pi_path_dirs} if pi_path_dirs else {}),
            **({'opencode': opencode, 'opencode_model': args.opencode_model, 'opencode_window': args.opencode_window}
               if 'opencode' in clis else {}),
            **({'dsh': dsh, 'dsh_node': dsh_node, 'dsh_model': args.dsh_model,
                'dsh_home': str(Path(args.dsh_home or dsh_adapter.default_home()).expanduser())} if 'dsh' in clis else {}),
            'pi_thinking': args.pi_thinking, 'pi_models': args.pi_models, 'pi_thinkings': args.pi_thinkings, 'allow_unsandboxed_pi': args.allow_unsandboxed_pi,
+           'worker_fresh': roster.fresh(roster_path.read_bytes()) if roster_path else {},  # §45
            'pi_agent_dir': args.pi_agent_dir, 'allow_profile_live_switch': args.allow_profile_live_switch,
            'transport_version': args.transport_version, 'allow_development_v2': args.allow_development_v2,
            'claude_supervisor_hook_delivery': True,  # launch-time fence; old/resumed runs keep their old channel
@@ -9114,6 +10349,9 @@ def start(args):
         # subfleets before the first spawn: a supervisor_slot starts in the fleet's tmux (§29 / dual display)
         cfg.update(roster=str(roster_path), worker_roles=worker_roles, worker_profiles=worker_profiles,
                    subfleets=roster.load_subfleets(roster_path))
+        # Before the first spawn. A task fleet hosts no applet of its own (applet-1), only its sub-fleets do.
+        session_env.update_config(cfg, roster.load_applets(roster_path) if args.mode == 'service' else [],
+                                  cfg['subfleets'])
     if night_path:
         cfg['roster_night'] = str(night_path)
     if kit_fleet is not None:
@@ -9121,6 +10359,8 @@ def start(args):
                             'roster_md5': hashlib.md5(kit_roster.read_bytes()).hexdigest()}
     if 'pi' in clis:
         cfg['pi_home'] = str(pi_adapter.prepare_home(run / 'pi-home', args.pi_agent_dir, fleet_config.block('pi_context')))
+    if getattr(args, 'no_view', False):  # a script's run: the daemon does not open the window either (gui_keep)
+        cfg['gui_keep_open'] = False
     canary_value = canary_start(cfg)  # P8h: after P8p pinned cfg['security']; the file now, the Redis key below
     save(run / 'config.json', cfg)
     start_redis(cfg)
@@ -9136,6 +10376,8 @@ def start(args):
     if hasattr(mgr, 'claim_run'):
         mgr.claim_run(str(run))  # the lifecycle closer only closes a registry tagged with this run
     save(LATEST, dict(cfg, config=str(run / 'config.json')))
+    if carried:  # the new run holds them now
+        superpowers_peer.forget(carried[0])
     print('fleet started (' + (args.lifecycle or '-') + ' lifecycle, ' + args.mode + ' mode): supervisor + ' + str(len(cfg['workers']))
           + ' worker(s) initialising. Run directory:', run)
     if backend == 'fleetmux':  # the fleet's screen is a server: say how to look at it, or go there (--attach / --gui)
@@ -9147,8 +10389,16 @@ def start(args):
             print('Watch it in a window:', shlex.join(gui))
         print('Watch it with:', shlex.join(attach))
         if getattr(args, 'attach', False) or getattr(args, 'gui', False):
-            sys.stdout.flush()
             view = gui if getattr(args, 'gui', False) else attach
+        elif getattr(args, 'no_view', False):
+            view = None
+        else:
+            view = auto_view(run, binary, gui, attach)
+        if view is gui and gui_keep.gui_running(mgr.runtime_root):  # the daemon's first check may have opened it
+            print('A window is already open on this runtime.')
+            view = None
+        if view:
+            sys.stdout.flush()
             os.execvp(view[0], view)
 
 
@@ -9166,6 +10416,28 @@ def night_cmd(cfg, state):
     except (OSError, ValueError) as exc:
         raise SystemExit('night ' + state + ' refused, nothing changed:\n' + str(exc)) from exc
     return dict(night.write_state(run, state == 'on'), roster=cfg['roster_night' if state == 'on' else 'roster'])
+
+
+def previous_loads(run):
+    """design.md §56: (records directory, roster text or None) of the run latest.json names before this start
+    writes it, when that run is a stopped root fleet with `fleetmux superpowers load` records; else None."""
+    from fleetmux import superpowers_peer
+    try:
+        prev = Path(load(LATEST)['run']).expanduser().resolve()
+        prev_cfg = load(prev / 'config.json')
+    except (OSError, ValueError, KeyError, TypeError):
+        return None  # no latest run, or a join stub
+    records = prev / superpowers_peer.RECORDS
+    if prev == Path(run).resolve() or prev_cfg.get('parent_config') or not any(records.rglob('*.json')):
+        return None
+    if daemon_running(prev):
+        print('superpowers: ' + str(prev) + ' still runs; the workflows loaded there stay there')
+        return None
+    copy = Path(prev_cfg.get('roster') or prev / roster.RUN_COPY)
+    try:
+        return records, copy.read_text()
+    except OSError:
+        return records, None
 
 
 def kit_fleet_roster(worker_kit, name):
@@ -9307,6 +10579,16 @@ def tab_restart(cfg, name, wait=30):
         r.close(); r.connection_pool.disconnect()
 
 
+def job_rows(r):
+    """§58 `status`: the open jobs of a root fleet (service, or a task root: §19), oldest first."""
+    raw = r.get(JOBS)
+    jobs = json.loads(raw) if raw else {}
+    return [{'id': jid, 'state': job.get('state'), 'slot': job.get('slot') or '', 'subfleet': job.get('task') or '',
+             'goal': job.get('goal', '')[:120], 'waiting': job.get('waiting') or '', 'created': job.get('created'),
+             'name': (job.get('spawn') or {}).get('name') or '', 'added_worker': job.get('hot_slot') or ''}
+            for jid, job in sorted(jobs.items(), key=lambda x: x[1].get('created') or 0)]
+
+
 def status(cfg):
     if cfg.get('transport_version', 1) == 2:
         from fleetmux.control_view import snapshot
@@ -9314,10 +10596,34 @@ def status(cfg):
         children = subfleet.tree(cfg)
         if children:
             out['subfleets'] = children  # the whole tree under this fleet
+        r = connect(cfg)
+        try:
+            task_clock(out.get('task'), awake.of(r).now())  # budget figures in the fleet's awake time
+            rows = job_rows(r) if cfg.get('mode') == 'service' or not cfg.get('parent_config') else None
+        finally:
+            r.close(); r.connection_pool.disconnect()
+        if rows is not None:  # §58 / §19: open jobs of a root
+            if rows or cfg.get('mode') == 'service':
+                out['jobs'] = rows
+        applets = applet_host.tree_rows(cfg)  # applet-interface.md section 5
+        if applets:
+            out['applets'] = applets
+            applet_lease.annotate_cfg(cfg, out)  # each leased slot: applet_lease {id, holder, kind, until}
+        from fleetmux import superpowers_peer
+        loads = superpowers_peer.run_loads(cfg['run'])  # design.md §56: loaded / skipped workflows
+        if loads:
+            out['superpowers_load'] = loads
+        release = releases.field(cfg)  # design.md §56 "Releases": running vs ~/fleetmux-current
+        if release:
+            out['release'] = release
         print(json.dumps(out, ensure_ascii=False, indent=2))
+        if release and release['restart_needed']:
+            print(releases.restart_line(cfg.get('name') or cfg['run'], release['running'], release['installed']),
+                  file=sys.stderr)
         return
     r = connect(cfg)
-    print(json.dumps({'mode': cfg.get('mode', 'task'), 'lifecycle': cfg.get('lifecycle'), 'task': r.hgetall(TASK), 'service': r.hgetall(SERVICE),
+    print(json.dumps({'mode': cfg.get('mode', 'task'), 'lifecycle': cfg.get('lifecycle'),
+                      'task': task_clock(r.hgetall(TASK), awake.of(r).now()), 'service': r.hgetall(SERVICE),
                       'pending_requests': r.llen(REQQ), 'daemon_beat': float(r.get('fx:daemon:beat') or 0),
                       'agents': {n: dict(r.hgetall(key('agent', n)), inbox=r.llen(key('inbox', n)))
                                  for n in ['supervisor'] + cfg['workers']}}, ensure_ascii=False, indent=2))
@@ -9360,15 +10666,28 @@ def cli():
                    ' (default: $FLEETMUX_HOME or ~/.fleetmux)')
     s.add_argument('--backend', choices=('cmux', 'wezterm', 'fleetmux'),
                    help='terminal backend of this run, written into config.json and followed by --resume and '
-                        'sub-fleets (default: cmux on macOS when cmux is usable, otherwise wezterm)')
+                        'sub-fleets (default: fleetmux on every platform)')
     s.add_argument('--attach', action='store_true',
                    help='fleetmux only: once start has finished, replace this process with '
-                        '`fleetmux attach --runtime <run runtime>` (otherwise start just prints that line)')
+                        '`fleetmux attach --runtime <run runtime>`')
     s.add_argument('--gui', action='store_true',
                    help='fleetmux only, needs a desktop and fleetmux-web: once start has finished, replace this '
                         'process with `fleetmux gui --runtime <run runtime>` (a window; not together with --attach)')
+    s.add_argument('--no-view', action='store_true',
+                   help='fleetmux only: do not open a view. Without --attach / --gui / --no-view, a start run from a '
+                        'terminal opens a window in the background (desktop with fleetmux-web, not over ssh) or '
+                        'else attaches; nothing opens without a terminal, inside a fleetmux pane, or when a '
+                        'viewer is already open on the runtime')
+    s.add_argument('--no-join', action='store_true',
+                   help='start a fleet of its own even when a root fleet of this user already runs on this machine '
+                        '(default: attach to it and write a join stub; a task start then takes work with `task '
+                        '--config <stub> -`, a service start becomes a service sub-fleet of the root that takes '
+                        '`request --config <stub> -`; see fleetmux/join.py)')
     s.add_argument('--cmux-bin', help='cmux binary; pinned in config.json (default: $CMUX_BIN or the app bundle)')
     s.add_argument('--runs-dir', help='where run directories are created (default: <fleet home>/runs)')
+    s.add_argument('--project-dir', help='create the run under DIR/.fleetmux/runs (not with --runs-dir), so every '
+                   'agent cwd sits inside DIR and Claude Code / Codex load DIR\'s CLAUDE.md / AGENTS.md as a parent '
+                   'directory (no @import, no dialog); `.fleetmux/` is added once to DIR\'s git exclude')
     s.add_argument('--cmux-state-dir', help='cmux registry directory; pinned in config.json'
                    ' (default: $FLEETMUX_STATE or ~/.fleetmux/state)')
     s.add_argument('--codex-home', help='isolated CODEX_HOME for the agents (login + profile symlinked from yours;'
@@ -9545,12 +10864,31 @@ def cli():
     dm.add_argument('--resume', action='store_true', help='reconcile and replay (internal; from start --resume)')
     t = sub.add_parser(
         'task', help='submit a goal: JSON file or - for stdin '
-        '({"goal":..., "hours":..., "artifacts":[...], "auto_agents":true, "agent_registry":...})')
-    t.add_argument('spec')
+        '({"goal":..., "hours":..., "artifacts":[...], "auto_agents":true, "agent_registry":...}). On a service '
+        'fleet it is a job: it runs in its own task-mode sub-fleet and its result is read with `result <job id>` '
+        '({"goal":..., "hours":..., "artifacts":[...], "workers":..., "supervisor_profile":..., '
+        '"worker_profiles":[...], "lifecycle":..., "budget":{...}}; docs/design.md §58). On a task fleet whose own '
+        'task runs it is a job too (§19 "Task root")')
+    t.add_argument('spec', nargs='?')
+    t.add_argument('--recheck', metavar='ID', help='run the dev_task delivery gate again on the files as they are now, '
+                   'for this run\'s own task or a job (job-...) that the gate blocked; on pass the task completes (a job '
+                   'gets its result published again as ok). Dispatches no work (lifecycle_recheck)')
+    t.add_argument('--job', action='store_true', help='submit only as a job: refused when the fleet would take it '
+                   'as its own task (a join stub sends this)')
     for name in ('status', 'stop', 'resume'):
         sp = sub.add_parser(name)
         sp.add_argument('--config', default=str(LATEST))
-    sub.add_parser('gui', help='open a fleetmux window on this HOME\'s resumable fleets (no fleet running)')
+    sub.add_parser('gui', help='show this machine\'s root fleet window; with no root fleet, start the fleet.yaml#bare '
+                                    'one (bare.enabled false: a window on this HOME\'s resumable fleets)')
+    sub.add_parser('view', help='show the live page of this HOME\'s running fleet in this terminal '
+                   '(design.md section 55)')
+    rm = sub.add_parser('remote', help='run a fleet command on the machine that runs your fleet, over ssh '
+                        '(fleet-superpowers machines; no command: its live page) (design.md section 55)')
+    rm.add_argument('--host', help='a machine name from fleet-superpowers (default: fleet.yaml#remote.default, or '
+                    'the only other machine)')
+    rm.add_argument('--home', help='run the far command with FLEETMUX_HOME=HOME (a leading ~/ is the far home)')
+    rm.add_argument('argv', nargs=argparse.REMAINDER, metavar='COMMAND',
+                    help='the fleet command and its arguments, as typed on that machine')
     su = sub.add_parser('setup', help='probe this machine\'s agent CLIs, logins and models; rank them and cache the '
                         'default supervisor x worker pair (docs/design.md §52)')
     su.add_argument('--json', action='store_true', help='print the cached result as JSON instead of the table')
@@ -9566,6 +10904,12 @@ def cli():
     hmm.add_argument('--dry-run', action='store_true', help='print the plan, change nothing')
     sp.add_argument('--raise', dest='raise_', action='append', metavar='LIMIT=VALUE',
                     help='after a budget pause: raise a budget line (e.g. max_calls=400); repeatable')
+    ap = sub.add_parser('applet', add_help=False, help='applets of a host fleet (docs/applet-interface.md section 5); '
+                                                       '`fleetmux applet --help` lists the commands')
+    ap.add_argument('applet_args', nargs=argparse.REMAINDER)
+    ts = sub.add_parser('tabs', add_help=False, help='list a running fleet\'s tabs, or print one tab\'s text '
+                        '(read-only; `fleetmux tabs --help`)')
+    ts.add_argument('tabs_args', nargs=argparse.REMAINDER)
     tb = sub.add_parser('tab', help='companion tabs (roster tabs:, docs/design.md §31)')
     tb_sub = tb.add_subparsers(dest='tab_cmd', required=True)
     tr = tb_sub.add_parser('restart', help='reopen a tab of the running daemon now and forget its crash history '
@@ -9597,6 +10941,11 @@ def cli():
     op.add_argument('text', nargs='?', default='-')
     op.add_argument('--config', default=str(LATEST))
     op.add_argument('--wait', type=float, default=30, help='seconds to wait for the daemon\'s answer (default 30)')
+    rr = sub.add_parser('result', help='service mode: print the result of one request as a JSON line; exit 0 found, '
+                        '3 pending, 2 unknown id; never removes it (docs/distributed-development.md)')
+    rr.add_argument('id', nargs='?', help='request / job id (a join stub defaults to its last job)')
+    rr.add_argument('--wait', type=float, default=0, help='seconds to wait while the request is pending (default 0)')
+    rr.add_argument('--config', default=str(LATEST))
     rs = sub.add_parser('results', help='service mode: print finished results (oldest first)')
     rs.add_argument('--drain', action='store_true', help='remove the printed results from the list')
     rs.add_argument('--config', default=str(LATEST))
@@ -9652,6 +11001,19 @@ HUMAN_COMMANDS = ('start', 'setup', 'gui', 'resume', 'status', 'stop')
 
 
 def main(argv=None):
+    rest = list(sys.argv[1:] if argv is None else argv)
+    if rest[:1] == ['applet']:  # applet-interface.md section 5: its own command line and dispatch table
+        from fleetmux import applet_cli
+        sys.exit(applet_cli.main(rest[1:]))
+    if rest[:1] == ['superpowers']:  # the fleet-superpowers inventory: its own command table
+        from fleetmux import fleet_superpowers_cli
+        sys.exit(fleet_superpowers_cli.main(rest[1:]))
+    if rest[:1] == ['relay']:  # docs/relay.md: multi-machine relay development, its own command table
+        from fleetmux.relay import cli as relay_cli
+        sys.exit(relay_cli.main(rest[1:]))
+    if rest[:1] == ['tabs']:  # read-only tab titles and pane text from the fleetmux server
+        from fleetmux import tabs_cli
+        sys.exit(tabs_cli.main(rest[1:]))
     p = cli()
     args = p.parse_args(argv)
     if args.cmd == 'home':  # §50.1
@@ -9663,6 +11025,15 @@ def main(argv=None):
     if args.cmd == 'start':
         pin_paths({'fleet_home': args.fleet_home and str(Path(args.fleet_home).expanduser().resolve()),
                    'cmux_bin': args.cmux_bin and str(Path(args.cmux_bin).expanduser().resolve())})
+        if getattr(args, 'project_dir', None):  # user 2026-11-11: the run lives inside the project
+            if args.runs_dir:
+                raise SystemExit('--project-dir and --runs-dir are exclusive (--project-dir puts runs in '
+                                 'DIR/' + PROJECT_FLEET_DIR + '/runs)')
+            project = Path(args.project_dir).expanduser().resolve()
+            if not project.is_dir():
+                raise SystemExit('--project-dir: not a directory: ' + str(project))
+            args.project_dir = str(project)
+            args.runs_dir = str(project / PROJECT_FLEET_DIR / 'runs')
         args.runs_dir = args.runs_dir or str(HOME / 'runs')
         args.codex_home = args.codex_home or str(HOME / 'codex-home')
         start(args)
@@ -9681,6 +11052,17 @@ def main(argv=None):
         discover.ensure()  # §52: first open
         gui()
         return
+    if args.cmd == 'view':  # design.md section 55: this HOME's live page
+        view()
+        return
+    if args.cmd == 'remote':  # design.md section 55: the same commands on the machine that runs the fleet
+        from fleetmux import remote
+        try:
+            target = remote.host(args.host)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write('fleetmux remote: ' + str(exc) + '\n')
+            sys.exit(2)
+        sys.exit(remote.run(target, args.argv, home=args.home))
     if args.cmd == 'channel':  # §53 / contracts §8: login / test / send / status / actor (P1g)
         from fleetmux.channels import cli as channel_cli
         sys.exit(channel_cli.run(args))
@@ -9726,11 +11108,28 @@ def main(argv=None):
     elif args.cmd in ('agents', 'plan'):
         print_inspection(args)
     else:
-        if not Path(args.config).is_file():
+        try:
+            raw = load(args.config)
+        except FileNotFoundError:
             raise SystemExit('fleetmux ' + args.cmd + ': no fleet has run here yet (' + str(args.config) + ' is missing);'
                              ' start one with `fleetmux start`' if Path(args.config) == LATEST else
-                             'fleetmux ' + args.cmd + ': ' + str(args.config) + ' does not exist')
-        cfg = pin_paths(load(args.config))
+                             'fleetmux ' + args.cmd + ': ' + str(args.config) + ' does not exist') from None
+        from fleetmux import join
+        if join.is_stub(raw):  # `start` attached to a live root fleet: talk to that root's job
+            try:  # a service stub runs logs / operator / pause / resume on its child's own config
+                child = join.redirect(args, Path(args.config), raw)
+            except join.JoinError as exc:
+                sys.stderr.write('fleetmux ' + args.cmd + ': ' + str(exc) + '\n')
+                sys.exit(2)
+            if child is None:
+                code = join.cli(args, Path(args.config), raw)
+                if code:
+                    sys.exit(code)
+                return
+            args.config, raw = str(child), load(child)
+        cfg = pin_paths(raw)
+        if args.cmd not in ('chrome', 'peer'):  # worker sessions call these; a resume keeps their old CLI path
+            releases.warn_cli(cfg)  # design.md §56 "Releases": this CLI vs the running daemon
         if args.cmd == 'logs':
             from fleetmux.control_view import iter_events
             for record in iter_events(cfg, after=args.after, limit=args.limit,
@@ -9780,6 +11179,11 @@ def main(argv=None):
                 if not raw:
                     break
                 print(raw)
+        elif args.cmd == 'result':  # docs/distributed-development.md: a peer reads its answer
+            if not args.id:
+                raise SystemExit('result needs a request id')
+            from fleetmux import remote
+            sys.exit(remote.result_cli(connect(cfg), args.id, args.wait))
         elif args.cmd == 'operator':
             ans = operator_send(cfg, sys.stdin.read() if args.text == '-' else args.text, wait=args.wait)
             print(json.dumps(ans, ensure_ascii=False))
@@ -9787,9 +11191,19 @@ def main(argv=None):
         elif args.cmd == 'request':
             spec = json.loads(sys.stdin.read() if args.spec == '-' else Path(args.spec).read_text())
             print(json.dumps(request(cfg, {'kind': 'request', 'spec': spec}), ensure_ascii=False))
+        elif getattr(args, 'recheck', None):
+            from fleetmux import lifecycle_recheck
+            code, ans = lifecycle_recheck.cli(cfg, args.recheck)
+            print(json.dumps(ans, ensure_ascii=False))
+            sys.exit(code)
         else:
+            if not args.spec:
+                raise SystemExit('task needs a spec (JSON file or -), or --recheck ID')
             spec = json.loads(sys.stdin.read() if args.spec == '-' else Path(args.spec).read_text())
-            print(json.dumps(request(cfg, {'kind': 'task', 'spec': spec}), ensure_ascii=False))
+            event = {'kind': 'task', 'spec': spec}
+            if getattr(args, 'job', False):
+                event['job'] = True
+            print(json.dumps(request(cfg, event), ensure_ascii=False))
 
 
 if __name__ == '__main__':

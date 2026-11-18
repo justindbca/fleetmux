@@ -83,10 +83,11 @@ def test_bare_yaml_off_thinking_reads_as_off(tmp_path):
 
 # ------------------------------------------------------------------ 1/3. supervisor resolution
 def parsed(argv, monkeypatch):
+    # A scoped patch, not monkeypatch.undo(): the conftest isolation must stay in place for the rest of the test.
     seen = []
-    monkeypatch.setattr(fleet, 'start', seen.append)
-    fleet.main(['start'] + argv)
-    monkeypatch.undo()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fleet, 'start', seen.append)
+        fleet.main(['start'] + argv)
     return seen[0]
 
 
@@ -347,17 +348,21 @@ def test_service_mode_pi_claude_reaches_provisioning(monkeypatch):
     assert seen[-1]['mode'] == 'service' and seen[-1]['supervisor_cli'] == 'pi'
 
 
-def test_old_profile_start_never_becomes_a_codex_supervisor(monkeypatch):
-    seen = to_provisioning(monkeypatch)
-    with pytest.raises(Reached):
-        fleet.main(['start', '--allow-development-v2', '--allow-unsandboxed-pi', '--supervisor-profile',
-                    'fleet-astra'] + smoke_args())
-    assert seen[-1]['supervisor_cli'] == 'pi' and seen[-1]['pi_models'] == {'supervisor': ASTRA}
-    monkeypatch.undo()
-    to_provisioning(monkeypatch)
-    with pytest.raises(SystemExit, match='--supervisor-cli codex --supervisor-profile fleet-x'):
-        fleet.main(['start', '--allow-development-v2', '--allow-unsandboxed-pi', '--supervisor-profile', 'fleet-x']
-                   + smoke_args())
+def test_old_profile_start_never_becomes_a_codex_supervisor():
+    # Each start gets its own scoped stubs (never monkeypatch.undo(), which used to drop the conftest isolation:
+    # the second start then scanned the real ~/.fleetmux and tried to join a live root fleet).
+    with pytest.MonkeyPatch.context() as mp:   # a mapped old profile starts as the pi supervisor it maps to
+        seen = to_provisioning(mp)
+        with pytest.raises(Reached):
+            fleet.main(['start', '--allow-development-v2', '--allow-unsandboxed-pi', '--supervisor-profile',
+                        'fleet-astra'] + smoke_args())
+        assert seen[-1]['supervisor_cli'] == 'pi' and seen[-1]['pi_models'] == {'supervisor': ASTRA}
+    with pytest.MonkeyPatch.context() as mp:   # an unmapped one is refused, naming the explicit Codex flags
+        seen = to_provisioning(mp)
+        with pytest.raises(SystemExit, match='--supervisor-cli codex --supervisor-profile fleet-x'):
+            fleet.main(['start', '--allow-development-v2', '--allow-unsandboxed-pi', '--supervisor-profile', 'fleet-x']
+                       + smoke_args())
+        assert seen == []                      # refused before any config is validated: never a codex supervisor
 
 
 def test_night_pair_start_per_agent_models(monkeypatch):

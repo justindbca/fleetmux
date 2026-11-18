@@ -89,6 +89,9 @@ case "$*" in
          echo "FAILED tests/test_native_anchor.py::test_anchor - AssertionError: anchor moved";
          echo "1 failed, 2 passed"; fi
     exit "${FAKE_TEST_RC:-0}" ;;
+  *check_deps.py*)
+    echo "ok    pi 1.4.0 (need >=1.2.0) at /opt/example/npm/bin/pi"
+    [ -n "$FLEETMUX_DEPS_JSON" ] && printf '[{"name": "pi", "have": "1.4.0", "need": ">=1.2.0", "ok": true, "path": "/opt/example/npm/bin/pi"}]\\n' > "$FLEETMUX_DEPS_JSON" ;;
 esac
 exit "${FAKE_CHECK_DEPS_RC:-0}"
 PY
@@ -212,6 +215,16 @@ def test_install_without_bin_dir_keeps_the_old_contract(world):
     assert not check_deps_path(world).startswith(str(rel / 'bin'))
 
 
+def test_mac_install_without_bin_dir_lets_check_deps_find_fleetmux_in_local_bin(world):
+    """fleetmux is the default backend on macOS too, so check_deps looks for the fleetmux binary; without
+    --bin-dir that is the one install_fleetmux.sh put in ~/.local/bin."""
+    world['bin'].mkdir(parents=True, exist_ok=True)
+    write_exe(world['bin'] / 'uname', '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n')
+    py = make_python(world['bin'])
+    done = run(world, [APP_SHA, world['tarball']], python=py)
+    assert done.returncode == 0, done.stderr
+    assert str(world['home'] / '.local' / 'bin') in check_deps_path(world).split(os.pathsep)
+
 def test_install_verifies_and_installs_binaries_with_provenance(world):
     make_python(world['bin'])
     built = make_bin_dir(world['tmp'] / 'built')
@@ -251,6 +264,28 @@ def test_install_refuses_unverifiable_binaries_before_creating_the_release(world
     assert not release(world).exists()  # nothing half-installed
     assert not (world['home'] / 'fleetmux-current').exists()
 
+
+def test_headless_installs_without_fleetmux_web(world):
+    """--headless (a server / container build): only fleetmux is required and installed; fleetmux-web is null."""
+    make_python(world['bin'])
+    built = make_bin_dir(world['tmp'] / 'built', drop=('fleetmux-web',))
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--headless'])
+    assert done.returncode == 0, done.stderr
+    rel = release(world)
+    assert (rel / 'bin' / 'fleetmux').read_bytes() == FLEETMUX
+    assert not (rel / 'bin' / 'fleetmux-web').exists()
+    installed = json.loads((rel / 'bin' / 'installed.json').read_text())
+    assert installed['binaries'] == {'fleetmux': {'sha256': sha256(FLEETMUX), 'bytes': len(FLEETMUX)},
+                                     'fleetmux-web': None}
+
+
+def test_headless_still_refuses_a_missing_fleetmux(world):
+    make_python(world['bin'])
+    built = make_bin_dir(world['tmp'] / 'built', drop=('fleetmux', 'fleetmux-web'))
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--headless'])
+    assert done.returncode != 0
+    assert 'fleetmux' in done.stderr, done.stderr
+    assert not release(world).exists()
 
 def test_install_refuses_a_manifest_for_another_source_sha(world):
     make_python(world['bin'])
@@ -325,6 +360,24 @@ def test_install_picks_python314_on_path_and_never_falls_back_to_312(world):
     assert logged(world) == []  # the 3.12 stub was never even asked
 
 
+def test_install_skips_a_python_that_cannot_build_a_venv_and_takes_a_uv_one(world):
+    # A Homebrew-style python3.14 whose ensurepip fails passes the version check; a uv-managed 3.14 works.
+    broken = make_python(world['bin'])
+    broken.write_text(broken.read_text().replace(
+        '    [ "$2" = venv ] || exit 0\n',
+        '    [ "$2" = venv ] || exit 0\n    echo "ensurepip: pip install exited 2" >&2; exit 2\n'))
+    uv = make_python(world['home'] / '.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/bin')
+    done = run(world, [APP_SHA, world['tarball']])
+    assert done.returncode == 0, done.stderr
+    assert 'python: skip %s (cannot create a venv with pip: ensurepip: pip install exited 2)' % broken in done.stderr
+    assert 'python: %s (' % uv in done.stderr
+    assert (release(world) / '.venv' / 'bin' / 'python').exists()
+    assert any(line.startswith('PY=%s ARGS=-m venv .venv' % uv) for line in logged(world))
+    assert not any(line.startswith('PY=%s ARGS=-m venv .venv' % broken) for line in logged(world))
+    probes = [line.split('ARGS=-m venv ', 1)[1] for line in logged(world) if 'ARGS=-m venv /' in line]
+    assert probes and not any(Path(p).parent.exists() for p in probes)  # the trial venvs are removed
+
+
 def test_install_honours_the_fleetmux_python_override(world):
     custom = write_exe(world['tmp'] / 'custom-python', PY_TEMPLATE.replace('__RC__', '0'))
     marker = world['tmp'] / 'custom-used'
@@ -349,6 +402,29 @@ def test_failed_dependency_check_removes_the_partial_release(world):
     assert 'deps.yaml not satisfied' in done.stderr
     assert not release(world).exists()
     assert not (world['home'] / 'fleetmux-current').exists()
+
+
+def test_dependency_rows_and_paths_are_kept_outside_the_release_and_in_installed_json(world):
+    make_python(world['bin'])
+    built = make_bin_dir(world['tmp'] / 'built')
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built])
+    assert done.returncode == 0, done.stderr
+    log = Path(next(l for l in done.stdout.splitlines() if l.startswith('dependency check log: ')).split(': ', 1)[1])
+    assert log.parent == world['releases'] / '.logs'
+    assert 'at /opt/example/npm/bin/pi' in log.read_text()
+    installed = json.loads((release(world) / 'bin' / 'installed.json').read_text())
+    assert installed['dependencies'] == [{'name': 'pi', 'have': '1.4.0', 'need': '>=1.2.0', 'ok': True,
+                                          'path': '/opt/example/npm/bin/pi'}]
+
+
+def test_failed_dependency_check_keeps_its_log_and_changes_nothing(world):
+    make_python(world['bin'])
+    done = run(world, [APP_SHA, world['tarball']], env_extra={'FAKE_CHECK_DEPS_RC': '1'})
+    assert done.returncode != 0
+    assert 'install or upgrade the FAIL items yourself' in done.stderr
+    log = Path(done.stderr.rsplit('log: ', 1)[1].strip())
+    assert log.parent == world['releases'] / '.logs' and 'ok    pi 1.4.0' in log.read_text()
+    assert not release(world).exists()
 
 
 def test_failed_suite_keeps_the_complete_log_outside_the_release(world):

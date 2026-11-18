@@ -20,7 +20,7 @@ def test_pass_with_resolved_p1_is_clean(tmp_path):
     for status in ('fixed', 'closed', 'Closed'):
         v = _verdict(tmp_path, 'PASS', [{'id': 'P1-1', 'severity': 'P1', 'title': 'x', 'status': status},
                                         {'id': 'P2-1', 'severity': 'P2', 'title': 'y', 'status': 'ledger'}])
-        assert d.review_problem(v, 'opus') is None
+        assert d.review_problem(v) is None
         assert [i['id'] for i in d.outstanding(v)] == ['P2-1']
 
 
@@ -28,11 +28,11 @@ def test_pass_with_open_p0_p1_still_blocks(tmp_path):
     v = _verdict(tmp_path, 'PASS', [{'id': 'P1-1', 'severity': 'P1', 'title': 'x', 'status': 'closed'},
                                     {'id': 'P1-2', 'severity': 'P1', 'title': 'y'},
                                     {'id': 'P0-1', 'severity': 'P0', 'title': 'z', 'status': 'open'}])
-    assert d.review_problem(v, 'opus') == 'review PASS still lists 1 P0 / 1 P1'
+    assert d.review_problem(v) == 'review PASS still lists 1 P0 / 1 P1'
 
 
-def test_fail_and_wrong_reviewer_unchanged(tmp_path):
+def test_fail_blocks_and_the_reviewer_field_never_does(tmp_path):
     v = _verdict(tmp_path, 'FAIL', [{'id': 'P1-1', 'severity': 'P1', 'title': 'x', 'status': 'fixed'}])
-    assert d.review_problem(v, 'opus') == 'review verdict is FAIL (round 2)'
+    assert d.review_problem(v) == 'review verdict is FAIL (round 2)'
     v = _verdict(tmp_path, 'PASS', [], reviewer='codex')
-    assert 'the mode table asks for opus' in d.review_problem(v, 'opus')
+    assert d.review_problem(v) is None  # the supervisor picks the reviewer; the gate reads only the verdict

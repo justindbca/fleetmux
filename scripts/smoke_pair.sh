@@ -84,7 +84,7 @@ if ! "$PY" "$FLEET" start --help 2>/dev/null | grep -q -- '--lifecycle'; then
   exit 3
 fi
 
-args=(start --lifecycle smoke --supervisor-cli "$SUP" --worker-cli "$WRK" --workers 2
+args=(start --no-view --lifecycle smoke --supervisor-cli "$SUP" --worker-cli "$WRK" --workers 2
       --allow-development-v2 --redis-runtime-dir "$TMP/r" --name "smoke-$SUP-$WRK-$MODE")
 [ "$MODE" = service ] && args+=(--mode service)
 if [ "$SUP" = pi ] || [ "$WRK" = pi ]; then

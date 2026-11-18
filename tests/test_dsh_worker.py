@@ -324,7 +324,7 @@ def dsh_start(tmp_path, monkeypatch, version='0.2.1-rc.5', listed=True):
     def run(argv, **kw):
         ran.append(argv)
         out = (version if argv[-1] == '--version' and len(argv) == 3 else 'v22.22.0' if argv[0].endswith('node')
-               else '1.1.0')
+               else '1.2.0')
         return SimpleNamespace(stdout=out + '\n', returncode=0)
     monkeypatch.setattr(fleet.subprocess, 'run', run)
     monkeypatch.setattr(dsh_adapter, 'endpoint_problem', lambda cfg: None if listed else 'the endpoint does not list it')

@@ -49,7 +49,7 @@ for i in $(seq 1 "$N_FILES" | xargs printf '%04d '); do
 done
 # Big windows: no mid-turn handoff may interfere with this smoke.
 printf 'workers:\n  - name: worker-1\nhandoff:\n  pi: {window: 2000000, midturn_ratio: 0.95}\n' > "$TMP/roster.yaml"
-args=(start --lifecycle smoke --supervisor-cli pi --worker-cli pi --allow-development-v2 --allow-unsandboxed-pi
+args=(start --no-view --lifecycle smoke --supervisor-cli pi --worker-cli pi --allow-development-v2 --allow-unsandboxed-pi
       --redis-runtime-dir "$TMP/r" --name smoke-link-loss --roster "$TMP/roster.yaml" --pi-model "$PI_MODEL")
 [ -n "${SUPERVISOR_PI_MODEL:-}" ] && args+=(--supervisor-pi-model "$SUPERVISOR_PI_MODEL")
 echo "starting in $TMP"

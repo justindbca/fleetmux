@@ -54,7 +54,7 @@ def test_common_policy_is_merged_into_every_mode():
     assert lifecycle.mode_policy('scheduled', 'hard_timeout_min') == 150  # sector rotation runs on a 150-minute budget
     assert lifecycle.mode_policy('review_loop', 'max_rounds') == 3
     assert lifecycle.mode_policy('service', 'idle_stop_hours', 'never') == 'never'  # null -> default
-    assert lifecycle.mode_policy('dev_task', 'review_step')['reviewer'] == 'opus'
+    assert 'reviewer' not in lifecycle.mode_policy('dev_task', 'review_step')  # the supervisor picks the reviewer
 
 
 def test_hot_reload_takes_effect_on_next_read(table):

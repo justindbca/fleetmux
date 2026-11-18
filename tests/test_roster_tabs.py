@@ -48,15 +48,15 @@ def test_bad_tabs_reject_the_whole_roster(tmp_path, body, why):
 
 # ------------------------------------------------------------------ 2. matching by the full command line
 def test_same_program_is_exact_with_the_framework_python_stub():
-    argv = shlex.split('/opt/homebrew/bin/python3.14 /Users/j/shell.py --fleet-home /Users/j/.ops --port 8895')
+    argv = shlex.split('/opt/homebrew/bin/python3.14 /home/u/shell.py --fleet-home /home/u/.ops --port 8895')
     first = {'/opt/homebrew/bin/python3.14', '/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/'
              'Versions/3.14/Resources/Python.app/Contents/MacOS/Python'}
     stub = sorted(first)[0]
     assert tabs.same_program(' '.join(argv), argv, first)
-    assert tabs.same_program(stub + ' /Users/j/shell.py --fleet-home /Users/j/.ops --port 8895', argv, first)
+    assert tabs.same_program(stub + ' /home/u/shell.py --fleet-home /home/u/.ops --port 8895', argv, first)
     assert not tabs.same_program(' '.join(argv) + ' --x', argv, first)  # extra argument
     assert not tabs.same_program(' '.join(argv[:-1]), argv, first)  # prefix only
-    assert not tabs.same_program('/usr/bin/python3 /Users/j/shell.py --fleet-home /Users/j/.ops --port 8895',
+    assert not tabs.same_program('/usr/bin/python3 /home/u/shell.py --fleet-home /home/u/.ops --port 8895',
                                  argv, first)  # another interpreter
     assert not tabs.same_program('grep ' + ' '.join(argv), argv, first)
 

@@ -7,7 +7,7 @@ name: release-fleetmux
 #   fleetmux-<ver>-<triple>.tar.gz.sha256   one sha256sum line: `<hex>  fleetmux-<ver>-<triple>.tar.gz`
 # attached to the GitHub release `v<ver>`, which is exactly the layout scripts/install_fleetmux.sh downloads
 # ($FLEETMUX_RELEASE_BASE/v<ver>/<asset>; tests/test_install_fleetmux.py pins it). <ver> is the fleetmux
-# workspace version and must equal the tag; deps.yaml's programs.fleetmux.min picks which release installs.
+# workspace version and must equal the tag; scripts/install.sh installs the binary of its own release; a checkout falls back to programs.fleetmux.min.
 # The same tag also carries the fleetmux-web window (brief-m25 §3.6 W5), four targets (gnu, dynamically linked
 # against webkit2gtk on Linux; glibc >= 2.39), each as
 #   fleetmux-web-<ver>-<triple>.tar.gz      top-level `fleetmux-web` + `LICENSE` + `THIRD-PARTY-LICENSES`

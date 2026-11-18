@@ -23,7 +23,9 @@ environment names to ``FLEETMUX_*``, so the run records no longer depend on the 
 (``~/cmux-fleet-releases``) are not moved. A fleet running on this machine -> refuse, exit 2.
 
 ``check()`` is the start-up guard of the human-facing commands: old data not yet migrated, an old environment
-variable, or a fleet home under the old name -> one line saying what to do.
+variable, or a fleet home under the old name -> one line saying what to do. A separate new-style fleet home
+(``FLEETMUX_HOME`` / ``FLEETMUX_STATE`` set, not the default and not an old name) only gets a note about old
+top-level data.
 """
 import errno
 import fcntl
@@ -109,23 +111,43 @@ def _dev(path):
 
 # ------------------------------------------------------------------ start-up guard
 
+def _old_name(p):
+    return any(part.startswith(OLD) or part.startswith('.' + OLD) for part in p.parts)
+
+
+def _separate(var, default):
+    """The variable is set to a path that is neither under an old name nor the default location."""
+    value = os.environ.get(var)
+    if not value:
+        return False
+    p = Path(value).expanduser()
+    return not _old_name(p) and os.path.realpath(p) != os.path.realpath(default)
+
+
 def problems():
     """(fatal, notes): one line each. Fatal: data or settings under the old names that this version no longer
-    reads; notes: old data that is shadowed by data already under ~/.fleetmux (not merged)."""
-    fatal, notes, waiting = [], [], []
+    reads; notes: old data that is shadowed by data already under ~/.fleetmux (not merged), or un-migrated
+    top-level old data while FLEETMUX_HOME (and FLEETMUX_STATE, when set) name a separate new-style fleet home:
+    that fleet does not use the default home, so it can start while older fleets still run on the old data."""
+    fatal, notes, waiting, idle = [], [], [], []
+    separate = _separate('FLEETMUX_HOME', paths.root()) and (
+        not os.environ.get('FLEETMUX_STATE') or _separate('FLEETMUX_STATE', paths.root() / 'state'))
     for item, old, new in top_items():
         if not _pending(old):
             continue
         if not _in_use(item, new):
-            waiting.append(str(old))
+            (idle if separate else waiting).append(str(old))
         elif item == 'home' and _is_home(old):
             notes.append('fleetmux: using %s; %s also holds fleet data and is not read (not merged)' % (new, old))
+    if idle:
+        notes.append("fleetmux: old data in %s is not read; run 'fleetmux home migrate' after its fleets stop"
+                     % ', '.join(idle))
     for var in ('FLEETMUX_HOME', 'FLEETMUX_STATE'):
         value = os.environ.get(var)
         if not value:
             continue
         p = Path(value).expanduser()
-        if any(part.startswith(OLD) or part.startswith('.' + OLD) for part in p.parts):
+        if _old_name(p):
             fatal.append('fleetmux: %s=%s uses the old name; use ~/.fleetmux/fleets/<name> (state: <home>/state); '
                          "'fleetmux home migrate' moves existing fleet homes there" % (var, value))
             continue

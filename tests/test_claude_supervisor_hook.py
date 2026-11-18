@@ -129,18 +129,26 @@ def test_blocked_operator_after_yield_does_not_strand_the_mailbox(supervisor):
     assert typed_any(f, 'supervisor') == []
 
 
-def test_supervisor_stopfailure_audits_without_worker_retry(supervisor):
+def test_supervisor_stopfailure_settles_its_turn_and_holds_only_that_slot(supervisor):
+    """design.md §24 (2026-11-14): a supervisor's StopFailure posts the stop_failure event like a worker's. The
+    turn is settled as not adopted and only the supervisor slot is held for a backoff, the run is not paused; task
+    mode queues the same message again, service mode fails the request (never re-sent).
+    Before: audit only, the delivery stayed in flight until the watchdog froze it."""
     f = supervisor
     assert '已排队' in operator(f, 'marker')
     delivered(f, f.ready_hook)
     before = f.v2.bus.slot_state('supervisor')
     fleet.claude_stop_failure(f.path, 'supervisor', 0, json.dumps({
         'session_id': f.test_threads['supervisor'], 'error': 'api_error'}))
-    f.v2.step(10)
-    assert f.v2.bus.slot_state('supervisor')['current_delivery'] == before['current_delivery']
-    assert f.v2.bus.message(before['message_id'])['status'] != 'committed'
+    for _ in range(5):
+        f.v2.step(10)
+    assert f.v2.bus.slot_state('supervisor').get('current_delivery', '') != before['current_delivery']
+    assert f.v2.bus.message(before['message_id'])['status'] == 'committed'
+    assert f.v2.bus.message(before['message_id'])['outcome'] != 'completed'
     assert any(e['event'] == 'hook.stop_failure' for e in audit(f, 'supervisor'))
-    assert not any(e['event'] == 'stop_failure.retry' for e in audit(f, 'supervisor'))
+    assert f.agent('supervisor')['state'] == 'held' and not f.paused()
+    retried = any(e['event'] == 'stop_failure.retry' for e in audit(f, 'supervisor'))
+    assert retried is (not f.service)
 
 
 @pytest.mark.parametrize('mode', ['task', 'service'])

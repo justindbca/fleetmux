@@ -40,11 +40,13 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from fleetmux import claude_hook, codex_queue, handoff
+from fleetmux import awake, claude_hook, codex_queue, handoff
 from fleetmux.platform import keep_awake_prefix
 
 LIMITS = {'max_depth': 2, 'max_children': 3, 'max_agents_total': 12, 'child_workers_max': 3,
-          'split_budget_h': 4}  # P7: hours a service split's task sub-fleet gets (brief v2 §2.1-11)
+          'split_budget_h': 4,  # P7: hours a service split's task sub-fleet gets (brief v2 §2.1-11)
+          'job_hot_add_max': None}  # §58: workers the program may add for queued jobs (None: no cap)
+JOB_UNCAPPED = {'max_children': None, 'max_agents_total': None, 'child_workers_max': None}  # §58: job defaults
 KEEP = object()  # spawn_child / child_config: lifecycle not given -> child_lifecycle(parent), as before P7
 ACTIVE = ('starting', 'running', 'stopping')
 TITLE_MAX = 60
@@ -117,8 +119,21 @@ def placeholder_label(slot, task_id, workspace_title):
 
 # ------------------------------------------------------------------ tree on disk
 def children_dirs(run):
+    """The sub-fleet run directories under ``run``, in the order they were created (the record's ``created``, else
+    the directory's mtime), so the sidebar lists them in that order (M2 before M10). A job's sub-fleet (§58) counts
+    from the job's submit time (``submitted``): jobs are listed in the order they were submitted, whatever order
+    their spawns ran in."""
     sub = Path(run) / 'sub'
-    return sorted(p for p in sub.iterdir() if (p / 'subfleet.json').is_file()) if sub.is_dir() else []
+    if not sub.is_dir():
+        return []
+
+    def created(d):
+        rec = record(d)
+        try:
+            return float(rec.get('submitted') or rec.get('created'))
+        except (TypeError, ValueError):
+            return d.stat().st_mtime
+    return sorted((p for p in sub.iterdir() if (p / 'subfleet.json').is_file()), key=lambda d: (created(d), d.name))
 
 
 def record(child_run):
@@ -277,12 +292,15 @@ def root_config(cfg):
     return _fleet().load(path) if path else cfg
 
 
-def limits(cfg):
-    """Defaults <- root config 'limits' <- root roster YAML 'limits' (read now: hot)."""
+def limits(cfg, job=False):
+    """Defaults <- root config 'limits' <- root roster YAML 'limits' (read now: hot).
+    ``job`` (§58): a program-made job sub-fleet has no default cap on max_children / max_agents_total /
+    child_workers_max (None); the root config or roster ``limits:`` can still set one."""
     import yaml
     from fleetmux import roster
     root = root_config(cfg)
-    out = dict(LIMITS, **{k: v for k, v in (root.get('limits') or {}).items() if k in LIMITS})
+    out = dict(LIMITS, **(JOB_UNCAPPED if job else {}))
+    out.update({k: v for k, v in (root.get('limits') or {}).items() if k in LIMITS})
     if root.get('roster'):
         try:
             out.update(roster.load_limits(root['roster']))
@@ -341,7 +359,16 @@ def fleetmux_binding(cfg, task_id):
     return {'fleetmux_root_session': root, 'fleetmux_page': task_id}
 
 
-def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
+def job_roster(job):
+    """(worker names, {name: card}) of a job's roster (§58), or (None, None) without one."""
+    if not job or not job.get('roster'):
+        return None, None
+    from fleetmux import roster
+    names, _, profiles = roster.load_entries(job['roster'])
+    return names, profiles
+
+
+def check(f, slot, task_id, workers, ready=True, named=None, profiles=None, job=None):
     """None when this sub-fleet may start now, else the reason (refusals are enforced by program).
 
     ``ready=False`` (escalate / approve time): limits and slot kind only; the worker is still
@@ -349,12 +376,20 @@ def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
     ``named``: a roster ``subfleets:`` entry (§29): ``task_id`` is its name; the M<n> id, depth and
     max_attempts rules (made for split tasks) do not apply, its workers run the entry's model.
     ``profiles``: {worker-<n>: card id} from an approve's ``worker_profiles`` (§44): those cards instead of
-    the default model, resolved and capped (hosts, max_concurrent) as a roster would be."""
+    the default model, resolved and capped (hosts, max_concurrent) as a roster would be.
+    ``job`` (§58): the job's sub-fleet fields; no default caps (limits(job=True)), and the worker names and cards
+    of its ``roster`` when it has one."""
     fleet = _fleet()
     problem = backend_problem(f.cfg) or pages_problem(f.cfg, getattr(f, 'mgr', None))
     if problem:
         return problem
-    lim = limits(f.cfg)
+    lim = limits(f.cfg, job=bool(job) or bool(named and named.get('attached')))  # §58: an attached child too
+    try:
+        job_names, job_profiles = job_roster(job)
+    except (OSError, ValueError) as exc:
+        return 'job roster ' + str(job.get('roster')) + ' rejected: ' + str(exc).replace('\n', '; ')
+    if job_names:
+        profiles = job_profiles
     if not named and not valid_child_id(f.cfg.get('task_id'), task_id):
         want = (f.cfg['task_id'] + '.<n>') if f.cfg.get('task_id') else 'M<n>'
         return 'task id ' + repr(task_id) + ' must be ' + want + ' in this fleet'
@@ -374,7 +409,7 @@ def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
         problem = named_domains_problem(f.cfg.get('worker_kit'), named['worker_domains'])
         if problem:
             return 'sub-fleet ' + task_id + ': ' + problem
-    if workers > lim['child_workers_max']:
+    if lim['child_workers_max'] is not None and workers > lim['child_workers_max']:
         return 'child_workers_max ' + str(lim['child_workers_max']) + ': asked for ' + str(workers) + ' workers'
     live = active_children(f.run_dir)
     if any(record(d).get('task_id') == task_id for d in live):
@@ -384,12 +419,12 @@ def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
     if used >= cap:  # acceptance 10/13 P1-4: escalate -> approve must not retry a sub-fleet forever
         return (EXHAUSTED + ' ' + str(cap) + ': sub-fleet ' + task_id + ' already started ' + str(used)
                 + ' time(s); no new sub-fleet for it')
-    if len(live) >= lim['max_children']:
+    if lim['max_children'] is not None and len(live) >= lim['max_children']:
         return ('max_children ' + str(lim['max_children']) + ': this fleet already runs '
                 + ', '.join(record(d).get('task_id', '?') for d in live))
     root_run = Path(root_config(f.cfg)['run'])
-    total = tree_agents(root_run)
-    if total + workers > lim['max_agents_total']:
+    total = tree_agents(root_run) if lim['max_agents_total'] is not None else 0
+    if lim['max_agents_total'] is not None and total + workers > lim['max_agents_total']:
         return ('max_agents_total ' + str(lim['max_agents_total']) + ': the tree has ' + str(total)
                 + ' agents, ' + str(workers) + ' more would exceed it')
     if slot not in f.active_workers():
@@ -399,7 +434,7 @@ def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
     try:
         from fleetmux import model_usage, night
         from fleetmux.agent_registry import AgentRegistry
-        names = ['worker-' + str(i + 1) for i in range(workers)]
+        names = job_names or ['worker-' + str(i + 1) for i in range(workers)]
         if profiles:  # the child config's view: an adopted Claude supervisor, these cards on its workers
             child = dict(f.cfg, supervisor_cli=fleet.agent_cli(f.runtime_cfg(slot), slot), adopt={'slot': slot, 'hook': True},
                          worker_profiles={})
@@ -439,10 +474,11 @@ def check(f, slot, task_id, workers, ready=True, named=None, profiles=None):
 
 # ------------------------------------------------------------------ requests (transaction-safe)
 def request(run_dir, slot, task_id, goal, workers, output=None, proposal=None, contracts=False, outputs=None,
-            worker_profiles=None, hours=None, split=None, lifecycle=KEEP):
+            worker_profiles=None, hours=None, split=None, lifecycle=KEEP, artifacts=None, budget=None, job=None):
     """Queue a spawn for the fleet's next tick. Writes one file; no other side effect.
     P7 (service split): ``hours`` (the child task's budget), ``split`` (the service request it answers) and
-    ``lifecycle`` (None: no child lifecycle) are written only when given; without them the file is as before."""
+    ``lifecycle`` (None: no child lifecycle) are written only when given; without them the file is as before.
+    §58 (job): ``artifacts`` and ``budget`` (the child task's own) likewise."""
     rid = 'sf-' + uuid.uuid4().hex[:12]
     folder = Path(run_dir) / 'subfleet-requests'
     folder.mkdir(parents=True, exist_ok=True)
@@ -455,6 +491,12 @@ def request(run_dir, slot, task_id, goal, workers, output=None, proposal=None, c
         spec['split'] = split
     if lifecycle is not KEEP:
         spec['lifecycle'] = lifecycle
+    if artifacts is not None:
+        spec['artifacts'] = artifacts
+    if budget:
+        spec['budget'] = budget
+    if job:  # §58: the job's id, name, roster, roles, deliver / review_file
+        spec['job'] = job
     _fleet().save(folder / (rid + '.json'), spec)
     return rid
 
@@ -482,7 +524,8 @@ def process_requests(f):
                               output=spec.get('output'), proposal=spec.get('proposal'),
                               contracts=spec.get('contracts', False), outputs=spec.get('outputs'),
                               worker_profiles=spec.get('worker_profiles'), hours=spec.get('hours'),
-                              lifecycle=spec['lifecycle'] if 'lifecycle' in spec else KEEP)
+                              lifecycle=spec['lifecycle'] if 'lifecycle' in spec else KEEP,
+                              artifacts=spec.get('artifacts'), budget=spec.get('budget'), job=spec.get('job'))
             answer = {'status': 'accepted', 'run': rec['run'], 'task_id': rec['task_id']}
         except Refused as exc:
             answer = {'status': 'rejected', 'reason': str(exc)}
@@ -686,12 +729,65 @@ def named_domains_problem(worker_kit, domains):
     return None
 
 
+def _number(low=None, none=False, integer=False):
+    def ok(v):
+        if v is None:
+            return none
+        if isinstance(v, bool) or not isinstance(v, int if integer else (int, float)):
+            return False
+        return low is None or v >= low
+    return ok
+
+
+# Fleet config keys a ``fleetmux start`` that attached forwards to its sub-fleet (fleetmux/join.py), each with its
+# check. The child's value replaces the parent's in child_config; ``None`` means "none" (no kit, no deadline).
+OVERRIDES = {
+    'supervisor_split': lambda v: type(v) is bool,
+    'allow_profile_live_switch': lambda v: type(v) is bool,
+    'request_timeout': _number(0, none=True), 'max_busy': _number(0, integer=True),
+    'max_attempts': _number(1, integer=True), 'worker_idle_reclaim_min': _number(0, none=True),
+    'stall_timeout': _number(0), 'stall_window': _number(0), 'stall_cpu_pct': _number(0), 'stall_grace': _number(0),
+    'stall_escapes': _number(0, integer=True), 'handoff_ratio': lambda v: _number(0)(v) and 0 < v <= 1,
+    'handoff_timeout': _number(0), 'window': _number(1, integer=True), 'claude_window': _number(1, integer=True),
+    'clear_timeout': _number(0), 'lease_reclaim': lambda v: v in ('on', 'off'),
+    'worker_model': lambda v: isinstance(v, str) and bool(v.strip()),
+    'claude': lambda v: isinstance(v, str) and bool(v.strip()),
+    'worker_kit': lambda v: v is None or (isinstance(v, str) and Path(v).is_absolute() and Path(v).is_dir()),
+    'worker_domains': lambda v: isinstance(v, list) and all(isinstance(d, str) and d.strip() for d in v),
+    'brake_notify': lambda v: isinstance(v, list) and bool(v) and all(isinstance(x, str) for x in v),
+}
+
+
+def check_overrides(value):
+    """The validated ``overrides`` of an attach op or a job spec ({} when absent); ValueError names the bad keys."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError('overrides must be a mapping of fleet config keys')
+    unknown = sorted(set(value) - set(OVERRIDES))
+    if unknown:
+        raise ValueError('overrides take only ' + ', '.join(sorted(OVERRIDES)) + ' (not ' + ', '.join(unknown) + ')')
+    bad = sorted(k for k, v in value.items() if not OVERRIDES[k](v))
+    if bad:
+        raise ValueError('overrides: bad value for ' + ', '.join(bad))
+    if value.get('worker_domains'):
+        problem = named_domains_problem(value.get('worker_kit'), value['worker_domains'])
+        if problem:
+            raise ValueError(problem)
+    return dict(value)
+
+
+def shown_id(task_id, job=None):
+    """The last segment of a sub-fleet's title: its id, or ``<job name> · <id>`` for a named job (§58)."""
+    return (job['name'] + ' · ' + task_id) if job and job.get('name') else task_id
+
+
 def child_config(f, slot, task_id, workers, rec_dir, sid, info, redis_cfg, name, named=None, worker_profiles=None,
-                 lifecycle=KEEP):
+                 lifecycle=KEEP, job=None):
     fleet = _fleet()
     parent = child_worker_cfg(f.cfg, named) if named else f.cfg
     root_path = parent.get('root_config') or str(f.path)
-    path = list(parent.get('title_path') or [name]) + [slot, task_id]
+    path = list(parent.get('title_path') or [name]) + [slot, shown_id(task_id, job)]
     # `advisor` is the parent's in-memory switch (its roster): never inherited. A sub-fleet's advisor is off
     # unless its own roster says `advisor: on` (named sub-fleets, §29; read by the child daemon at start).
     # `channels` (§53): the phone / chat channels belong to the top fleet; a sub-fleet never runs its own actor.
@@ -706,10 +802,13 @@ def child_config(f, slot, task_id, workers, rec_dir, sid, info, redis_cfg, name,
         names, roles, profiles = roster.load_entries(named['roster'])
         cfg.update(roster=named['roster'], worker_roles=roles, worker_profiles=profiles,
                    supervisor_role=named['supervisor_role'],
-                   named={'name': named['name'], 'autostart': named['autostart']})
+                   named=dict({'name': named['name'], 'autostart': named['autostart']},
+                              **({'attached': True} if named.get('attached') else {})))  # applet_host.state_dir
         cfg.pop('roster_night', None)
         if 'worker_domains' in named:  # the entry's floor replaces the parent's ([] = none); not written: inherited
             cfg['worker_domains'] = list(named['worker_domains'])
+        if named.get('roles'):  # an attached child (``start --roles``): <agent-name>.md files for its agents
+            cfg['roles'] = named['roles']
     else:
         names = ['worker-' + str(i + 1) for i in range(workers)]
         # §44: the approve's cards per sub-worker, never the parent's own per-slot profiles (same slot names)
@@ -717,12 +816,25 @@ def child_config(f, slot, task_id, workers, rec_dir, sid, info, redis_cfg, name,
         # §46 / follow-up 1: the work goes on in the delegating worker's own directory; it is this sub-fleet's task
         # directory, inside the boundary of its supervisor and every worker (role_scope, goal_text, claude --add-dir)
         cfg['task_dir'] = str(fleet.agent_cwd(parent, slot))
+    if job:  # §58: the job's own roster (the run's copy, hot inside the child, §16) and roles directory
+        if job.get('roster'):
+            from fleetmux import roster
+            names, roles, profiles = roster.load_entries(job['roster'])
+            cfg.update(roster=job['roster'], worker_roles=roles, worker_profiles=profiles)
+            cfg.pop('roster_night', None)
+        if job.get('roles'):
+            cfg['roles'] = job['roles']
+        cfg['job'] = job['id']  # Fleet.submit / lifecycle_close: the job's lifecycle gate runs in this child
+    # what the `fleetmux start` that attached asked for (join.py): it replaces the parent's value
+    cfg.update(((named or {}).get('overrides') or {}) if named else ((job or {}).get('overrides') or {}))
     cfg.update(run=str(rec_dir), workers=names, mode=mode,
                lifecycle=life, initiator={'kind': 'fleet', 'id': str(f.path)},
                session=session_name(task_id), task_id=task_id, parent_config=str(f.path),
                root_config=root_path, root_token=token(parent), name=name, title_path=path,
                agents_title=title(path), control_title='Fleet daemon · ' + task_id, tab_prefix=task_id + '/',
                supervisor_cli=fleet.agent_cli(f.runtime_cfg(slot), slot), supervisor_cwd=str(fleet.agent_cwd(parent, slot)),
+               # the model the adopted session runs, never the parent's own supervisor model
+               supervisor_model=fleet.claude_model(f.runtime_cfg(slot), slot),
                adopt={'pane': sid, 'slot': slot, 'generation': int(f.agent(slot).get('generation') or 0),
                       'label': f.label(slot),  # §46: who supervises, named in its reports to the top
                       'thread': f.agent(slot).get('thread') or '',  # Codex: the role change is queued to this session
@@ -845,20 +957,23 @@ def parent_detach_view(f, rec, child_mgr, child_run):
 
 
 def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, launch=None, contracts=False,
-                outputs=None, named=None, worker_profiles=None, hours=None, lifecycle=KEEP):
+                outputs=None, named=None, worker_profiles=None, hours=None, lifecycle=KEEP, artifacts=None, budget=None,
+                job=None):
     """Start sub-fleet ``task_id`` with ``slot``'s live pane as its supervisor. Outside transactions only.
 
     ``named``: a roster ``subfleets:`` entry (§29; ``task_id`` is its name): its own roster and worker
     runtime, its mode (service: no task, no deadline), and the run directory ``sub/<name>`` reused.
     ``hours`` (P7 split): the child task's budget instead of the parent's remaining time; ``lifecycle``: the
-    child's lifecycle instead of child_lifecycle(parent) (a split child runs None)."""
+    child's lifecycle instead of child_lifecycle(parent) (a split child runs None). ``artifacts`` / ``budget``
+    (§58 job): the child task's artifacts and budget card. ``job`` (§58): the job's id, name, roster (copied into
+    the child run), roles, and the deliver / review_file of its lifecycle gate, which runs in the child."""
     fleet = _fleet()
     from fleetmux import redis_runtime, runtime_v2
     service = bool(named) and named['mode'] == 'service'
     if not service and (not isinstance(goal, str) or not goal.strip()):
         raise Refused('a sub-fleet needs a goal')
     profiles = {'worker-' + str(i + 1): p for i, p in enumerate(worker_profiles or [])}
-    reason = check(f, slot, task_id, workers, named=named, profiles=profiles)
+    reason = check(f, slot, task_id, workers, named=named, profiles=profiles, job=job)
     if reason:
         raise Refused(reason)
     base = f.run_dir / 'sub'
@@ -870,7 +985,7 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
         attempt += 1
         rec_dir = base / (task_id + '-attempt-' + str(attempt))
     name = root_name(f.cfg, '' if f.cfg.get('adopt') or f.service else f.task().get('goal', ''))
-    path = list(f.cfg.get('title_path') or [name]) + [slot, task_id]
+    path = list(f.cfg.get('title_path') or [name]) + [slot, shown_id(task_id, job)]
     ws_title = title(path)
     child_mgr = fleet.manager_for(dict({'session': session_name(task_id), 'cmux_state_dir': f.cfg.get('cmux_state_dir'),
                                         'backend': f.cfg.get('backend'),  # the child runs on the parent's backend
@@ -890,6 +1005,10 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
            'placeholder': None, 'pane': sid, 'generation': int(info_now.get('generation') or 0)}
     if named:
         rec.update(name=task_id, named=True, mode=named['mode'], autostart=named['autostart'])
+    if job:
+        rec.update(job=job['id'], submitted=job.get('submitted') or rec['created'])  # §58: sidebar order
+        if job.get('name'):
+            rec['name'] = job['name']
     cfg = released = None
     try:  # anything below fails -> rollback; SystemExit too (start_redis), never the parent daemon
         # 1. child run directory, config, private Redis, task
@@ -901,10 +1020,13 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
             if (cwd / fname).exists():
                 shutil.copy2(cwd / fname, backup / fname)
         save_record(rec_dir, rec)
+        if job and job.get('roster'):  # §58: the child follows its own copy; the caller's file is never written
+            from fleetmux import roster
+            job = dict(job, roster=str(roster.copy_into_run(job['roster'], rec_dir)))
         redis_cfg = redis_runtime.prepare(f.cfg.get('redis_runtime_root') or redis_runtime.DEFAULT_ROOT,
                                           uuid.uuid4().hex[:8])
         cfg = child_config(f, slot, task_id, workers, rec_dir, sid, None, redis_cfg, name, named=named,
-                           worker_profiles=profiles, lifecycle=lifecycle)
+                           worker_profiles=profiles, lifecycle=lifecycle, job=job)
         if cfg.get('worker_cli') == 'pi':  # §51: its own isolated pi home, as start makes one for a pi run
             from fleetmux import fleet_config, pi_adapter
             cfg['pi_home'] = str(pi_adapter.prepare_home(rec_dir / 'pi-home', cfg.get('pi_agent_dir') or
@@ -913,14 +1035,21 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
         if not service:  # a service sub-fleet has no task: it answers requests until it is taken down
             if hours is None:  # a task-mode split: the parent's remaining time, else 16 h
                 hours = 16
-                deadline = float(f.task().get('deadline') or 0)
+                deadline = fleet.task_deadline(f.task())
                 if deadline:
-                    hours = max((deadline - time.time()) / 3600, 0.05)
+                    hours = max((deadline - awake.now()) / 3600, 0.05)  # the parent's awake time left
             bus = runtime_v2.bus_for(cfg, child_r)
             spec = {'goal': goal_text(goal, task_id, deliver, proposal, f.label(slot), cfg.get('task_dir')),
                     'hours': hours}
             if contracts:  # spec §3.0: a sub-fleet of a contract task runs P0 / P1 first as well
                 spec['contracts'] = True
+            if artifacts is not None:  # §58: a job's own artifacts and budget card
+                spec['artifacts'] = artifacts
+            if budget:
+                spec['budget'] = budget
+            for k in ('deliver', 'review_file'):  # §58: the job's lifecycle gate, judged inside the child
+                if job and job.get(k) is not None:
+                    spec[k] = job[k]
             runtime_v2.post_event(bus, {'kind': 'task', 'request_id': 'subfleet-' + task_id, 'spec': spec},
                                   'subfleet-' + task_id)
         child_r.close(); child_r.connection_pool.disconnect()
@@ -1022,7 +1151,7 @@ def start_adopted(f):
     f.setf('supervisor', role='supervisor', generation=0, state='starting', thread='', transcript='',
            ctx_used=0, ctx_window=0, msg_id='', msg_done='', busy_since=time.time(), delivered=0, retry_at=0,
            last_msg='', empty_tries=0, launch_ready=1, runtime_ready=0, current_profile='', idle_confirmed=0,
-           pane=sid, bridge_available=0, startup_deadline=time.time() + float(f.cfg['profile_ready_timeout']))
+           pane=sid, bridge_available=0, startup_deadline=awake.deadline(f.cfg['profile_ready_timeout']))
     first = f.agent(f.workers[0])['pane']
     sid = attach_child_view(f, sid, first, adopt.get('info') or {})
     if not sid:
@@ -1202,6 +1331,147 @@ def tick(f):
             f.log('subfleet.stopping', task=rec['task_id'], outcome=rec['outcome'])
         if rec['state'] == 'stopping' and not fleet.daemon_running(d):
             collect(f, d, notify=running)
+    watch_children(f)
+
+
+# ------------------------------------------------------------------ parent tick: is each sub-fleet moving? (R3b)
+# Audit rows a daemon (or a bridge) writes without anything moving: never progress.
+WATCH_NOISE = ('renewed', 'lease.', 'ui.', 'watch.', 'held_watch.', 'agent.state', 'cli_check', 'subfleet.watch')
+
+
+def child_progress(cfg, rec):
+    """Facts about one running sub-fleet, read from its own Redis (its daemon is not asked: it may be the thing
+    that is down). None when that Redis cannot be read."""
+    from fleetmux import runtime_v2
+    if not redis_up(cfg):
+        return None
+    fleet = _fleet()
+    try:
+        r = fleet.connect(cfg)
+    except Exception:
+        return None
+    try:
+        bus = runtime_v2.bus_for(cfg, r)
+        facts = runtime_v2.daemon_outage(r, bus, cfg)  # beat, last daemon event, unread events, held slots
+        progress_at, progress_event, oldest = 0.0, '', 0.0
+        for sid, row in r.xrevrange(bus.audit_key, count=500):
+            oldest = int(sid.split('-')[0]) / 1000
+            event = str(row.get('event') or '')
+            if not event.startswith(WATCH_NOISE):
+                progress_at, progress_event = oldest, event
+                break
+        if not progress_at and oldest:
+            progress_at, progress_event = oldest, '(only bookkeeping rows since)'
+        service, task = r.hgetall('fx:service'), r.hgetall('fx:task')
+        supervisor = r.hgetall(fleet.key('agent', 'supervisor'))
+    except Exception:
+        return None
+    finally:
+        r.close()
+        r.connection_pool.disconnect()
+    return dict(facts, progress_at=progress_at, progress_event=progress_event, task=task.get('status') or '',
+                paused=service.get('paused') == '1', paused_at=float(service.get('at') or 0),
+                paused_reason=service.get('reason') or '',
+                supervisor_held=supervisor.get('state') == 'held' or 'supervisor' in facts.get('held', []))
+
+
+def stuck_reasons(f, d, rec, facts, after):
+    """Why this running sub-fleet counts as not moving (awake seconds: a lid-closed sleep does not count)."""
+    from fleetmux import awake
+    since_launch = awake.since_wall(float(rec.get('launched') or rec.get('created') or time.time()))
+    if facts is None:
+        return ['its Redis cannot be read (its daemon is probably down)'] if since_launch >= after else []
+    reasons = []
+    beat_age = awake.since_wall(facts['beat']) if facts.get('beat') else since_launch
+    if beat_age >= after:
+        reasons.append('its daemon has not beaten for ' + str(int(beat_age)) + ' s'
+                       + ('' if _fleet().daemon_running(d) else ' and holds no lock'))
+    if facts['paused'] and facts['paused_at'] and awake.since_wall(facts['paused_at']) >= after:
+        reasons.append('paused for ' + str(int(awake.since_wall(facts['paused_at']))) + ' s ('
+                       + facts['paused_reason'][:200] + ')')
+    if facts['supervisor_held']:
+        rec.setdefault('watch_held_since', str(time.time()))
+        held_s = awake.since_wall(float(rec['watch_held_since']))
+        if held_s >= after or reasons:
+            reasons.append('its supervisor is held (seen for ' + str(int(held_s)) + ' s)')
+    else:
+        rec.pop('watch_held_since', None)
+    if facts['task'] == 'running' and facts.get('progress_at'):
+        idle = awake.since_wall(facts['progress_at'])
+        if idle >= after:
+            reasons.append('no progress event for ' + str(int(idle)) + ' s (last: ' + facts['progress_event'] + ')')
+    return reasons
+
+
+def watch_children(f):
+    """Parent daemon, every tick (R3b, docs/design.md §24 "Parent watch of sub-fleets"): every subfleet_check_s,
+    judge each running sub-fleet from its own Redis; no progress for subfleet_stuck_after_s -> report it
+    (``report_stuck``), again at most every held_realert_s. Catches a sub-fleet whose own daemon is dead or hung."""
+    from fleetmux import awake, runtime_v2
+    knobs, _ = runtime_v2.held_watch_knobs()
+    after, every, realert = (float(knobs['subfleet_stuck_after_s']), float(knobs['subfleet_check_s']),
+                             float(knobs['held_realert_s']))
+    due = getattr(f, 'subfleet_watch_at', None)
+    if not isinstance(due, dict):
+        due = f.subfleet_watch_at = {}
+    now = awake.now()  # the look schedule is awake seconds; stuck_alert_at below stays a Unix stamp (since_wall)
+    for d in active_children(f.run_dir):
+        rec = record(d)
+        if rec.get('state') != 'running' or now < due.get(str(d), 0):
+            continue
+        due[str(d)] = now + every
+        try:
+            cfg = _fleet().load(Path(d) / 'config.json')
+        except (OSError, ValueError):
+            continue
+        try:
+            facts = child_progress(cfg, rec)
+            before = dict(rec)
+            reasons = stuck_reasons(f, d, rec, facts, after)
+        except Exception as exc:  # a look never takes the parent daemon down
+            f.log('subfleet.watch_failed', level='error', task=rec.get('task_id'), error=str(exc)[:300])
+            continue
+        if not reasons:
+            rec.pop('stuck_alert_at', None)
+            if rec != before:
+                save_record(d, rec)
+            continue
+        if rec.get('stuck_alert_at') and awake.since_wall(float(rec['stuck_alert_at'])) < realert:
+            if rec != before:
+                save_record(d, rec)
+            continue
+        rec['stuck_alert_at'] = str(time.time())
+        save_record(d, rec)
+        report_stuck(f, d, rec, facts, reasons)
+
+
+def report_stuck(f, d, rec, facts, reasons):
+    """[sub-fleet stuck] to this fleet's supervisor; at a managed root also the user channel (tg / channels)."""
+    from fleetmux import lifecycle_close
+    facts = facts or {}
+    detail = ('daemon beat ' + (time.strftime('%H:%M:%S', time.localtime(facts['beat'])) if facts.get('beat') else 'never')
+              + ', last progress ' + str(facts.get('progress_event') or '-')
+              + (' at ' + time.strftime('%H:%M:%S', time.localtime(facts['progress_at'])) if facts.get('progress_at') else '')
+              + ', task ' + str(facts.get('task') or '?') + ', paused ' + ('yes' if facts.get('paused') else 'no')
+              + ', held ' + (', '.join(facts.get('held') or []) or 'none')
+              + ', unread events ' + str(facts.get('pending_events', '?')))
+    text = ('[sub-fleet stuck] sub-fleet ' + str(rec.get('task_id') or Path(d).name) + ' (' + str(d) + '): '
+            + '; '.join(reasons) + '. Facts: ' + detail + '. Its own daemon may be down or stuck, so it may not '
+            'report this itself. Look at it (`fleetmux status --config ' + str(Path(d) / 'config.json') + '`, its '
+            'panes); resume it, or stop it if it cannot go on.')
+    f.log('subfleet.stuck', level='error', task=rec.get('task_id'), reasons=reasons, facts=detail)
+    if f.running():
+        f.queue('supervisor', text)
+    if not f.cfg.get('parent_config') and lifecycle_close.managed(f):
+        from fleetmux import lifecycle
+        try:
+            policy = lifecycle.get_mode(f.cfg['lifecycle'])
+        except (ValueError, KeyError):
+            policy = {}
+        try:
+            lifecycle_close.notify(f, 'subfleet_stuck', '[fleet ' + lifecycle_close.fleet_name(f) + '] ' + text, policy)
+        except Exception as exc:  # a notice never takes the daemon down
+            f.log('subfleet.stuck_notify_failed', level='error', error=str(exc)[:300])
 
 
 def delegated_lost(f, slot, why):
@@ -1262,6 +1532,16 @@ def archive_child_page(f, child_run, rec, cfg=None):
         f.log('subfleet.archive_failed', task=rec.get('task_id'), error=str(getattr(f.mgr, 'last_error', ''))[:200])
 
 
+def drop_child_page(f, rec, cfg):
+    """fleetmux: a detached attached child keeps no record page; its history viewer (a page archived by an earlier
+    collect of the same name) is killed. Nothing for other backends or a child bound to no page."""
+    if not on_fleetmux(f.cfg) or not hasattr(f.mgr, 'unarchive_page'):
+        return
+    page = cfg.get('fleetmux_page')
+    if page and not f.mgr.unarchive_page(page):
+        f.log('subfleet.unarchive_failed', task=rec.get('task_id'), error=str(getattr(f.mgr, 'last_error', ''))[:200])
+
+
 def collect(f, child_run, notify=True):
     """The child daemon has exited: take the pane back (or respawn the slot), close the child's tabs."""
     fleet = _fleet()
@@ -1279,7 +1559,12 @@ def collect(f, child_run, notify=True):
     restore_role(f, rec)
     child_mgr.close_all()
     child_mgr.meta_path.unlink(missing_ok=True)
-    archive_child_page(f, child_run, rec, cfg)
+    from fleetmux import named_subfleet
+    if rec.get('named') and f.r.hget(named_subfleet.DETACHED, rec.get('name') or '') is not None:
+        rec['detached'] = True  # an attached child taken out for good: no record page, status says detached
+        drop_child_page(f, rec, cfg)
+    else:
+        archive_child_page(f, child_run, rec, cfg)
     f.setf(slot, delegated_pane='', delegated_task='', delegate_cfg='')
     restore = f.agent(slot).get('split_restore')
     if restore:  # §44 restore_model: the slot's next generation (respawn / rotation below, or later) runs its own model
@@ -1316,7 +1601,7 @@ def collect(f, child_run, notify=True):
         # late Stop cannot settle as the READY of the return. Second place Escape counts as accepted stop.
         f.mgr.send_key(rec['pane'], 'Escape')
         f.setf(slot, pane=rec['pane'], state='starting', launch_ready=1, runtime_ready=0, bridge_available=0,
-               startup_deadline=time.time() + float(f.cfg['profile_ready_timeout']), busy_since=time.time())
+               startup_deadline=awake.deadline(f.cfg['profile_ready_timeout']), busy_since=time.time())
         # Always told (also on a stop): the session still believes it is a supervisor until then.
         prompt = ('Sub-fleet ' + rec['task_id'] + ' has finished (' + rec.get('outcome', '') + '). Your role '
                   'changed back: you are fleet agent ' + f.label(slot) + ', a worker of the main fleet again. '
@@ -1347,7 +1632,6 @@ def collect(f, child_run, notify=True):
         ok, rec['reason'] = False, 'completed but the deliverable ' + rec['output'] + ' is missing or empty'
     rec['state'] = 'returned' if ok else 'failed'
     if rec.get('named'):  # §29: taken down on purpose is not a failure; the parent hash says down
-        from fleetmux import named_subfleet
         rec['state'] = 'down' if rec.get('outcome') in named_subfleet.DOWN_OUTCOMES else 'failed'
     rec['finished'] = time.time()
     save_record(child_run, rec)
@@ -1358,7 +1642,8 @@ def collect(f, child_run, notify=True):
         named_subfleet.collected(f, rec, returned)
         return rec  # never a "[Sub-fleet … failed]" notice: the parent supervisor does not own it
     # P7: a service split's follow-up result <request>.done goes out on every collect (a parent stop too)
-    split_line = f.split_finished(rec, child_run) if f.service else ''
+    job = (f.escalation_state().get(rec['task_id']) or {}).get('job')  # §58; a task root's job too (§19)
+    split_line = f.split_finished(rec, child_run) if f.service or job else ''
     if notify and f.running():
         extra = split_line + f.escalation_finished(rec, ok)
         f.queue('supervisor', '[Sub-fleet ' + rec['task_id'] + ' ' + ('completed' if ok else 'failed') + '] '
@@ -1368,7 +1653,8 @@ def collect(f, child_run, notify=True):
                                           + ('retired' if hooked else 'lost') + ')')
                 + '.' + extra + ('\nNothing to route for it: answer with the usual service decision JSON (status '
                                  'RUNNING, dispatch [], skip [])' if f.service else
-                                 '\nContinue the current task using the AGENTS.md decision JSON.'))
+                                 '\nContinue the current task using the AGENTS.md decision JSON.'),
+                **({'request_id': job, 'kind': 'followup'} if job and f.service else {}))  # §58: bound to the job
     return rec
 
 
@@ -1481,7 +1767,7 @@ def resume_children(f, launch=None):
                 if tid not in newest or key > newest[tid][0]:
                     newest[tid] = (key, d, rec)
         for _, d, rec in newest.values():
-            if rec.get('state') not in ACTIVE:
+            if rec.get('state') not in ACTIVE and not rec.get('detached'):  # a detached child keeps no page
                 archive_child_page(f, d, rec)
     for d in active_children(f.run_dir):
         rec = record(d)
@@ -1525,9 +1811,15 @@ def tree(cfg):
         item = {k: rec.get(k) for k in ('state', 'slot', 'outcome', 'reason', 'attempt', 'title', 'workers')}
         if rec.get('named'):
             item.update(name=rec.get('name'), mode=rec.get('mode'), autostart=rec.get('autostart'))
+        if rec.get('detached'):  # an attached child taken out for good: not a down autostart entry
+            item.update(state='detached', detached=True, autostart=False)
         item.update(run=str(d), daemon_alive=fleet.daemon_running(d), result=child_result(d))
         if child:
             item['subfleets'] = tree(child)
+            from fleetmux import applet_host
+            rows = applet_host.tree_rows(child)  # applet-interface.md section 5
+            if rows:
+                item['applets'] = rows
         out[rec.get('task_id', d.name) + ('' if d.name == rec.get('task_id') else ' (' + d.name + ')')] = item
     return out
 

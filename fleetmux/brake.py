@@ -16,8 +16,8 @@ config/fleet.yaml). Each account
 has an ``id``, optional ``aliases``, a ``meter`` (usd_equiv | week_pct | calls | none) and optional ``caps``.
 
 At a line the daemon pauses (stop delivering and rotating, keep everything resumable) and
-notifies. Pool numbers come from ``quota.json`` (the quota treasurer, design v1 batch 1.7);
-missing, unreadable or stale means ``unknown``: shown, never trips. Walls (the walls block of fleet.yaml): the
+notifies. Pool numbers come from ``quota.json`` (the quota treasurer, design v1 batch 1.7), read through the
+hot ``quota`` block of fleet-superpowers (``Fleet.quota_reading``); missing, unreadable or stale means ``unknown``: shown, never trips. Walls (the walls block of fleet.yaml): the
 next usable model on the role's chain (fleet.yaml#discovery, user 2026-11-11), or stop.
 
 Pure functions; fleet.py keeps the counters in Redis and calls these.
@@ -28,7 +28,7 @@ import re
 import time
 from pathlib import Path
 
-from fleetmux import fleet_config, paths
+from fleetmux import awake, fleet_config, paths
 
 HERE = Path(__file__).resolve().parent
 QUOTA_FILE = None  # None: paths.default_home() / 'quota.json', resolved on use
@@ -140,13 +140,10 @@ def parse_raise(items, budget):
     return validate_budget(out) if out else None
 
 
-def read_quota(path=None):
-    """The treasurer's quota.json, or {} when missing / unreadable (never raises)."""
-    try:
-        data = json.loads(Path(path or QUOTA_FILE or paths.default_home() / 'quota.json').expanduser().read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+def quota_file(path=None):
+    """Where the treasurer writes quota.json. The brake never reads it: the daemon ingests it into the hot
+    ``quota`` block of fleet-superpowers (fleetmux/fleet_superpowers_hot.py), and the brake reads that block."""
+    return Path(path or QUOTA_FILE or paths.default_home() / 'quota.json').expanduser()
 
 
 def pool_reading(quota, pool, now=None):
@@ -173,7 +170,8 @@ def counters(state, quota, now=None):
     budget = json.loads(state.get('budget') or 'null') or {}
     pool = budget.get('pool')
     out = {'calls': int(state.get('calls') or 0), 'rounds': int(state.get('rounds') or 0),
-           'hours': round((now - float(state.get('started') or now)) / 3600, 3), 'usd': None, 'week_pct': None}
+           'hours': round(awake.between_wall(float(state.get('started') or now), now) / 3600, 3),  # awake (§35)
+           'usd': None, 'week_pct': None}
     reading = pool_reading(quota, pool, now)
     meter = pool_meter(pool)
     if meter == 'usd_equiv' and reading is not None and state.get('usd_base') not in (None, ''):

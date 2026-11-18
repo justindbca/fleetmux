@@ -10,7 +10,7 @@ import pytest
 
 from fleetmux import cmux_manager, fleet
 
-WORKERS = ['memx-ops', 'tgog-ops']
+WORKERS = ['alfa-ops', 'bravo-ops']
 
 
 def test_resume_with_advisor_keeps_config_and_roster_apart(tmp_path, monkeypatch):

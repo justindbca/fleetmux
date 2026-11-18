@@ -120,29 +120,19 @@ def test_names_are_normalized():
     assert base.normalize_backend(None) is None
 
 
-def test_default_backend_on_macos_prefers_cmux(monkeypatch):
-    monkeypatch.setattr(base, 'cmux_installed', lambda: True)
-    monkeypatch.setattr(base, 'unavailable_reason', lambda name: None)
-    assert base.default_backend('darwin') == 'cmux'
-    # cmux installed but not answering (ssh / Terminal.app), WezTerm usable: still cmux, refused by its probe
-    monkeypatch.setattr(base, 'unavailable_reason',
-                        lambda name: 'no cmux here' if name == 'cmux' else None)
-    assert base.default_backend('darwin') == 'cmux'
-    # no cmux installed and no usable WezTerm either: fall through to cmux, whose own probe then reports why
-    monkeypatch.setattr(base, 'cmux_installed', lambda: False)
-    monkeypatch.setattr(base, 'unavailable_reason', lambda name: 'no cmux here')
-    assert base.default_backend('darwin') == 'cmux'
-    # no cmux installed, WezTerm usable: WezTerm
-    monkeypatch.setattr(base, 'unavailable_reason',
-                        lambda name: 'no cmux here' if name == 'cmux' else None)
-    assert base.default_backend('darwin') == 'wezterm'
-    assert base.default_backend('linux') == 'fleetmux'  # M3 py-switch
+def test_default_backend_is_fleetmux_on_every_platform(monkeypatch):
+    """Design §33.3: no --backend means fleetmux on macOS too, whatever else is installed."""
+    for installed in (True, False):
+        monkeypatch.setattr(base, 'cmux_installed', lambda: installed)
+        for reason in (None, 'no fleetmux here'):
+            monkeypatch.setattr(base, 'unavailable_reason', lambda name: reason)
+            assert base.default_backend('darwin') == 'fleetmux'
+            assert base.default_backend('linux') == 'fleetmux'
 
 
-def test_default_backend_survives_a_broken_cmux(monkeypatch):
+def test_default_backend_ignores_a_broken_cmux(monkeypatch):
     monkeypatch.setattr(base, 'cmux_installed', lambda: (_ for _ in ()).throw(OSError('cmux binary exploded')))
-    monkeypatch.setattr(base, 'unavailable_reason', lambda name: None)
-    assert base.default_backend('darwin') == 'cmux'  # cannot tell: stay on cmux, never crash
+    assert base.default_backend('darwin') == 'fleetmux'  # cmux is never probed for the default
 
 
 def test_check_backend_refuses_an_unusable_one(monkeypatch):

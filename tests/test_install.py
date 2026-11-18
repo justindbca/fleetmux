@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_install_fleetmux import pinned_version, release_tree
+from test_install_fleetmux import release_tree
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts' / 'install.sh'
@@ -52,7 +52,7 @@ def test_a_local_source_needs_an_explicit_version(tmp_path):
 @pytest.mark.skipif(not shutil.which('uv'), reason='needs uv (it provides the Python of deps.yaml)')
 def test_install_builds_a_release_the_fleetmux_binary_can_forward_to(tmp_path):
     www = tmp_path / 'www'
-    release_tree(www, pinned_version())
+    release_tree(www, VERSION)  # only the release's own binaries: the deps.yaml floor is not on offer
     done = run(tmp_path, FLEETMUX_SOURCE=str(source_tarball(tmp_path / 'src.tgz')),
                FLEETMUX_RELEASE_BASE='file://' + str(www))
     assert done.returncode == 0, done.stdout + done.stderr
@@ -60,6 +60,8 @@ def test_install_builds_a_release_the_fleetmux_binary_can_forward_to(tmp_path):
     # forward.rs: a release dir holds .venv/bin/python + fleetmux/fleet.py, and the link resolves into its bin/
     assert (rel / '.venv/bin/python').exists() and (rel / 'fleetmux/fleet.py').exists()
     assert (tmp_path / 'bin' / 'fleetmux').resolve() == (rel / 'bin' / 'fleetmux').resolve()
+    got = subprocess.run([str(rel / 'bin' / 'fleetmux'), '--version'], capture_output=True, text=True, timeout=20).stdout
+    assert got.split()[:2] == ['fleetmux', VERSION]  # the binary of the release installed, not programs.fleetmux.min
     assert oct((rel / '.runtime' / 'redis').stat().st_mode & 0o777) == '0o700'
     cli = subprocess.run([str(rel / '.venv/bin/python'), str(rel / 'fleetmux/fleet.py'), 'start', '--help'],
                          capture_output=True, text=True, timeout=120)

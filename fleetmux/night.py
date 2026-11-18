@@ -164,6 +164,9 @@ def check_rosters(cfg, day_path, night_path):
         diff = sorted(n for n in set(day) | set(nite) if day.get(n) != nite.get(n))
         raise ValueError('the day and night rosters must declare the same "subfleets:" (named sub-fleets are per '
                          'run, a night on / off must not add, drop or change one); differing: ' + ', '.join(diff))
+    if roster.load_applets(day_path) != roster.load_applets(night_path):  # applets are per run as well
+        raise ValueError('the day and night rosters must declare the same "applets:" (a night on / off must not '
+                         'load, unload or change an applet)')
     if roster.load_channels(day_path) != roster.load_channels(night_path):  # §53: channels are per run too
         raise ValueError('the day and night rosters must declare the same "channels:" (channels are per run, '
                          'a night on / off must not add, drop or change one)')

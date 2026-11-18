@@ -1,11 +1,13 @@
 #!/bin/bash
 # Install one fleetmux release on the target machine (docs/design.md §50).
 #   scripts/install_release.sh <sha> <tarball from `git archive <sha>`>
-#       [--bin-dir DIR] [--tool-sha SHA] [--test] [--activate]
+#       [--bin-dir DIR [--headless]] [--tool-sha SHA] [--test] [--activate]
 #
 # Steps: pick the interpreter -> verify the --bin-dir binaries -> create $RELEASES/<sha> with a bare mkdir (never
 # -p: an existing release is never joined or overwritten) -> .venv with the pinned packages -> the verified GUI
-# binaries into <release>/bin (--bin-dir) -> deps.yaml check (fail = stop; <release>/bin is first on PATH) ->
+# binaries into <release>/bin (--bin-dir) -> deps.yaml check (fail = stop; <release>/bin is first; programs are found
+# on the login shell's PATH like fleet discovery, then in the directories ~/fleetmux-current's installed.json recorded;
+# the log and rows are kept in $RELEASES/.logs; nothing is installed or upgraded) ->
 # optional full test suite (fail = stop; its log is kept OUTSIDE the release dir) -> private Redis runtime dirs
 # owner-only (700; start refuses anything else) -> optional: point ~/fleetmux-current at it. A failed install
 # removes only the release dir this run created (CREATED is set by the successful mkdir), so a retry starts clean
@@ -27,6 +29,9 @@
 #                 the manifest's source_sha must equal <sha> or start with it (short <sha>); the two files then land in <release>/bin next to
 #                 SHA256SUMS, manifest.json and installed.json. A missing file or any mismatch stops the install
 #                 before the release dir is created.
+# --headless      with --bin-dir: the build is for a box without a desktop (a server, a container), so DIR holds
+#                 only `fleetmux` (+ SHA256SUMS, manifest.json); fleetmux-web is neither required nor installed
+#                 (deps.yaml marks it desktop-only) and installed.json records it as null.
 # Releases root: $FLEETMUX_RELEASES, else ~/fleetmux-releases. --activate points ~/fleetmux-current at the release.
 #
 # --tool-sha SHA  the installer-tool commit doing this install (env FLEETMUX_TOOL_SHA); defaults to the git
@@ -36,8 +41,10 @@
 #
 # Python: FLEETMUX_PYTHON wins (it must satisfy deps.yaml python.min). Otherwise macOS tries
 # /opt/homebrew/bin/python3.14 and /usr/local/bin/python3.14, then every host tries `python3.14` on PATH and
-# $HOME/.local/bin/python3.14 (UTM: 3.14.10). There is no fallback to an older python3: a host with only 3.12
-# stops with a message, because the release venv must satisfy deps.yaml python.min.
+# $HOME/.local/bin/python3.14 (UTM: 3.14.10), then uv-managed $HOME/.local/share/uv/python/cpython-3.14*/bin/python3.14.
+# The first candidate that satisfies python.min AND builds a venv with pip (tried in a temp dir) wins; the choice and
+# every skipped candidate are printed with the reason. There is no fallback to an older python3: a host with only
+# 3.12 stops with a message, because the release venv must satisfy deps.yaml python.min.
 #
 # Example (Linux/UTM, the 356 application release installed by a newer tool commit):
 #   scripts/install_release.sh 35670632e0b923e56dc4fa357189711dbd39328a src-35670632.tgz \
@@ -48,10 +55,11 @@ FLEETMUX_PYTHON="${FLEETMUX_PYTHON:-}"
 FLEETMUX_RELEASES="${FLEETMUX_RELEASES:-}"
 FLEETMUX_TOOL_SHA="${FLEETMUX_TOOL_SHA:-}"
 SHA="${1:?sha}"; TARBALL="${2:?tarball}"; shift 2
-TEST=0; ACTIVATE=0; BIN_DIR=""; TOOL_SHA="$FLEETMUX_TOOL_SHA"
+TEST=0; ACTIVATE=0; BIN_DIR=""; TOOL_SHA="$FLEETMUX_TOOL_SHA"; BINS="fleetmux fleetmux-web"
 while [ $# -gt 0 ]; do
   case "$1" in
     --test) TEST=1; shift ;;
+    --headless) BINS="fleetmux"; shift ;;
     --activate) ACTIVATE=1; shift ;;
     --bin-dir) BIN_DIR="${2:?--bin-dir needs a directory}"; shift 2 ;;
     --tool-sha) TOOL_SHA="${2:?--tool-sha needs a sha}"; shift 2 ;;
@@ -72,7 +80,7 @@ SHA="$(printf '%s' "$SHA" | tr 'A-F' 'a-f')"
 REL="$RELEASES/$SHA"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ "$(uname -s)" = Darwin ]; then
-  PATH="/opt/homebrew/opt/redis/bin:/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:$PATH"
+  PATH="/opt/homebrew/opt/redis/bin:/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 else
   PATH="$HOME/.local/bin:$PATH"
 fi
@@ -101,23 +109,42 @@ need = tuple(int(x) for x in sys.argv[1].split(".")[:2])
 raise SystemExit(0 if sys.version_info[:2] >= need else 1)' "$MIN_PY" >/dev/null 2>&1
 }
 
+# A candidate must also build a venv with pip: a Homebrew python3.14 whose ensurepip fails passes the version check
+# and then breaks `-m venv` inside the release dir. Tried in a temp dir that is always removed.
+venv_ok() {
+  local tmp rc=0
+  tmp="$(mktemp -d)" || return 1
+  if ! "$1" -m venv "$tmp/v" >"$tmp/out" 2>&1 || ! "$tmp/v/bin/pip" --version >>"$tmp/out" 2>&1; then
+    VENV_WHY="$(tail -1 "$tmp/out" 2>/dev/null)"; rc=1
+  fi
+  rm -rf "$tmp"
+  return $rc
+}
+
+# Prints the chosen interpreter on stdout; why each other candidate was skipped goes to stderr.
 pick_python() {
-  local c
+  local c tried=" "
   if [ -n "$FLEETMUX_PYTHON" ]; then
     [ -x "$FLEETMUX_PYTHON" ] || { echo "FLEETMUX_PYTHON is not executable: $FLEETMUX_PYTHON" >&2; return 1; }
     if ! python_ok "$FLEETMUX_PYTHON"; then
       echo "FLEETMUX_PYTHON is not Python >= $MIN_PY (deps.yaml python.min): $FLEETMUX_PYTHON ($("$FLEETMUX_PYTHON" -V 2>&1))" >&2
       return 1
     fi
+    echo "python: $FLEETMUX_PYTHON (FLEETMUX_PYTHON)" >&2
     printf '%s\n' "$FLEETMUX_PYTHON"; return 0
   fi
-  if [ "$(uname -s)" = Darwin ]; then
-    for c in /opt/homebrew/bin/python3.14 /usr/local/bin/python3.14; do
-      if [ -x "$c" ] && python_ok "$c"; then printf '%s\n' "$c"; return 0; fi
-    done
-  fi
-  for c in "$(command -v python3.14 2>/dev/null || true)" "$HOME/.local/bin/python3.14"; do
-    if [ -n "$c" ] && [ -x "$c" ] && python_ok "$c"; then printf '%s\n' "$c"; return 0; fi
+  local cands=()
+  if [ "$(uname -s)" = Darwin ]; then cands+=(/opt/homebrew/bin/python3.14 /usr/local/bin/python3.14); fi
+  cands+=("$(command -v python3.14 2>/dev/null || true)" "$HOME/.local/bin/python3.14")
+  for c in "$HOME"/.local/share/uv/python/cpython-3.14*/bin/python3.14; do cands+=("$c"); done  # uv-managed
+  for c in "${cands[@]}"; do
+    if [ -z "$c" ] || [ ! -x "$c" ]; then continue; fi
+    case "$tried" in *" $c "*) continue ;; esac
+    tried="$tried$c "
+    if ! python_ok "$c"; then echo "python: skip $c (not Python >= $MIN_PY)" >&2; continue; fi
+    if ! venv_ok "$c"; then echo "python: skip $c (cannot create a venv with pip: ${VENV_WHY:-no output})" >&2; continue; fi
+    echo "python: $c (Python >= $MIN_PY, venv with pip works)" >&2
+    printf '%s\n' "$c"; return 0
   done
   echo "no Python >= $MIN_PY on this host (deps.yaml python.min); set FLEETMUX_PYTHON=/path/to/python3.14" >&2
   echo "  (an older python3 such as 3.12 is not used: the release venv must satisfy deps.yaml)" >&2
@@ -178,15 +205,22 @@ PY
 # produce invalid JSON while the install still exited 0.
 write_installed_json() {
   local fmux_sha web_sha
-  fmux_sha="$(hash_of bin/fleetmux)"; web_sha="$(hash_of bin/fleetmux-web)"
+  local web_bytes=
+  fmux_sha="$(hash_of bin/fleetmux)"; web_sha=
+  if [ -f bin/fleetmux-web ]; then web_sha="$(hash_of bin/fleetmux-web)"; web_bytes="$(wc -c < bin/fleetmux-web | tr -d ' ')"; fi
   "$PY" - bin/installed.json "$SHA" "$(manifest_source_sha bin/manifest.json)" "$TOOL_SHA" \
     "$(hash_of "$HERE/install_release.sh")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PY" \
     "$(hash_of "$TARBALL")" "$(hash_of bin/manifest.json)" "$(hash_of bin/SHA256SUMS)" \
     "$fmux_sha" "$(wc -c < bin/fleetmux | tr -d ' ')" \
-    "$web_sha" "$(wc -c < bin/fleetmux-web | tr -d ' ')" "$(start_command)" <<'PY'
+    "$web_sha" "$web_bytes" "$(start_command)" "$DEPS_JSON" <<'PY'
 import json, sys
 (out, release_sha, source_sha, tool_sha, installer_sha, installed_at, python, tarball_sha, manifest_sha,
- sums_sha, fmux_sha, fmux_bytes, web_sha, web_bytes, start_command) = sys.argv[1:16]
+ sums_sha, fmux_sha, fmux_bytes, web_sha, web_bytes, start_command, deps_json) = sys.argv[1:17]
+try:  # the dependency rows with the absolute path of each program (absent from an older release's check_deps.py)
+    with open(deps_json, encoding='utf-8') as fh:
+        dependencies = json.load(fh)
+except (OSError, ValueError):
+    dependencies = None
 doc = {
     'release_sha': release_sha,
     'source_sha': source_sha,
@@ -200,9 +234,10 @@ doc = {
     'sha256sums_sha256': sums_sha,
     'binaries': {
         'fleetmux': {'sha256': fmux_sha, 'bytes': int(fmux_bytes)},
-        'fleetmux-web': {'sha256': web_sha, 'bytes': int(web_bytes)},
+        'fleetmux-web': {'sha256': web_sha, 'bytes': int(web_bytes)} if web_sha else None,  # None: --headless
     },
     'start_command': start_command,
+    'dependencies': dependencies,
     'note': 'installed release is not a native PASS and not a receipt',
 }
 with open(out, 'w', encoding='utf-8') as fh:
@@ -228,7 +263,7 @@ verify_binaries() {
     "$want"*) ;;
     *) echo "manifest source_sha $src does not match the release <sha> $want; not installing" >&2; return 1 ;;
   esac
-  for f in fleetmux fleetmux-web; do
+  for f in $BINS; do
     [ -f "$dir/$f" ] || { echo "--bin-dir has no $f: $dir/$f" >&2; return 1; }
     have="$(sums_hash "$f" "$dir/SHA256SUMS")"
     [ -n "$have" ] || { echo "SHA256SUMS has no line for $f: $dir/SHA256SUMS" >&2; return 1; }
@@ -267,19 +302,30 @@ tar xzf "$TARBALL"
 .venv/bin/pip install -q --no-deps -e .
 if [ -n "$BIN_DIR" ]; then
   mkdir -p bin
-  for f in fleetmux fleetmux-web; do
+  for f in $BINS; do
     cp "$BIN_DIR/$f" "bin/.$f.new.$$"
     chmod 755 "bin/.$f.new.$$"
     mv -f "bin/.$f.new.$$" "bin/$f"  # same directory: an atomic replace, even of a running binary
   done
   cp "$BIN_DIR/SHA256SUMS" bin/SHA256SUMS
   cp "$BIN_DIR/manifest.json" bin/manifest.json
-  write_installed_json
   PATH="$REL/bin:$PATH"
   export PATH
-  echo "binaries installed: $REL/bin/{fleetmux,fleetmux-web} (sha256 verified against $BIN_DIR/SHA256SUMS, source $SHA)"
+  echo "binaries installed: $REL/bin/{${BINS// /,}} (sha256 verified against $BIN_DIR/SHA256SUMS, source $SHA)"
 fi
-.venv/bin/python scripts/check_deps.py || { echo "deps.yaml not satisfied on this machine: not releasing" >&2; exit 1; }
+# The check finds programs the way fleet discovery does (login shell PATH, process PATH, then the directories earlier
+# installs and discovery recorded; design §50.3) and names the absolute path of each; its output and rows are kept
+# OUTSIDE the release dir, and installed.json records the rows (with each program's dir and pi's node dir, so the next
+# install finds them without the caller's PATH). Nothing is installed or upgraded: a FAIL line is for the operator to
+# fix, and names where the program was last found when there is a record.
+mkdir -p "$RELEASES/.logs"
+DEPS_LOG="$RELEASES/.logs/$SHA-$(date -u +%Y%m%dT%H%M%SZ)-$$-deps.log"
+DEPS_JSON="${DEPS_LOG%.log}.json"
+FLEETMUX_DEPS_JSON="$DEPS_JSON" .venv/bin/python scripts/check_deps.py 2>&1 | tee "$DEPS_LOG" \
+  || { echo "deps.yaml not satisfied on this machine: not releasing (install or upgrade the FAIL items yourself;" \
+            "fleetmux changes nothing on the machine); log: $DEPS_LOG" >&2; exit 1; }
+echo "dependency check log: $DEPS_LOG"
+if [ -n "$BIN_DIR" ]; then write_installed_json; fi
 if [ "$TEST" = 1 ]; then
   # The log lives outside the release dir: a failed install removes $REL, and the whole point of the log is to show
   # why the failing Linux run failed on a machine the operator cannot attach a debugger to.

@@ -1216,8 +1216,9 @@ required flag, malformed value) after printing a usage line to stderr.
 
 Any other first argument, and `gui` without `--runtime`, is a fleet command: the binary `exec`s the Python fleet CLI
 of the same release with all its arguments (argv, stdio and exit code are that CLI's; exit 127 when none is found).
-Lookup order and the `gui` split: docs/design.md §50. No arguments stays a usage error (exit 2); `--help` / `-h`
-prints the usage and a one-line hint to stdout (exit 0).
+Lookup order and the `gui` split: docs/design.md §50. No arguments is `fleetmux gui` (forwarded the same way: the
+Python side shows this machine's root fleet window); `--help` / `-h` prints the usage and a one-line hint to stdout
+(exit 0).
 
 ### 9.1 `fleetmux server`
 
@@ -1497,11 +1498,16 @@ Ratio, zoom, focus and selection changes are shared by every viewer (§14) and r
   M3 behaviour: a click on the current fleet's card shows its normal grid, another card writes
   `切换 fleet：S3 开放` ("switch fleet: opens in S3"). Each bash card's shell is a tab of the root page's `workers` group (every new bash is
   mapped into the main fleet's worker area): `+`, the blank double click and `C-b c` add it last in
-  that group, and opening one or picking its card shows the root page, cancels a zoom of another pane, selects the
-  tab and focuses its group. A bash card is the selected card while the root page's zoomed pane — else its focused
-  group's selected tab — is that bash; the root fleet's card then focuses the `supervisor` group and cancels a
-  zoom, the bash staying a tab of the worker area. While a bash card is selected the topbar (and the Linux
-  headerbar) reads `bash-<n> · 终端 · 运行中` ("bash-<n> · terminal · running"). A shell that is gone takes its tab and its card with it. A current page that is a reclaimed child fleet (`page.close {keep:true}` /
+  that group. Opening one or picking its card shows the bash on its **own page** `_bash-<pane id>`: that page's
+  layout holds the same pane, zoomed, so the shell fills the content area without frames and none of the fleet's
+  panes are drawn. The pane record stays on the root page (`page` `""`, group `workers`); only the bash page's layout
+  shows it too, and a PTY shown by two layouts takes the size of the current page's rectangle. The root page's tabs,
+  focus and zoom are not touched. A bash card is the selected card exactly while its bash page is current; the root
+  fleet's card goes back to the root page as it was, where the bash is a live tab of the worker area (clicking that
+  tab shows the shell there and stays on the root page). While a bash page is shown the topbar (and the Linux
+  headerbar) reads `bash-<n> · 终端 · 运行中` ("bash-<n> · terminal · running") and the status line names no zoom
+  and no page. A shell that is gone takes its tab, its bash page and its card with it (the root page comes back
+  when its bash page was current). A current page that is a reclaimed child fleet (`page.close {keep:true}` /
   `page.open {reclaimed:true}`) is a read-only record: its empty supervisor and worker groups show
   `子 fleet <title> 已收回 · 只读` ("sub-fleet <title> reclaimed · read-only"; White, bold), `下面是它的运行记录；点侧栏别的卡片切回` ("below is its run record; click another sidebar card to switch back"; Gray) and
   `同名再起时这一页会重新启用` ("this page is reused when a fleet of the same name starts again"; DarkGray); a child page's title also goes on the status line as `page: <title>`

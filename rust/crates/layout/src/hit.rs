@@ -6,7 +6,7 @@
 //! overrides the [M30] marker-cell rule): [`Layout::tab_rects_titled`] / [`Layout::hit_test_titled`] are what
 //! drawing and mouse code use. A tab is a block of a blank pad, its text (unread `• ` + title, whose display
 //! width the caller passes as `label_cols`) and a blank pad. In a group whose inner area is `w` columns wide
-//! and holds `n` tabs, a block is `min(label_cols + 2, w / n − 1, cap + 2)` columns, the first one starts at
+//! and holds `n` tabs, a block is `min(label_cols + 2, w / n − 1, cap + 2)` columns (the lower group: `(w − 7) / n − 1`), the first one starts at
 //! the inner area's first column, the next one after a one-column gap; the caller truncates the text to
 //! `block − 2` columns so both pads stay. Gaps and the rest of the row after the last block belong to no tab
 //! (they stay border / separator); a block narrower than 3 columns is not drawn. Recomputed from
@@ -17,11 +17,14 @@
 //! testing. Every tab takes one marker cell followed by a title area of `min(w / n − 1, cap)` columns, the first
 //! marker cell being the inner area's first column, whatever the title length.
 //!
-//! The cap depends on the row (ruling [M31], fix-m0-4), in both geometries: the lower group's labels sit on
-//! the draggable separator row and keep 15 title columns, which is what lets (50,35) stay `HSep` with three
+//! The cap depends on the row (ruling [M31], fix-m0-4): in the legacy fixed slots the lower group's labels sit
+//! on the draggable separator row and keep 15 title columns, which is what lets (50,35) stay `HSep` with three
 //! lower tabs; the supervisor and workers labels sit on the top border and may take 24, so a rotated
 //! generation such as `fx-supervisor-1.1` (17) shows whole at 196 and 240 columns. With many tabs the equal
-//! share (`w / n − 1`) still truncates.
+//! share (`w / n − 1`) still truncates. The titled blocks give the lower row 24 title columns too (design §54:
+//! an applet tab's title is `<name> <state>`) and compute its share from the row's width less 7 columns, so the
+//! [M59] grip always has a free run of 5 columns with a blank cell either side; (50,35) stays `HSep` with the
+//! usual three short lower titles.
 //!
 //! At 240×60 with 50 / 60: the first supervisor block at row 0 from x = 1 (legacy title area from x = 2), VSep = column 119, HSep = row 35 (left
 //! column), status = row 59. With a topbar (S1f, [`Layout::topbar`]) every row moves down one and row 0
@@ -34,8 +37,15 @@ use crate::{Group, Layout, PaneId, RATIO_MAX, RATIO_MIN, Rect};
 
 /// Widest title area of one supervisor / workers tab label (top border row), in columns.
 const TITLE_MAX_TOP: u16 = 24;
-/// Widest title area of one lower-group tab label (the horizontal separator row), in columns.
+/// Widest title area of one lower-group tab label (the horizontal separator row), in columns: the legacy fixed
+/// slots ([`Layout::tab_rects`], ruling [M31]).
 const TITLE_MAX_LOWER: u16 = 15;
+/// Widest title area of one lower-group titled block (design §54, applet tabs): an applet tab's title is
+/// `<name> <state>` (`applet-relay-1 up` is 17 columns), so the separator row takes the top row's cap.
+const TITLED_MAX_LOWER: u16 = 24;
+/// Columns of the separator row the titled lower blocks leave free in their share: the [M59] grip (5 columns)
+/// plus the blank cell either side, so the row keeps a visible drag handle however many long tabs it holds.
+const LOWER_GRIP_ROOM: u16 = 7;
 /// The blank columns left and right of the text in a titled tab block.
 const BLOCK_PADS: u16 = 2;
 /// The narrowest titled block that is drawn (pad, one column of text, pad).
@@ -250,15 +260,17 @@ impl Layout {
         let mut out = Vec::new();
         for (g, inner, row, cap) in [
             (Group::Supervisor, r.supervisor, top, TITLE_MAX_TOP),
-            (Group::Lower, r.lower, hsep, TITLE_MAX_LOWER),
+            (Group::Lower, r.lower, hsep, TITLED_MAX_LOWER),
             (Group::Workers, r.workers, top, TITLE_MAX_TOP),
         ] {
             let panes = self.group(g);
             if panes.is_empty() {
                 continue;
             }
-            // Every block plus its gap fits in one share, so the group's blocks never leave its inner width.
-            let share = (inner.w as usize / panes.len()) as u16;
+            // Every block plus its gap fits in one share, so the group's blocks never leave its inner width; the
+            // separator row's shares leave the grip's room free at its end.
+            let room = if g == Group::Lower { LOWER_GRIP_ROOM } else { 0 };
+            let share = (inner.w.saturating_sub(room) as usize / panes.len()) as u16;
             let max = share.saturating_sub(1).min(cap.saturating_add(BLOCK_PADS));
             let mut x = inner.x;
             for (i, id) in panes.iter().enumerate() {

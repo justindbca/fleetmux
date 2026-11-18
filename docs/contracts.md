@@ -28,6 +28,7 @@ Defined in: `fleetmux/roster.py`, `docs/design.md` §29.
 
 - Slot names under `workers:` always end in `-<number>` (new runs reject non-conforming names); rotation keeps `<name>.<generation>`.
 - The advisor is not a worker: it is configured only by the top-level `advisor: on|off` and never appears under `workers:`.
+- A worker entry may set `fresh: always | off` (default `off`). `always`: before every dispatch the daemon gives the worker a clean session once its current generation has done work; a dispatch where the supervisor writes `"fresh": false` keeps the session. A bad value rejects the whole roster. Stored as `worker_fresh` in the run's config.json; a hot reload applies to the next dispatch; `docs/design.md` §45.
 - Long-task splitting uses the top-level `split:` and a worker entry's own `split:` (`check_minutes`, `window_minutes`, `min_calls`, `min_distinct`, `restore_model`; defaults 40 / 10 / 15 / 2 / true; `check_minutes: 0` = no reminder); a bad value rejects the whole roster; `docs/design.md` §44.
 - Extra tabs use the top-level `tabs:` (`docs/design.md` §31): each entry is `{name, command, cwd?, env?}`; optional `restart: on-exit` (the only accepted value; omitted = the tab is opened only once when the daemon starts), `backoff: {first_s, max_s}` (default 5 / 300 seconds), `crashloop: {restarts, minutes}` (default 5 restarts / 10 minutes); the latter two may only be written together with `restart: on-exit`, and bad values reject the whole roster. After the program exits it is reopened following the backoff; once `restarts` reopens have happened within `minutes` minutes and it exits again, it stops (audit `tab.crashloop`, a notice card in the supervisor column, and `tab_crashloop` pushed when a channel exists), and `fleetmux tab restart <name>` recovers it. Audit events: `tab.cleared` / `tab.started` (on reopen with `reason` = exited / operator and `attempt`) / `tab.start_failed` / `tab.dock_failed` / `tab.stopped` / `tab.down` / `tab.crashloop` / `tab.restart_requested` / `tab.check_failed` / `tab.notice_failed`. Display name: when the run comes from a kit (config `kit_fleet`, inherited by named sub-fleets) the tab title is `kit-<n>-<name>` (n counts from 1 in `tabs:` order), otherwise `name`; the `tab` in the registered identity and in the audit is still the name.
 - Named sub-fleets are declared with `subfleets:` (`supervisor_slot`, `autostart`, `roster`, plus the overrides `claude`, `worker_model`, `stall_timeout`, `max_busy`, …; the full list is `NAMED_OVERRIDES` in `subfleet.py`) and can be hot-reloaded.
@@ -38,7 +39,7 @@ Defined in: the header of `fleetmux/named_subfleet.py`. External consumers: the 
 
 ```
 fx:subfleet:<name>      hash: state (down / starting / up / paused / draining), slot, redis_socket,
-                        run_dir, up_at, drain_since, drain_reason, crashloop, usage_at
+                        run_dir, up_at, drain_since (awake seconds, section 12), drain_reason, crashloop, usage_at
 fx:subfleet:opq         list: ids of external operations still open
 fx:subfleet:op:<id>     hash: op, name, reason, status (awaiting / approved), created, approved_at
 ```
@@ -47,7 +48,7 @@ External operations arrive as service requests: `{"id", "op": "subfleet.up" | "s
 
 ## 4. Command line
 
-Command name `fleetmux` (design.md §50): the Rust binary execs every subcommand it does not handle itself (all of those in the table below) unchanged into the Python command line of the same release, with identical arguments, output and exit codes. Without the Rust binary, the same command line is `<release>/.venv/bin/fleetmux-py <subcommand>` or `python -m fleetmux.fleet <subcommand>`. Make sure the `fleetmux` on a machine's `PATH` is a post-§50 version (an old one reports usage and exits 2).
+Command name `fleetmux` (design.md §50): the Rust binary execs every subcommand it does not handle itself (all of those in the table below) unchanged into the Python command line of the same release, with identical arguments, output and exit codes. Without the Rust binary, the same command line is `<release>/.venv/bin/fleetmux-py <subcommand>` or `python -m fleetmux.fleet <subcommand>`. Make sure the `fleetmux` on a machine's `PATH` is a post-§50 version (an old one reports usage and exits 2). `fleetmux` with no arguments runs `fleetmux gui`: it shows this machine's live root fleet window (design.md section 50, "Bare `fleetmux`").
 
 Consumers call the `fleetmux` command (Python package `fleetmux`).
 
@@ -62,6 +63,7 @@ Consumers call the `fleetmux` command (Python package `fleetmux`).
 
 `start --lease-reclaim on|off` (design.md §24 "lease reclaim"): default `on`, written to `lease_reclaim` in the run's `config.json` (only `on` / `off` are accepted; any other value is rejected by config validation in `start` / `--resume` / daemon startup). `start --resume` changes it if given and keeps it otherwise; an old run without the key (or with value `null`) counts as `on`. `on`: when an official Claude / Codex slot's lease expired only because the daemon was not running (lid closed / sleep, daemon stuck) while the dispatch deadline has not passed, the daemon reclaims the lease and the turn settles normally — the slot is not held, nothing is paused, and the service request is not judged `timeout`. `off` = the old behavior (a task worker holds only that slot; service / supervisor hold and pause). The consumers above need not change their arguments. Also, when a task-mode worker slot is released from hold, the supervisor receives a `[<slot> report]\nHELD-RELEASED: …` (with the tail of the turn's last text, ≤ 4000 characters), and the `hold.released` audit carries `notified`; new audit events `lease.reclaimed` (`gap_s`) and `daemon.gap` (`gap_s`, `slots`); the bus audit stream gains a `reclaimed` kind.
 `operator` (design.md §48, available to external callers): `fleetmux operator --config <run>/config.json "<text>"` (no text or `-` reads stdin; `--wait` seconds, default 30). Sends the operator text to the current supervisor over the fleet's private Redis (an `operator_input` event, same semantics as typing by hand in the supervisor pane: service creates a `ui-` request; task adds it as an `[Operator instruction]` supplement when there is a task and creates a task when there is none), **without touching any pane's input box**. stdout is one JSON line: `{"status":"accepted","id"|"task_id":…}` with exit code 0; `{"status":"rejected","reason":…}` with exit code 2 (Codex supervisor, old Claude supervisor without a hook mailbox, old generation, not ready, v1 run — each has an explicit reason); `{"status":"pending","request_id":…}` with exit code 3 (in the stream but unconfirmed — do not resend; check control / `logs` first). Replaces typing into the supervisor pane with `cmux send`.
+`result` (docs/distributed-development.md, available to external callers): `fleetmux result <id> [--wait <seconds>] [--config <run>/config.json]`. Reads the service result of one request. stdout is the stored `fx:result:<id>` record as one JSON line, exit code 0. While the request is open (`fx:req:<id>` exists) it waits up to `--wait` seconds (default 0) and then exits 3 with nothing on stdout (pending: ask again, do not resend). An id with neither key exits 2 (unknown: never submitted, or its result expired after the result TTL). It never removes an entry from `fx:results`; `results --drain` remains the only reader that does.
 `tab restart <name> [--config <run>/config.json] [--wait <seconds>]` (design.md §31, available to external callers): makes the running daemon immediately reopen this tab from the roster's `tabs:` and clears its crash counter (the recovery entry after the breaker trips). One JSON line on stdout: `{"status":"accepted","tab","title","pane"}` exit 0; `rejected` (the roster has no such tab / this daemon never opened it / the request expired) or `failed` (cannot be opened) exit 2; `pending` (the daemon did not handle it within `--wait`, default 30 seconds) exit 3. It goes through the fleet-private Redis: `fx:tab:restart` (hash, tab name → `{"id","at"}`) and `fx:tab:reply:<id>` (the reply, EX 3600).
 `start --no-claude-hook-delivery` / `--clear-after-result` (§48): the flags remain but are rejected at startup (both would require typing into Claude's input box); `claude_hook_delivery: false` / `clear_after_result: true` under the roster's `subfleets[]` rejects the whole roster. None of the consumers above pass them.
 
@@ -74,6 +76,7 @@ Consumers call the `fleetmux` command (Python package `fleetmux`).
 | `FLEETMUX_CONFIG` | the private fleet.yaml to use (default `~/.fleetmux/fleet.yaml`; does not follow `FLEETMUX_HOME`) | `fleet_config.py` |
 | `FLEETMUX_CONFIG_DIR` | directory for channel credentials / allowlists / leases / security.yaml (default `~/.fleetmux/config`) | `paths.py` |
 | `FLEETMUX_LAUNCHER_ENV` | private launcher settings file (default `~/.fleetmux/launchers.env`) | `launchers/start-dsh.command` |
+| `FLEETMUX_SUPERPOWERS` | the fleet-superpowers inventory file (default `~/.fleetmux/fleet-superpowers/fleet-superpowers.yaml`; does not follow `FLEETMUX_HOME`) | `fleet_superpowers.py` |
 | `FLEETMUX_PYTHON_CLI` | optional: the Python command line `fleetmux` runs when forwarding fleet subcommands (by default found in the order of design.md §50) | `crates/app/src/forward.rs` |
 | `FLEETMUX_GLOBAL_CLOCK` | path to the consumer's trading-day module (`global_clock.py`, must provide `is_trading_day(market, date)`); with clock_gate on under `--lifecycle`, startup is refused if it cannot be loaded | `lifecycle.py` |
 | `FLEETMUX_TG_CMD` / `FLEETMUX_PARENT_CMD` / `FLEETMUX_INITIATOR` | notification commands at the end of a lifecycle (provided by the consumer) | `lifecycle_close.py` |
@@ -372,3 +375,411 @@ The body of `channel send` can be read from stdin (`--text -` or `--text-file -`
 - **Hard stop details (P8m)**: Z5's `by` ≤ 64 and `reason` ≤ 400 are counted in UTF-8 characters, and `at` rejects `nan` / `inf`. The stop flag's temp file is `O_EXCL`, 0600, fsynced; a failed delete must be audited. Each slot in `skipped` carries `why`: someone else's pane (not in the registry), an adopted pane, or no pane; the supervisor and the advisor never get keys pressed; `kill` sets `explicit_stop` and `stopping` and does not call `finish`.
 
 **Adapter contract tests (`tests/test_channels_contract.py`)**: parameterized by type; each adapter package provides a module-level `CONTRACT` dict in its own protocol test file `tests/test_channel_<type>.py`: `account` (account values including `ALLOW`), `conversation`, `transport` (a zero-argument factory returning a fake transport that always answers success); adapters that receive messages also provide `inbound_ok` / `inbound_text` / `inbound_foreign` / `inbound_group` (None for platforms without groups) / optional `inbound_unverified`; adapters with `SUPPORTS_BUTTONS` also provide `inbound_button` (the raw callback of an allowlisted user pressing a button in a private chat) / `inbound_button_text` (the button's command) / `inbound_button_foreign` (pressed by someone not allowlisted) / `inbound_button_group` (pressed in a group). Checked item by item: complete declarations, envelope shape, idempotency and rollback, allowlist / private chat / verified, button callback envelope (sender = the person who pressed, `action.command` = `text`, presses by outsiders / in groups are dropped), segmentation, card buttons or typed commands (a channel with `CARRIES_TOKENS = False` receives no commands at all), files, missing optional dependencies, errors never propagate. Rows for packages not yet landed are red (`red:P2-telegram` …), not skipped.
+
+## 9. fleet-superpowers inventory
+
+Design: `docs/distributed-development.md`, section "Resource inventory". File: `~/.fleetmux/fleet-superpowers/fleet-superpowers.yaml` (or `$FLEETMUX_SUPERPOWERS`).
+
+**Command**: `fleetmux superpowers <command>` (forwarded unchanged; the subcommand table lives in `fleetmux/fleet_superpowers_cli.py`). Exit 0 done, 1 refused with one line `superpowers: <reason>` on stderr, 2 usage.
+
+| Command | Output |
+|---|---|
+| `refresh [--name N] [--json]` | the written `{name: entry}`; `--name` is required on the first refresh (exit 1 without it) |
+| `add NAME --ssh DEST [--via KIND]` / `add NAME --remove-reach DEST [--via LABEL]` | the changed entry (a copy, or this machine's own); a `KIND` outside `fleet.yaml#remote.reach_order` is exit 1 listing the kinds |
+| `show [--self] [--json]` | the file, or `{self name: entry}`; `show --self --json` is what `import -` reads |
+| `show --machines` / `--workflows` | one tab-separated line per entry |
+| `show --machine N` / `--workflow N` | `{name: entry}` |
+| `import -` | stdin `{name: entry}` (JSON or YAML) stored as `source: copy`, `reach` merged with the stored one; this machine's name is refused |
+| `save FILE` | `FILE` holds `{name: workflow}`; stored in `workflows` |
+| `check` | the problems, or `ok <file>` |
+| `sync NAME` | `synced <self> <-> NAME`; runs `show --self --json` and `import -` on NAME |
+| `save FILE --also NAME` | `saved <workflow>` and `saved <workflow> on NAME`; runs `save -` on NAME with the file on stdin |
+| `load WORKFLOW [--machine M] [--wait S] [--poll S]` | `loaded <workflow> on <machine>` per machine; runs `load WORKFLOW --machine M` on each far machine once |
+| `unload WORKFLOW [--machine M]` | `unloaded <workflow> on <machine>`; this machine only unless `--machine` names another |
+
+A run whose roster `load` changed holds `<run>/superpowers-load/<workflow>.json` (`roster`, `before`, `after`, `added`) until `unload`.
+
+**Redis keys** (each fleet's private Redis; only the hot blocks):
+
+```
+fx:superpowers:models   string: the models block as JSON
+fx:superpowers:quota    string: the quota block as JSON
+fx:superpowers:meta     hash: write_back_seconds, loaded_at, flushed_at, dirty:models, dirty:quota ("1" / "0"),
+                        quota_source (size:mtime_ns of the last ingested quota.json; "" after a load)
+```
+
+Write-back interval: `hot.write_back_seconds` in the same YAML file (default 300 seconds). Daemon refresh interval of
+`machines.<self>`: `hot.refresh_seconds` (default 600 seconds; 0 = off).
+
+## 10. Applet leases
+
+Defined in: `docs/applet-interface.md` sections 1 to 5 and the headers of `fleetmux/applet_lease.py` and
+`fleetmux/applet_ops.py`. External consumers: applets (through the SDK or the wire protocol), the host supervisor
+(decision key `applet`) and whoever edits the host roster.
+
+- **Accept** ops `{"id", "op": "applet.lease.request" | "applet.lease.renew" | "applet.lease.release" |
+  "applet.escalate" | "applet.notify" | "applet.audit", "applet", "token", "v"}` at the service request door. They
+  never enter the request queue and are not subject to `--request-timeout`.
+- **Refuse** a service request with `to` naming a leased or reviewing slot without the matching `lease`: result
+  `rejected`, reason `slot_leased`. A lease request is refused for lack of workers only with `worker_limit`.
+- **Publish** two more result statuses on `fx:result:<id>`: `blocked` (a leased worker's question or split
+  proposal) and `lease_ended`. The result of a message that carried `fix` also carries `review`.
+- **Write** slot fields `applet_lease`, `applet_lease_holder`, `applet_lease_until`, `applet_review` and
+  `applet_added_for` on `fx:agent:<slot>` (empty when unset). The slot's `state` values are unchanged.
+- **Add** worker rows `- {name: <base>-<n>, role: <template role>}` to the host roster (and the night roster) when
+  a lease or a review needs a worker, up to the applet row's `lease.hot_add_max`; write `hot_add_max` back into
+  the applet row on `fleetmux applet set`. Every write takes an exclusive `flock` on `<roster file>.lock` and
+  replaces the file atomically.
+- **Accept** the service decision key `applet` (a list of `{"id", "decision", ...}`), which may come with empty
+  `dispatch`, `answer` and `skip`.
+
+## 11. Session environment from an applet
+
+Design: design.md section 57; distributed-development.md, section "Session environment from an applet".
+
+| Where | Name | Value |
+|---|---|---|
+| Roster, applet entry | `session_env` | `{port: <int 1-65535>, vars: {<NAME>: <one-line string>}, clis: [<cli>, ...]}`; exactly these keys; every `clis` name in `verified_clis`; at most one applet per CLI |
+| `fleet.yaml` (shipped file only) | `session_env.verified_clis` | list of CLI names; shipped `[claude]` |
+| `fleet.yaml` (shipped file only) | `session_env.wait_interval_s` | seconds between port probes of a held session; shipped `2` |
+| `fleet.yaml` (shipped file only) | `session_env.probe_timeout_s` | connect timeout of one probe; shipped `1` |
+| Run `config.json` | `session_env` | list of `{applet, port, vars, clis}`, the union over the root roster and its sub-fleets' roster files; absent when there is none; copied into child configs at up |
+| Slot hash `fx:agent:<slot>` | `route_wait` | `1` while a routed slot is held because its port is closed; `0` after it answers |
+
+Rules for a routed session (its CLI is in `clis` and in `verified_clis`):
+
+1. **Clear.** Remove `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` in upper and lower case.
+2. **Set.** Set every `vars` entry except `NO_PROXY` / `no_proxy`.
+3. **Exempt loopback.** Set `NO_PROXY` and `no_proxy` to the applet's `NO_PROXY` value, then
+   `127.0.0.1,localhost,::1`.
+4. **Hold.** Do not start the CLI while `127.0.0.1:<port>` is closed.
+
+## 12. Awake clock
+
+Defined in: `fleetmux/awake.py`, `docs/design.md` section 35. External consumers: the applet SDK, and any program that
+compares a fleet time (applet lease times, `host.draining` `deadline_at`) with the present.
+
+- **Unit.** Every time that fleetmux writes and a deadline or age check reads back is in awake seconds: Unix seconds
+  minus `slept_s`, the time the machine slept since the fleet's clock was created. It equals Unix seconds until the
+  first sleep, so values written before this clock stay valid. This includes the task `deadline` (the `hours`
+  budget) in `fx:task` and in result.json. Log and display stamps (`at` of audits and results) stay Unix seconds. The applet `hb_at` stays Unix seconds; the host converts it.
+- **Key.** One hash per fleet, written by that fleet's daemon at the start of every tick:
+
+```
+fx:clock   hash: slept_s   seconds slept (plus any wall-clock step) at the point below
+                 wall      Unix seconds of that point
+                 mono      time.monotonic() of that point (stops while the machine sleeps)
+                 boot      Unix time of this boot, rounded (wall minus a clock that counts sleep since boot)
+                 gaps      JSON list, the last 64 sleeps longer than 1 s: [wall_before, wall_after, slept_before,
+                           slept_after]
+```
+
+- **Read.** On the same boot (`boot` within 5 s, local monotonic not behind `mono`): `slept_now = slept_s + (time() -
+  wall) - (monotonic() - mono)`; awake now = `time() - slept_now`. On another boot or host: `slept_s` as it is, and
+  measure from the moment of the read. Without the key: awake time is Unix time.
+
+
+## 13. Relay: refs, records and repository files
+
+Design: design.md section 59. Usage: `docs/relay.md`.
+
+`<job>` is a job name (`^[A-Za-z0-9._-]{1,64}$`), `<task>` a task id (`^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$`),
+`<machine>` an inventory machine name (`^[a-z0-9][a-z0-9-]{0,39}$`), `<epoch>` an integer. A job or task name may
+not end in `.lock` or contain `..` (`fleetmux/relay/refs.py`).
+
+### 13.1 Remotes
+
+| Name | What | Default |
+|---|---|---|
+| Code remote | The project repository. Task code branches go here. | The clone's `origin` |
+| State remote | Task records, node records, snapshots, salvage refs. | `relay.state_remote`; `""` = the code remote |
+
+### 13.2 Ref layout
+
+| Ref | Remote | Writer | Content | Changes |
+|---|---|---|---|---|
+| `refs/relay/<job>/tasks/<task>` | state | the owner; a claiming machine (CAS); the initiator (create only) | commit with `task.json` (13.3) | create, claim, checkpoint, hand over, takeover, park, deliver |
+| `refs/relay/<job>/nodes/<machine>` | state | that machine | commit with `node.json` (13.4) | every `beat_s`, and at once on a state change |
+| `refs/relay/<job>/snap/<task>` | state | the owner | work tree snapshot (non-ignored files incl. uncommitted, with `notes/`) | each `snapshot_s` when changed; pushed atomically with a checkpoint CAS |
+| `refs/relay/<job>/salvage/<task>/<machine>-e<epoch>` | state | the former owner of that epoch | everything its work tree held on return | once, create only |
+| `refs/heads/relay/<job>/<task>/e<epoch>-<machine>` | code | the owner of that epoch (its workers) | the task's code branch | after each commit |
+| `refs/heads/relay/<job>/<task>/delivered` | code | the owner's relay | dev_task deploy branch of the task: created at `base`, then the gate-queued commit | when the gate queued a commit, before the record turns `delivered` |
+| `refs/heads/relay/<job>/merged` | code | the owner's relay for `merge` | the deploy branch of `merge` (the merged result) | when the merge gate queued a commit |
+
+Rules:
+
+1. Each ref has exactly one way of writing. Single-writer refs are pushed directly (forced). Every task-record
+   change is a compare-and-swap push: one `git push --atomic --porcelain` carrying
+   `--force-with-lease=<ref>:<expected sha>` for the record. Creation expects the ref to be absent. A checkpoint
+   moves the record and `snap/<task>` in the same atomic push. Outcomes: `ok`; `stale`, `lock`, `nonff`,
+   `rejected` (another writer was first, or the hub refused); `timeout`, `error` (unknown; settled by sha on the
+   next listing).
+2. Ownership is what the state remote accepted. A rejected CAS means someone else was first, and it is not
+   retried.
+3. The epoch goes up by 1 on every owner change, so two owners never share a branch name.
+4. No timestamp is compared across machines.
+5. Reserved task ids: `merge` (the merge task), `coordinator` (the role record), `merged` (never a task).
+
+### 13.3 `task.json`
+
+One file `task.json` in the commit at `refs/relay/<job>/tasks/<task>`. Each change is a new commit whose parent
+is the previous record. A record missing any field below is invalid (`records.TASK_FIELDS`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `v` | int | Format version, `1` |
+| `job`, `id`, `title` | str | Job, task id, one-line title |
+| `depends_on` | [str] | Task ids that must all be `delivered` before this one can be claimed |
+| `weight` | `heavy` \| `light` | Heavy = full test runs, builds, large repository work |
+| `needs` | [str] | Toolchains, e.g. `rust`, `node>=20` (operators `>=`, `>`, `==`; bare name = any version) |
+| `prefer` | str \| null | Machine to place it on first when eligible |
+| `dir` | str | Definition directory, repository-relative: `.relay/<job>/<task>` |
+| `base` | sha \| null | Start commit (set at `init`, or at release from `blocked`) |
+| `merge_in` | [sha] | Delivered commits of the other dependencies, merged first by the sub-fleet |
+| `state` | str | `blocked` \| `pending` \| `working` \| `handed_over` \| `reclaimed` \| `delivered` \| `parked` |
+| `owner` | str \| null | Current owner; null while unowned |
+| `epoch` | int | Owner generation; 0 before the first claim |
+| `branch` | str \| null | Owner's code branch `relay/<job>/<task>/e<epoch>-<machine>` |
+| `checkpoint` | object \| null | `{commit, snap, kind: phase\|auto, phase, seq, epoch}`; kept across owners as the next start point |
+| `progress` | object \| null | `{path, ok, done, doing, next, red_tests}`: `path` the newest `notes/<slot>/PROGRESS.md`, `ok` whether its headings parse, `done` the count of Done items, the others lists clipped to `text_max` |
+| `owners` | [object] | `{node, epoch, why}`; `why` = `claim` \| `takeover:lost` \| `takeover:goodbye` |
+| `delivered` | object \| null | `{branch, commit, gate, review}` |
+| `parked` | object \| null | `{reason, by}` |
+| `seq` | int | Record counter, +1 on each change |
+| `nonce` | str | 16 hex chars, new on each change (settles a CAS of unknown outcome by sha) |
+
+State moves (any other move is refused):
+
+```
+blocked     -> pending       all depends_on delivered (any machine)
+pending     -> working       claim (epoch + 1, owners += claim)
+reclaimed   -> working       claim
+working     -> working       checkpoint; takeover of a lost owner (epoch + 1)
+working     -> handed_over   leave
+handed_over -> working       takeover:goodbye (epoch + 1)
+working | handed_over -> reclaimed   takeover with no eligible taker
+working     -> delivered     deliver
+working | pending | reclaimed -> parked   park
+```
+
+Start point of a takeover: the checkpoint snapshot if present, else the checkpoint commit, else `base`.
+
+### 13.4 `node.json`
+
+One file `node.json` at `refs/relay/<job>/nodes/<machine>`. A record missing any field below is invalid
+(`records.NODE_FIELDS`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `v`, `job`, `node` | | Format version, job, machine name |
+| `beat` | int | Heartbeat counter, +1 per period |
+| `state` | str | `online` \| `leaving` \| `rejoining` (a first record is `online` or `rejoining`) |
+| `leaving_reason` | str \| null | `shutdown` \| `sleep` \| `operator`; required when `leaving`, null otherwise |
+| `tasks` | [object] | `{id, state, phase, epoch}` per owned task |
+| `slots` | [object] | `{name, busy, title}` per sub-fleet slot |
+| `machine` | object | `{cores, perf_cores, mem_gb, disk_free_gb, always_on, toolchains: {name: version}}`; sizes in GiB |
+| `fleet` | object | `{name, release, machine}`: root fleet name, release, inventory machine name |
+| `idle` | bool | Free to take new work |
+| `role` | str \| null | `coordinator` while it holds that role |
+| `nonce` | str | 16 hex chars |
+
+### 13.5 Repository files
+
+**`.relay/<job>/job.yaml`**
+
+```yaml
+job: demo
+nodes: [laptop, desktop, server]          # inventory machine names
+tasks:
+  <task>: {title: str, weight: heavy|light, needs: [str], depends_on: [str], prefer: str}
+merge:                                    # optional; the merge task
+  depends_on: [<task>, ...]
+  weight: heavy
+  needs: [str]
+  prefer: str
+  title: str
+```
+
+Rules (`jobfile.load_job`):
+
+1. `job` must equal the directory name, and `tasks` must be a non-empty mapping.
+2. Each task needs `weight` (`heavy` or `light`). `title` defaults to the task id, `needs` and `depends_on` to
+   `[]`, and `prefer` to none.
+3. Task names match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` and may not be reserved (`merge`, `merged`,
+   `coordinator`). Dependencies must name known tasks, without a cycle.
+4. `merge.depends_on` defaults to every task, `merge.weight` to `heavy` and `merge.title` to
+   `merge all segments`. A `merge.gate` key is accepted but not used: the merge task runs the gate of
+   `.relay/<job>/merge/job.spec.yaml`.
+
+**`.relay/<job>/<task>/`** (also `.relay/<job>/merge/` for the merge task)
+
+| File | Content | Rule |
+|---|---|---|
+| `job.spec.yaml` | Sub-fleet start spec (below) | Repository-relative paths only |
+| `brief.md` | Task brief, the only plan | Repository-relative paths only |
+| `roster.yaml`, `roles/` | Sub-fleet roster and role files | Slot names end in `-<number>` |
+| `gate.sh` | Delivery gate | Runs from the repository root; interpreter from `RELAY_PYTHON` |
+| `notes/<slot>/PROGRESS.md` | Progress file with the five headings below | Updated before each commit; included in each snapshot |
+| `notes/<slot>/...` | Plans, review verdicts | - |
+| `TAKEOVER.md` | Takeover pack, written by the program on an owner change | Read first by the new sub-fleet supervisor |
+| `notes/SALVAGE.md` | Written by the program when a salvage ref for this task appears | Read by the current sub-fleet supervisor |
+
+No file under `.relay/<job>/` may hold an absolute machine path. That means a path under `/Users/`, `/home/`,
+`/Volumes/`, `/private/`, `/root/` or `/mnt/`, a `~/` path, `$HOME` or `${HOME}`, or a drive letter path.
+`relay init` refuses the job and names up to five hits as file and line. System paths such as `/bin/bash` stay
+allowed (`jobfile.ABS_PATH_RE`).
+
+**`job.spec.yaml`**: a subset of the dev_task job spec keys (design.md section 58), with repository-relative
+paths.
+- Accepted keys: `goal` (required), `hours`, `budget`, `artifacts`, `workers`, `supervisor_profile`,
+  `worker_profiles` and `deliver`.
+- `deliver` takes `test_cmd` (required, a non-empty list of strings), `test_timeout_s` and `review_file`.
+- Any other key is refused, and so is a key the program fills.
+
+```yaml
+goal: "Read .relay/demo/core/brief.md and do it."
+hours: 8
+artifacts:
+  - {path: notes/integ-1/integration.md, min_chars: 300}
+  - {path: notes/reviewer-1/verdict.json, contains: ['"verdict"']}
+deliver:
+  test_cmd: ["/bin/bash", ".relay/demo/core/gate.sh"]
+  test_timeout_s: 1800
+  review_file: notes/reviewer-1/verdict.json
+```
+
+The program fills these keys on the machine that runs the task (`jobfile.PROGRAM_FILLED`):
+- `name` (the sub-fleet name) and `lifecycle: dev_task`. `roster`, `roles`, `overrides` and the top-level
+  `review_file` are reserved for the program too.
+- `deliver.repo` (the task work tree) and `deliver.feature_branch` (the task branch).
+- `deliver.deploy_branch`: `relay/<job>/<task>/delivered`, or `relay/<job>/merged` for `merge`.
+- `deliver.queue`.
+
+It also prefixes `deliver.test_cmd` with `/usr/bin/env RELAY_PYTHON=<interpreter>`. On a takeover, or when
+`merge_in` is set, it adds a lead to the goal. It always ends the goal with the PROGRESS.md instruction.
+
+**Progress file headings** (fixed, in this order):
+
+```markdown
+## Done
+## Doing
+## Next
+## Dead ends
+## Red tests
+```
+
+### 13.6 Commands
+
+`fleetmux relay <command>` (forwarded to `python -m fleetmux.relay`). One-shot commands exit with:
+- 0 when done.
+- 1 when refused (CAS lost, not eligible, not the owner, blocked).
+- 2 on a usage error.
+- 69 when the relay is unavailable (unusable configuration, or no inventory name).
+
+The commands that take `<task>` also accept `--job <job>`, which is needed when this machine has joined more
+than one job. `run` exits as follows:
+
+| Exit | Meaning for the applet host |
+|---|---|
+| 0 | Stopped by SIGTERM or SIGINT; tasks handed over, reason `shutdown` |
+| 75 | Restart: every joined job's hub unreachable for `lost_after_s` |
+| 78 | Held under the applet: unusable configuration or inventory name; one notice says what to fix |
+| 69 | The same case, run by hand |
+| 1 | Refused or a bug (counts as a crash) |
+
+| Command | Effect |
+|---|---|
+| `init <job> --from <job.yaml>` | Validate the job files; create every task record (create-only CAS) |
+| `join <job> --repo <path>` | Record membership in the local state directory; push the first node record (one shot) |
+| `status [<job>]` | Node table (state, last seen, tasks) and task table (state, owner, epoch, checkpoint, dependencies) |
+| `leave [--reason shutdown\|sleep\|operator]` | Snapshot, hand over and say goodbye for every joined job; default reason `operator`; the running process leaves too |
+| `checkpoint <task> --phase <name>` | Phase checkpoint: snapshot + CAS of `checkpoint` and `progress` |
+| `deliver <task> [--commit <sha>]` | By hand (the relay delivers on its own after the gate): owner only, from `working`, CAS to `delivered`; commit defaults to the work tree HEAD |
+| `take <task>` | Manual claim with the same checks and CAS as an automatic claim |
+| `park <task> --reason <text>` | CAS to `parked` |
+| `run --node <machine>` | The long-running program; started by the root daemon as `applet-relay-1`, not by hand |
+
+### 13.7 Configuration: `fleet.yaml#relay`
+
+Shipped in `fleetmux/config/fleet.yaml`. A private `fleet.yaml` overrides it key by key, and `hot` key by key.
+`hot` and `coordinator` are also laid over key by key, so the user's block may name only the keys it changes. No
+`relay.yaml` exists. The one accessor is `fleet_config.relay()`, which returns the validated settings
+(`fleetmux.relay.params.Settings`).
+
+```yaml
+relay:
+  enabled: false                # switch; the built-in applet starts only when true
+  state_remote: ""              # "" = the code remote
+  snapshot_timeout_s: 45        # limit of one checkpoint push (record + snapshot)
+  takeover_md_max_lines: 60
+  text_max: 200                 # clip length of titles and progress items
+  secret_globs: [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "*.p12", ".netrc", "credentials*"]
+  probe_timeout_s: 5            # limit of one local machine probe
+  notify_max: 1000              # characters of a relay notice
+  reason_max: 200               # characters of a refusal reason in an audit line
+  coordinator:
+    enabled: true               # optional role; false = no coordinator record
+    prefer: ""                  # "" = always-on machines first
+    takeover: true              # false = never taken over from a lost holder
+  hot:
+    beat_s: 60
+    lost_after_s: 300
+    snapshot_s: 120
+    poll_s: 30
+    git_timeout_s: 20
+    max_tasks_per_node: 2
+    max_heavy_per_node: 1
+    disk_floor_heavy_gb: 40     # GiB
+    disk_floor_any_gb: 15       # GiB
+    score: {cores: 1.0, mem_gb: 0.25, disk_free_gb: 0.02}
+    offline_grace_s: 0
+    claim_stagger_s: 20
+    wake_gap_s: 180
+    settle_s: 600
+    budget_pause_gap_s: 60      # reserved: the budget pause is deferred and does not read it yet
+    write_back_seconds: 300
+```
+
+Validation (`params.check_block`; a problem is a configuration error, exit 78 for the relay):
+
+1. Every key above is present after the overlay, and an unknown key is refused.
+2. These are numbers > 0: `beat_s`, `lost_after_s`, `snapshot_s`, `poll_s`, `git_timeout_s`, `wake_gap_s`,
+   `budget_pause_gap_s`, `write_back_seconds`, `snapshot_timeout_s` and `probe_timeout_s`.
+3. These are numbers >= 0: `offline_grace_s`, `claim_stagger_s`, `settle_s`, `disk_floor_heavy_gb` and
+   `disk_floor_any_gb`.
+4. These are integers >= 1: `max_tasks_per_node`, `max_heavy_per_node`, `takeover_md_max_lines`, `text_max`,
+   `notify_max` and `reason_max`.
+5. `score` maps exactly `cores`, `mem_gb` and `disk_free_gb` to numbers.
+6. `enabled`, `coordinator.enabled` and `coordinator.takeover` are booleans. `coordinator.prefer` is `""` or a
+   machine name.
+7. Between keys: `disk_floor_any_gb` <= `disk_floor_heavy_gb`; `lost_after_s` > `beat_s` + `git_timeout_s`;
+   `poll_s` < `lost_after_s`.
+8. A hot value changed in Redis that breaks a rule is not used, and the last good value stays.
+
+**Redis** (the root fleet's private Redis):
+
+```
+fx:relay:params   hash: one field per hot key, JSON value; seeded at start, written back every
+                  write_back_seconds to the private fleet.yaml only
+```
+
+### 13.8 Notices to the root supervisor
+
+Sent through the existing applet notice channel, once per key (also across restarts).
+
+| Notice | When |
+|---|---|
+| `relay.take` | This machine claimed or took over a task and launched its sub-fleet |
+| `relay.lost` | On return, a task was found taken; its sub-fleet was stopped and a salvage ref pushed |
+| `relay.salvage` | A salvage ref appeared for a task this machine owns; `notes/SALVAGE.md` written |
+| `relay.peer` | A machine left, was lost, or came back online and idle (coordinator holder only) |
+| `relay.unplaceable` | No machine can take a task; names what is missing (coordinator holder only; every machine when the role is off) |
+| `relay.snapshot` | A snapshot left out files matching `relay.secret_globs`; names them |
+| `relay.leave` | A leave step (snapshot or hand-over) failed; the goodbye still goes out |
+
+### 13.9 Inventory fields
+
+`machines.<machine>` in the inventory file (section 9) gains `hardware` (`cores`, `perf_cores`, `mem_gb`,
+`disk_free_gb`), `always_on` (bool) and `toolchains` (`{name: version}`), written by
+`fleetmux superpowers refresh` (`fleetmux/fleet_superpowers_capability.py`). Sizes are in GiB. The schema is in
+distributed-development.md, "Capability keys of a `machines` entry".

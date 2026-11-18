@@ -179,6 +179,15 @@ class GuiMgr(FakeMgr):
         return True
 
 
+def bare_off(tmp_path, monkeypatch):
+    """fleet.yaml#bare.enabled false (private file): with no root fleet, `gui` shows this HOME's history instead of
+    starting the bare root fleet (docs/design.md section 50, item 5)."""
+    from fleetmux import fleet_config
+    path = tmp_path / 'private-bare-off.yaml'
+    path.write_text('bare: {enabled: false}\n')
+    monkeypatch.setenv(fleet_config.USER_ENV, str(path))
+
+
 def gui_world(tmp_path, monkeypatch):
     """The `gui` subcommand's outside world: a desktop, a usable backend, a fake manager, a recorded execvp."""
     from fleetmux import cmux_manager
@@ -197,6 +206,7 @@ def gui_world(tmp_path, monkeypatch):
 def test_gui_subcommand_pushes_cards_then_execs_fleetmux_gui(tmp_path, monkeypatch):
     """§18.2 steps 2-4: no daemon, two resumable runs → grey cards in kv, then `fleetmux gui`."""
     mgr, execs = gui_world(tmp_path, monkeypatch)
+    bare_off(tmp_path, monkeypatch)  # no root fleet: the history, not the bare root
     make_run(tmp_path, 'fleet-old', closed_at=1790000000)
     make_run(tmp_path, 'fleet-timeout', closed_by='timeout', closed_via=None, closed_at=1789000000)
     monkeypatch.setattr(fleet, 'daemon_running', lambda run: False)
@@ -221,6 +231,25 @@ def test_gui_subcommand_pushes_cards_then_execs_fleetmux_gui(tmp_path, monkeypat
         'the window must watch this HOME\'s runtime (§18.1): %r' % (execs,)
 
 
+@pytest.mark.parametrize('history', [True, False])
+def test_gui_subcommand_with_bare_on_starts_the_root_and_writes_no_cards(tmp_path, monkeypatch, capsys, history):
+    """fleet.yaml#bare on (the default) and no root fleet: `gui` starts the bare root fleet (docs/design.md
+    section 50, item 5) instead of the grey cards or the exit-1 line. The start fails here (exit 5)."""
+    mgr, execs = gui_world(tmp_path, monkeypatch)
+    if history:
+        make_run(tmp_path, 'fleet-old', closed_at=1790000000)
+    monkeypatch.setattr(fleet, 'daemon_running', lambda run: False)
+    starts = []
+    monkeypatch.setattr(fleet, 'run_start', lambda argv, env: starts.append(argv) or 5)
+
+    with pytest.raises(SystemExit) as exc:
+        fleet.main(['gui'])
+
+    assert exc.value.code == 5 and len(starts) == 1, (exc.value.code, starts)
+    assert mgr.kv == {} and not mgr.created and execs == [], (mgr.writes, execs)
+    assert '这个 HOME 没有可恢复的 fleet' not in capsys.readouterr().out
+
+
 def test_gui_subcommand_with_a_live_daemon_only_execs(tmp_path, monkeypatch):
     """§18.2 step 3: a live daemon pushes its own cards, so gui writes no kv at all."""
     mgr, execs = gui_world(tmp_path, monkeypatch)
@@ -238,6 +267,7 @@ def test_gui_subcommand_with_a_live_daemon_only_execs(tmp_path, monkeypatch):
 def test_gui_subcommand_with_no_history_exits_without_a_server(tmp_path, monkeypatch, capsys):
     """§18.7-2: 0 resumable runs and no daemon → say what to do, exit 1, no server and no window."""
     mgr, execs = gui_world(tmp_path, monkeypatch)
+    bare_off(tmp_path, monkeypatch)  # no root fleet: the history, not the bare root
     monkeypatch.setattr(fleet, 'daemon_running', lambda run: False)
 
     with pytest.raises(SystemExit) as exc:

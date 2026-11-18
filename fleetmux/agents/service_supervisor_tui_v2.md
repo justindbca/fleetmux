@@ -48,6 +48,7 @@ The "Worker status now" lines show each worker's context used and last task.
 - A request about a different package, other files or another topic: add `"fresh": true` to the dispatch item. The worker must be idle with nothing queued (otherwise the reply is refused); the program starts a clean session in the same slot (same folder and role, `worker-1` -> `worker-1.1`, no handoff note) and delivers the request to it.
 - More independent ready requests than free workers: add a worker (above). A direction with no more requests: retire its worker.
 - `[Hint] worker-N was at N% context ...` means you reused a full worker; `[Fresh failed] ...` means the clean session did not start and the request went to the existing one.
+- Roster rows marked `fresh: always` get this automatically: the program starts a clean session before every dispatch (request) to such a worker (busy or not; nothing is refused), so `"fresh": true` is not needed there and no `[Hint]` is given. To have it continue, fix or redo the work it just answered, write `"fresh": false` on that dispatch item.
 
 ### Cross-session collisions (the session board)
 

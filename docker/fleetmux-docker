@@ -1,0 +1,56 @@
+#!/bin/bash
+# Run fleetmux from its image on a Linux server, wide open: host network, the host home mounted at the same path,
+# the host user. Logins (~/.claude, ~/.codex, ~/.pi ...), ssh keys, projects and fleet homes are the host's own
+# files, so paths in rosters and prompts mean the same thing inside and outside the container.
+#   fleetmux-docker up [IMAGE]   start the long-lived container (default $FLEETMUX_IMAGE, else fleetmux:latest),
+#                                then download the agent CLIs pinned in deps.yaml (first time only) and check deps
+#   fleetmux-docker down         remove the container (fleets running in it stop; their homes and the CLI volume stay)
+#   fleetmux-docker <args...>    `fleetmux <args...>` in the container: start / task - / status / attach / stop ...
+# FLEETMUX_* / CMUX_FLEET_* variables set in the calling shell are passed through (except RELEASES / PYTHON /
+# PYTHON_CLI). Container name: $FLEETMUX_CONTAINER, else fleetmux.
+# A run pins the release's python and private Redis dir, both inside the image: `docker stop` / `up` keeps runs
+# resumable, `down` (or a new image) does not. To publish a new image: stop the fleets, down, up NEW_IMAGE.
+set -euo pipefail
+name=${FLEETMUX_CONTAINER:-fleetmux}
+uid_gid="$(id -u):$(id -g)"
+
+case "${1:-}" in
+  up)
+    image=${2:-${FLEETMUX_IMAGE:-fleetmux:latest}}
+    state=$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)
+    if [ -n "$state" ]; then
+      if [ "$(docker inspect -f '{{.Image}}' "$name")" != "$(docker image inspect -f '{{.Id}}' "$image")" ]; then
+        echo "$name runs another image than $image; to switch: fleetmux-docker stop (each fleet), down, up" >&2
+        exit 1
+      fi
+      if [ "$state" = true ]; then echo "$name is already running"; else docker start "$name" >/dev/null; echo "$name started"; fi
+    else
+      docker run -d --name "$name" --init --network host -v "$name-agents:/opt/agents" \
+        -v "$HOME:$HOME" -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro -v /etc/localtime:/etc/localtime:ro \
+        -e HOME="$HOME" -w "$HOME" "$image" >/dev/null
+      # start requires the private Redis root to belong to the user running the fleet (owner-only, 700); the user also
+      # installs the agent CLIs into the volume.
+      docker exec -u 0 "$name" chown "$uid_gid" /opt/agents
+      docker exec -u 0 "$name" chown -R "$uid_gid" /opt/fleetmux/current/.runtime
+      echo "$name up ($image)"
+    fi
+    docker exec -u "$uid_gid" "$name" /opt/fleetmux/current/.venv/bin/python /opt/fleetmux/current/docker/install_agents.py
+    ;;
+  down)
+    docker rm -f "$name" >/dev/null && echo "$name removed"
+    ;;
+  ''|-h|--help)
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    tty=(-i)
+    if [ -t 0 ] && [ -t 1 ]; then tty=(-it); fi
+    envs=()
+    # Not the ones that point at the host's own install: the image has its release, python and CLI.
+    while IFS= read -r var; do envs+=(-e "$var"); done < <(compgen -e | grep -E '^(FLEETMUX_|CMUX_FLEET_)' \
+      | grep -v -E '^(FLEETMUX|CMUX_FLEET)_(RELEASES|PYTHON|PYTHON_CLI)$' || true)
+    dir=$HOME
+    case "$PWD/" in "$HOME"/*) dir=$PWD ;; esac  # only the home is mounted
+    exec docker exec "${tty[@]}" -u "$uid_gid" -w "$dir" ${envs[@]+"${envs[@]}"} "$name" fleetmux "$@"
+    ;;
+esac

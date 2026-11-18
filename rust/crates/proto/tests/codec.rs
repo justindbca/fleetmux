@@ -1318,11 +1318,11 @@ fn m4_page_commands_decode_with_their_defaults() {
         }
     );
     assert_eq!(
-        d(json!({"id": 2, "cmd": "page.open", "page": "studio-ops", "reclaimed": true,
+        d(json!({"id": 2, "cmd": "page.open", "page": "alfa-ops", "reclaimed": true,
                  "history_url": "http://127.0.0.1:8765/history.html?run=x"}))
         .cmd,
         Command::PageOpen {
-            page: "studio-ops".into(),
+            page: "alfa-ops".into(),
             title: None,
             reclaimed: true,
             history_url: Some("http://127.0.0.1:8765/history.html?run=x".into()),
@@ -1360,7 +1360,7 @@ fn m4_page_commands_decode_with_their_defaults() {
 #[test]
 fn m4_page_ids_are_validated_and_the_root_cannot_be_opened() {
     assert_eq!(fleetmux_proto::MAX_PAGES, 64);
-    for ok in ["M0", "M0.1", "studio-ops", "a_b", "Z9", &"x".repeat(64)] {
+    for ok in ["M0", "M0.1", "alfa-ops", "a_b", "Z9", &"x".repeat(64)] {
         assert!(fleetmux_proto::valid_page_id(ok), "{ok:?} is a page id");
     }
     for bad in ["", "M0 (M0-attempt-2)", "a/b", "a:b", "é", &"x".repeat(65)] {
@@ -1404,9 +1404,9 @@ fn m4_page_and_all_keys_are_optional_and_absent_means_m3() {
     // pane.spawn: the optional target page.
     let spawn = json!({"id": 4, "cmd": "pane.spawn", "argv": ["sh"], "cwd": "/w", "title": "t", "type": "history"});
     let mut into = spawn.clone();
-    into["page"] = json!("studio-ops");
+    into["page"] = json!("alfa-ops");
     assert_eq!(d(spawn.clone()).page, None);
-    assert_eq!(d(into.clone()).page.as_deref(), Some("studio-ops"));
+    assert_eq!(d(into.clone()).page.as_deref(), Some("alfa-ops"));
     assert_eq!(d(into).cmd, d(spawn).cmd);
     // pane.list: all.
     assert!(!d(json!({"id": 5, "cmd": "pane.list"})).all);

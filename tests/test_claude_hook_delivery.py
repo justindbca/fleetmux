@@ -1049,6 +1049,34 @@ def test_operator_line_absorbed_mid_turn_does_not_make_the_hook_yield(hooked):
         'the injected line was treated as its own operator turn'
 
 
+def test_peer_turn_with_absorbed_notifications_and_nothing_bound_stays_unsolicited(hooked):
+    # A turn a peer SendMessage started, with no delivery handed over by this session's hook: absorbed rows that
+    # carry the delivery text (a background task's or the operator's queued_command) never settle it (§21).
+    f = hooked
+    hook = f.test_ready['worker-1']
+    f.mgr.send_key(hook.pane, 'Escape')  # the waiting Stop hook is gone: the delivery stays in the mailbox
+    hook.proc.wait(10)
+    dispatch(f, ['worker-1'])
+    env = f.v2.bus.slot_state('worker-1')
+    assert env.get('status') == 'received' and mailbox_len(f) == 1
+    wrapper = rewake_rows(f.v2.bus.message(env['message_id'])['body']['text'])[0]['message']['content']
+    append(hook.transcript, [
+        {'type': 'user', 'origin': {'kind': 'peer'}, 'message': {'role': 'user', 'content': '<cross-session-message>'}},
+        {'type': 'attachment', 'attachment': {'type': 'queued_command', 'prompt': wrapper,
+                                              'origin': {'kind': 'task-notification'}}},
+        {'type': 'attachment', 'attachment': {'type': 'queued_command', 'prompt': wrapper,
+                                              'origin': {'kind': 'human'}, 'humanTurn': True}}])
+    after = stop(f, 'worker-1', REPORT.format(name='part.md'), active=False)
+    step(f, lambda: False, timeout=3)
+    assert status_of(f, env) != 'committed', 'a turn with nothing bound settled the delivery'
+    assert any(e.get('event') in ('turn.ignored', 'turn.unsolicited') for e in audit(f, 'worker-1'))
+    assert reports(f) == 0
+    # the delivery is not lost: the next Stop hook hands it over and its own turn settles it
+    delivered(f, after)
+    stop(f, 'worker-1', REPORT.format(name='part.md'))
+    assert step(f, lambda: status_of(f, env) == 'committed') and step(f, lambda: reports(f) == 1)
+
+
 def test_line_queued_during_a_delivery_turn_settles_it_then_yields_and_loses_nothing(hooked):
     f = hooked
     got, env1 = handed(f)

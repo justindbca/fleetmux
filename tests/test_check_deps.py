@@ -1,11 +1,22 @@
 """deps.yaml / requirements.txt checker: version parsing, pins and the failing exit."""
 import importlib.util
+import os
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('check_deps', ROOT / 'scripts/check_deps.py')
 check_deps = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check_deps)
+
+
+@pytest.fixture(autouse=True)
+def process_path_only(monkeypatch):
+    """main() never reads the real login shell here, and its lookup PATH never leaks into the next test."""
+    monkeypatch.setattr(check_deps, 'search', lambda warn: os.environ.get('PATH', ''))
+    monkeypatch.setattr(check_deps, 'SEARCH', None)
+    monkeypatch.setattr(check_deps, 'FOUND', {})
 
 
 def test_version_parsing_and_minimums():
@@ -22,6 +33,37 @@ def test_missing_program_and_wrong_pin_fail(tmp_path):
     (tmp_path / 'req.txt').write_text('PyYAML==0.0.1\n')
     rows = {r[0]: r for r in check_deps.check(tmp_path)}
     assert rows['python'][3] and not rows['PyYAML'][3] and rows['nope'][1] == 'missing' and not rows['nope'][3]
+
+
+def test_deferred_programs_pass_without_a_probe(tmp_path, monkeypatch):
+    """FLEETMUX_DEPS_DEFER (the docker image build): listed programs are checked later, on the target, not now."""
+    (tmp_path / 'deps.yaml').write_text('python: {min: "3.0"}\npython_packages: req.txt\n'
+                                        'programs:\n  later: {cmd: [definitely-not-a-program-xyz], min: "1.0"}\n'
+                                        '  now: {cmd: [definitely-not-a-program-xyz], min: "1.0"}\n')
+    (tmp_path / 'req.txt').write_text('')
+    monkeypatch.setenv(check_deps.DEFER_ENV, 'later, other')
+    rows = {r[0]: r for r in check_deps.check(tmp_path)}
+    assert rows['later'][3] and rows['later'][1].startswith('deferred')
+    assert rows['now'][1] == 'missing' and not rows['now'][3]
+
+def test_deferred_pi_passes_and_its_node_waits(tmp_path, monkeypatch):
+    """The docker image build defers every agent CLI, pi included. pi is required, so its missing binary fails
+    without the deferral; deferred, it passes, node (`with: pi`) waits for the check on the target too, and
+    nothing fails."""
+    (tmp_path / 'deps.yaml').write_text('python: {min: "3.0"}\npython_packages: req.txt\n'
+                                        'programs:\n'
+                                        '  p1: {cmd: [definitely-not-a-program-xyz], min: "1.0"}\n'
+                                        '  n1: {cmd: [definitely-not-a-program-xyz], min: "1.0", with: p1}\n'
+                                        '  a1: {cmd: [definitely-not-a-program-xyz], min: "1.0", agent: true}\n')
+    (tmp_path / 'req.txt').write_text('')
+    monkeypatch.delenv(check_deps.DEFER_ENV, raising=False)
+    rows = {r[0]: r for r in check_deps.check(tmp_path)}
+    assert not rows['p1'][3] and rows['a1'][3]
+    monkeypatch.setenv(check_deps.DEFER_ENV, 'p1 a1')
+    rows = {r[0]: r for r in check_deps.check(tmp_path)}
+    assert rows['p1'][1].startswith('deferred') and rows['a1'][1].startswith('deferred')
+    assert rows['n1'][1].startswith('skip')
+    assert all(r[3] for r in rows.values())
 
 
 def test_manifest_names_every_program_the_code_calls():
@@ -88,20 +130,15 @@ def test_environment_selects_the_backend(tmp_path, monkeypatch):
     assert rows['cmux'][3] and rows['wezterm'][1].startswith('skip')
 
 
-def test_darwin_with_a_usable_cmux_defaults_to_cmux(tmp_path, monkeypatch):
-    """Design §5: macOS + cmux_available() -> cmux."""
-    _manifest(tmp_path, monkeypatch, cmux=True, wezterm=True)
-    rows = _rows(tmp_path, plat='darwin')
-    assert rows['cmux'][3] and not rows['cmux'][1].startswith('skip')
-    assert rows['wezterm'][1].startswith('skip')
-
-
-def test_darwin_without_cmux_defaults_to_wezterm(tmp_path, monkeypatch):
-    """Design §5: cmux not usable on macOS -> wezterm (and wezterm alone must be checked)."""
-    _manifest(tmp_path, monkeypatch, cmux=False, wezterm=True)
-    rows = _rows(tmp_path, plat='darwin')
-    assert rows['wezterm'][3] and not rows['wezterm'][1].startswith('skip')
-    assert rows['cmux'][1].startswith('skip')
+def test_darwin_defaults_to_fleetmux_even_with_a_usable_cmux(tmp_path, monkeypatch):
+    """Design §33.3: macOS defaults to fleetmux too; cmux and WezTerm are not asked for."""
+    for cmux in (True, False):
+        _manifest(tmp_path, monkeypatch, cmux=cmux, wezterm=True)
+        with (tmp_path / 'deps.yaml').open('a') as f:
+            f.write('  fleetmux: {cmd: [fleetmux, --version], min: "0.1.0", when: fleetmux}\n')
+        rows = _rows(tmp_path, plat='darwin')
+        assert not rows['fleetmux'][1].startswith('skip')
+        assert rows['cmux'][1].startswith('skip') and rows['wezterm'][1].startswith('skip')
 
 
 def test_linux_defaults_to_fleetmux_even_when_cmux_is_installed(tmp_path, monkeypatch):
@@ -117,10 +154,10 @@ def test_linux_defaults_to_fleetmux_even_when_cmux_is_installed(tmp_path, monkey
 
 
 def test_default_does_not_follow_manifest_order(tmp_path, monkeypatch):
-    """wezterm's lines come first, cmux's last: the platform rule still picks cmux on macOS."""
+    """wezterm's lines come first, cmux's last: the rule still picks fleetmux on macOS."""
     _manifest(tmp_path, monkeypatch, cmux=True, wezterm=True)
     assert check_deps.pick_backend(__import__('yaml').safe_load(
-        (tmp_path / 'deps.yaml').read_text()), plat='darwin') == 'cmux'
+        (tmp_path / 'deps.yaml').read_text()), plat='darwin') == 'fleetmux'
 
 
 def test_neither_backend_installed_fails_and_names_the_default_one(tmp_path, monkeypatch):
@@ -266,50 +303,95 @@ def test_shipped_fleetmux_web_matches_fleetmux_and_is_desktop_only(tmp_path, mon
 
 
 # ---------------------------------------------------------------- agent CLIs and their runtimes
-# A fleet uses the agent CLIs its roster names (`start` checks exactly those), so the install check needs only one
-# of them: an installed one must meet its minimum, a missing one is reported, not failed. `with: <program>` items
-# (node for pi) are needed only when that program is installed.
+# pi is required (and node with it). codex / claude / opencode are the user's optional CLIs: reported, never a
+# failure; missing or below their minimum they print as `skip` and `start` does not use them.
 
 def _agents(tmp_path, monkeypatch, installed):
     (tmp_path / 'deps.yaml').write_text(
         'python: {min: "3.0"}\npython_packages: req.txt\n'
         'programs:\n'
+        '  codex: {cmd: [codex, --version], min: "0.162.0", agent: true}\n'
         '  claude: {cmd: [claude, --version], min: "2.0", agent: true}\n'
-        '  pi: {cmd: [pi, --version], min: "1.2", agent: true}\n'
+        '  pi: {cmd: [pi, --version], min: "1.2"}\n'
         '  node: {cmd: [node, --version], min: "22.0", with: pi}\n')
     (tmp_path / 'req.txt').write_text('')
     monkeypatch.setattr(check_deps, 'probe', lambda cmd: installed.get(cmd[0]))
     return _rows(tmp_path, backend='fleetmux')
 
 
-def test_one_agent_cli_is_enough_and_the_others_are_not_failed(tmp_path, monkeypatch):
-    rows = _agents(tmp_path, monkeypatch, {'claude': (2, 1)})
-    assert rows['claude'][3] and rows['pi'][3] and 'not installed' in rows['pi'][1]
-    assert rows['node'][3] and 'pi' in rows['node'][1]  # skipped: pi is not installed
+def test_optional_agent_clis_missing_or_old_are_skipped_not_failed(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {'codex': (0, 144, 5), 'pi': (1, 4), 'node': (22, 1)})
+    assert rows['codex'] == ('codex', 'skip 0.144.5 (below 0.162.0: not used by fleets on this machine)',
+                             '>=0.162.0', True)
+    assert rows['claude'] == ('claude', 'skip (not installed: not used by fleets on this machine)', '>=2.0', True)
+    assert 'agent CLI' not in rows  # no "one of" rule any more
     assert all(r[3] for r in rows.values())
 
 
-def test_no_agent_cli_at_all_fails(tmp_path, monkeypatch):
-    rows = _agents(tmp_path, monkeypatch, {})
-    assert not rows['agent CLI'][3] and 'claude' in rows['agent CLI'][2] and 'pi' in rows['agent CLI'][2]
+def test_pi_is_required(tmp_path, monkeypatch):
+    rows = _agents(tmp_path, monkeypatch, {'claude': (2, 1), 'codex': (0, 164)})
+    assert not rows['pi'][3] and rows['pi'][1] == 'missing'
+    rows = _agents(tmp_path, monkeypatch, {'pi': (1, 1), 'node': (22, 1)})
+    assert not rows['pi'][3] and rows['pi'][1] == '1.1'
 
 
-def test_an_installed_agent_below_its_minimum_fails(tmp_path, monkeypatch):
-    rows = _agents(tmp_path, monkeypatch, {'claude': (2, 1), 'pi': (1, 1), 'node': (22, 1)})
-    assert not rows['pi'][3] and rows['claude'][3]
-
-
-def test_a_with_item_is_required_once_its_program_is_installed(tmp_path, monkeypatch):
+def test_node_is_required_with_pi(tmp_path, monkeypatch):
     rows = _agents(tmp_path, monkeypatch, {'pi': (1, 2), 'node': (18, 19)})
     assert not rows['node'][3]
     rows = _agents(tmp_path, monkeypatch, {'pi': (1, 2)})
     assert not rows['node'][3] and rows['node'][1] == 'missing'
 
 
-def test_the_shipped_manifest_marks_the_agent_clis_and_ties_node_to_pi():
+def test_the_shipped_manifest_requires_pi_and_marks_the_optional_agent_clis():
     import yaml
     programs = yaml.safe_load((ROOT / 'deps.yaml').read_text())['programs']
-    assert {n for n, p in programs.items() if p.get('agent')} == {'codex', 'claude', 'pi', 'opencode'}
+    assert {n for n, p in programs.items() if p.get('agent')} == {'codex', 'claude', 'opencode'}
+    assert not programs['pi'].get('agent') and not programs['pi'].get('with')
     assert programs['node']['with'] == 'pi'
     for name in ('redis-server', 'tmux', 'git'):
         assert not programs[name].get('agent') and not programs[name].get('with'), name
+
+
+# ---------------------------------------------------------------- where programs are found (design §50.3)
+
+def _fake(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('#!/bin/sh\n' + text)
+    path.chmod(0o755)
+    return path
+
+
+def test_main_finds_pi_on_the_login_shell_path_and_records_where(tmp_path, monkeypatch, capsys):
+    # pi lives under a private npm prefix that only the interactive login shell puts on PATH.
+    from fleetmux import discover
+    login = tmp_path / 'npm-prefix' / 'bin'
+    pi = os.path.realpath(_fake(login / 'pi', 'echo 1.4.0\n'))
+    shell = _fake(tmp_path / 'fake-shell', 'printf "__FLEET_PATH__%s__END__" "%s"\n' % ('%s', login))
+    (tmp_path / 'deps.yaml').write_text(
+        'python: {min: "3.0"}\npython_packages: req.txt\n'
+        'programs:\n  pi: {cmd: [pi, --version], min: "1.2.0"}\n')
+    (tmp_path / 'req.txt').write_text('')
+    monkeypatch.setenv('SHELL', str(shell))
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    monkeypatch.setattr(check_deps, 'search', lambda warn: discover.search_path(warn=warn))
+    monkeypatch.setattr(check_deps, 'FOUND', {})
+    monkeypatch.setattr(check_deps, 'SEARCH', None)
+    real = check_deps.check
+    monkeypatch.setattr(check_deps, 'check', lambda backend=None: real(tmp_path, backend, plat='linux'))
+    out_json = tmp_path / 'deps.json'
+    monkeypatch.setenv('FLEETMUX_DEPS_JSON', str(out_json))
+    assert check_deps.main([]) == 0
+    assert 'ok    pi 1.4.0 (need >=1.2.0) at %s' % pi in capsys.readouterr().out
+    rows = {r['name']: r for r in __import__('json').loads(out_json.read_text())}
+    assert rows['pi']['path'] == str(pi) and rows['pi']['ok'] is True
+
+
+def test_main_says_so_when_the_login_shell_cannot_be_read(tmp_path, monkeypatch, capsys):
+    from fleetmux import discover
+    monkeypatch.setenv('SHELL', str(tmp_path / 'no-such-shell'))
+    monkeypatch.setattr(check_deps, 'search', lambda warn: discover.search_path(warn=warn))
+    monkeypatch.setattr(check_deps, 'SEARCH', None)
+    monkeypatch.setattr(check_deps, 'check', lambda backend=None: [])
+    assert check_deps.main([]) == 0
+    out = capsys.readouterr().out
+    assert out.count('\n') == 1 and 'login shell PATH unavailable' in out and 'process PATH only' in out

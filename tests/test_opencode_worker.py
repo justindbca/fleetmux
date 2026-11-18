@@ -189,7 +189,7 @@ def oc_start(tmp_path, monkeypatch, version='opencode v2.0.29'):
 
     def run(argv, **kw):
         ran.append(argv)
-        out = version if argv[0].endswith('opencode') else '1.1.0'
+        out = version if argv[0].endswith('opencode') else '1.2.0'
         return SimpleNamespace(stdout=out + '\n', returncode=0)
     monkeypatch.setattr(fleet.subprocess, 'run', run)
     args[args.index('--worker-cli') + 1] = 'opencode'

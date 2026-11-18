@@ -583,7 +583,9 @@ def test_start_advisor_flag_only_writes_the_roster(monkeypatch, tmp_path):
     own = tmp_path / 'team.yaml'
     own.write_text('# my team\nworkers:\n  - name: exit-1\n')
     fleet.main(argv + ['--advisor', '--roster', str(own)])
-    assert own.read_text() == '# my team\nworkers:\n  - name: exit-1\nadvisor: on\n'  # edited in place, comment kept
+    copy = Path(fleet.load(tmp_path / 'latest.json')['run']) / 'roster.yaml'  # the run follows its own copy
+    assert copy.read_text() == '# my team\nworkers:\n  - name: exit-1\nadvisor: on\n'  # written there, comment kept
+    assert own.read_text() == '# my team\nworkers:\n  - name: exit-1\n'  # the source roster is not changed
     fleet.main(argv)
     assert not (Path(fleet.load(tmp_path / 'latest.json')['run']) / 'roster.yaml').exists()  # not passed: no roster
 
@@ -787,13 +789,13 @@ def test_v2_held_first_generation_keeps_holding_while_the_model_is_full(v2adv2):
 
 
 def test_v2_named_subfleet_supervisor_slot_is_not_held(private_redis_v2, tmp_path, monkeypatch):  # noqa: F811
-    """10-14 Studio: memx-ops / tgog-ops waited for a first sheet that never comes (a supervisor slot gets no
+    """Named sub-fleet supervisor slots waited for a first sheet that never comes (a supervisor slot gets no
     delivery before its sub-fleet is up), and the sub-fleet waits for them READY: both stuck in starting."""
-    gen = v2_advised(private_redis_v2, tmp_path, monkeypatch, ['memx-ops', 'worker-2'],
-                     subfleets=[{'name': 'memx', 'supervisor_slot': 'memx-ops'}])
+    gen = v2_advised(private_redis_v2, tmp_path, monkeypatch, ['alfa-ops', 'worker-2'],
+                     subfleets=[{'name': 'alfa', 'supervisor_slot': 'alfa-ops'}])
     f = next(gen)
     try:
-        sub, plain = f.agent('memx-ops'), f.agent('worker-2')
+        sub, plain = f.agent('alfa-ops'), f.agent('worker-2')
         assert sub['launch_ready'] == '1' and sub.get('advice_hold', '0') == '0'
         assert plain['launch_ready'] == '0' and plain['advice_hold'] == '1'  # ordinary workers still wait
     finally:

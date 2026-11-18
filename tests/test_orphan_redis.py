@@ -92,7 +92,7 @@ def test_run_named_by_a_live_process_is_kept(make, tmp_path):
 
 def test_child_of_live_parent_is_kept(make, tmp_path):
     parent = tmp_path / 'runs' / 'fleet-parent'
-    cfg, _ = make(parent / 'sub' / 'memx')
+    cfg, _ = make(parent / 'sub' / 'alfa')
     parent.mkdir(parents=True, exist_ok=True)
     with (parent / 'daemon.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -18,6 +18,9 @@ run is done, stuck or out of time, per the mode table (config/fleet.yaml#lifecyc
   closes this run's cmux workspace (registry ownership checked). A stop that cannot be confirmed keeps
   the workspace and Redis and raises an alarm instead.
 * Sub-fleets are not closed here: their parent collects and closes them (subfleet.tick).
+* A job's sub-fleet (design §58, ``job`` in its config) runs its lifecycle's running checks (review cap,
+  hard timeout) and completion gate here, exactly as a root run does; the gate record goes into its
+  result.json as ``delivery``. Closing, hold and notifications stay with the parent.
 * Runs without a lifecycle (older runs) are untouched.
 """
 import json
@@ -29,7 +32,7 @@ import sys
 import time
 from pathlib import Path
 
-from fleetmux import fleet_config, lifecycle, lifecycle_deliver, lifecycle_hold, paths
+from fleetmux import awake, fleet_config, lifecycle, lifecycle_deliver, lifecycle_hold, paths
 
 LIFE = 'fx:lifecycle'  # per-run lifecycle state: started:/gate:/cap:/timeout:/held:<task id>, service_active_at
 NOTIFIER = None        # tests / embedders: callable(record) -> status string; replaces every real channel
@@ -138,6 +141,33 @@ def _hset(f, **fields):
     f.r.hset(LIFE, mapping=fields)
 
 
+def slot_record(cfg, agents, registry_dir=None, models=True, review_slot=None):
+    """The program's record of the worker slots for the review gate (lifecycle_deliver.load_verdict):
+    {models: {slot: model card id or None}, review_slot: the slot the supervisor dispatched the review to, or None}.
+    ``agents`` is {slot: agent hash}. With ``models``, each slot's model card (model_usage.slot_card) is added for
+    the audit only: the gate never checks who reviewed, so a lookup that fails leaves None and never raises."""
+    out = {'models': dict.fromkeys(agents), 'review_slot': review_slot or None}
+    if models:
+        try:
+            from fleetmux import model_usage
+            from fleetmux.agent_registry import AgentRegistry
+            from fleetmux.pi_adapter import for_agent
+            registry = AgentRegistry(registry_dir or None)
+            for slot, info in agents.items():
+                out['models'][slot] = model_usage.slot_card(info, for_agent(cfg, slot), registry)[1]
+        except Exception:  # noqa: BLE001  (audit data only: a broken registry never stops the gate)
+            pass
+    return out
+
+
+def fleet_slots(f, models=False):
+    """slot_record of a live fleet (``models``: also each slot's model card, for the gate record). The review slot
+    is the one the supervisor's last ``"review": true`` dispatch went to (Fleet.mark_review)."""
+    task = f.task()
+    return slot_record(f.cfg, {w: f.agent(w) for w in f.workers}, task.get('agent_registry'), models=models,
+                       review_slot=task.get('review_slot'))
+
+
 def task_spec(task):
     try:
         return json.loads(task.get('lifecycle_spec') or '{}')
@@ -176,10 +206,17 @@ def managed(f):
     return bool(f.cfg.get('lifecycle')) and not f.cfg.get('parent_config') and f.v2 is not None
 
 
+def job_child(f):
+    """§58: a job's sub-fleet with a lifecycle: its checks and completion gate run in it; its parent closes it."""
+    return (bool(f.cfg.get('lifecycle')) and bool(f.cfg.get('parent_config')) and bool(f.cfg.get('job'))
+            and f.v2 is not None)
+
+
 # ------------------------------------------------------------------ the daemon tick
 def tick(f, now=None):
     """Called by Fleet.tick before write_result (a failed completion gate must reach result.json)."""
-    if not managed(f) or f.stopping:
+    job = job_child(f)
+    if not (managed(f) or job) or f.stopping:
         return
     now = time.time() if now is None else now
     try:
@@ -200,7 +237,31 @@ def tick(f, now=None):
         task = f.task()
         if task.get('status') == 'running':
             return
+    if job:
+        return job_terminal(f, policy, task)
     terminal(f, policy, task, now)
+
+
+def job_terminal(f, policy, task):
+    """§58: the completion gate of a job's sub-fleet, then result.json with the gate record (``delivery``).
+    The parent sees result.json, stops and collects the child, and publishes the job's result from it."""
+    if task.get('status') == 'completed':
+        problem = completion_problem(f, policy, task, task_spec(task))
+        if problem:
+            set_task_status(f, 'blocked', problem)
+    f.write_result()
+    raw = _hget(f, 'gate:' + task['id'])
+    if not raw:
+        return
+    from fleetmux.fleet import load, save
+    path = f.run_dir / 'result.json'
+    try:
+        res = load(path)
+    except (OSError, ValueError):
+        return
+    if res.get('task_id') == task['id'] and 'delivery' not in res:
+        res['delivery'] = json.loads(raw)
+        save(path, res)
 
 
 def running_checks(f, policy, task, now):
@@ -210,7 +271,7 @@ def running_checks(f, policy, task, now):
         _hset(f, **{'started:' + tid: now})
         started = now
     limit = policy.get('hard_timeout_min')
-    if limit is not None and now - float(started) >= float(limit) * 60:
+    if limit is not None and awake.between_wall(float(started), now) >= float(limit) * 60:  # awake time (§35)
         _hset(f, **{'timeout:' + tid: 1})
         f.finish('budget_exhausted', 'hard_timeout_min ' + str(limit) + ' exceeded (' + policy['name'] + ')')
         return
@@ -227,7 +288,7 @@ def running_checks(f, policy, task, now):
 
 def review_cap(f, tid, review_file, cap, label):
     """A FAIL verdict at round >= cap ends the task blocked with the outstanding-issues list."""
-    verdict, _ = lifecycle_deliver.read_verdict(f.workspace() / review_file)
+    verdict, _, _ = lifecycle_deliver.load_verdict(f.workspace(), review_file, fleet_slots(f))
     if verdict and verdict['verdict'] == 'FAIL' and verdict['round'] >= cap:
         report = write_outstanding(f, verdict, cap, label)
         _hset(f, **{'cap:' + tid: str(report)})
@@ -285,8 +346,7 @@ def completion_problem(f, policy, task, spec):
             else:
                 review = policy.get('review_step') or {}
                 rec = lifecycle_deliver.deliver(deliver, f.workspace(), task_id=task['id'], run=str(f.run_dir),
-                                                reviewer=review.get('reviewer', 'opus'),
-                                                must_pass=review.get('must_pass', True))
+                                                must_pass=review.get('must_pass', True), slots=fleet_slots(f, models=True))
             _hset(f, **{'gate:' + task['id']: json.dumps(rec, ensure_ascii=False)})
             tests = rec.get('tests') or {}
             f.log('lifecycle.gate', ok=rec['ok'], problem=rec.get('problem', ''), steps=rec.get('steps', []),
@@ -296,7 +356,7 @@ def completion_problem(f, policy, task, spec):
             rec = json.loads(raw)
         return None if rec['ok'] else 'dev_task done_when not met: ' + rec.get('problem', '')
     if name == 'review_loop' and spec.get('review_file'):
-        verdict, problem = lifecycle_deliver.read_verdict(f.workspace() / spec['review_file'])
+        verdict, _, problem = lifecycle_deliver.load_verdict(f.workspace(), spec['review_file'], fleet_slots(f))
         if verdict is None:
             return 'review_loop done_when not met: ' + problem
         problem = lifecycle_deliver.review_problem(verdict)

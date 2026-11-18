@@ -1,6 +1,7 @@
 # fleetmux applets (design)
 
-Status: **proposed design, not implemented.** Key names, field tables, commands and signatures are in
+Status: **design, implemented** (interface version 1); a part that is not built yet says so where it is
+described. Key names, field tables, commands and signatures are in
 [applet-interface.md](applet-interface.md) and are not repeated here; this page explains the model, the state
 machines, who decides what, and what happens when things fail. How to build and deploy a whole team is in
 [applet-team-guide.md](applet-team-guide.md). Section numbers such as "section 29" refer to [design.md](design.md).
@@ -18,7 +19,8 @@ An **applet** is that deterministic core, run as a process of a fleet next to it
 - It carries the team's custom function. The fleet around it (supervisor + workers) is the team.
 - It is **hot-loadable**: it is attached to a running fleet, detached from it, or moved to another fleet without
   restarting any fleet and without touching workers that hold none of its leases.
-- Its **host** is chosen by the owner: a root fleet or any named sub-fleet (section 29).
+- Its **host** is chosen by the owner: a root fleet or any named sub-fleet (section 29), including a service
+  sub-fleet that `fleetmux start` attached to a running root (no roster entry needed).
 - It **never calls a model itself**: no model API, no agent CLI, no one-shot prompt runner.
 - When it needs model work it asks the host's supervisor for an **applet lease**: one worker slot, for a
   limited time and a stated scope, exclusively its own. During the term it talks to that worker directly.
@@ -40,7 +42,7 @@ data package. Not a `tabs:` program, section 31: a tab is opened once and never 
 | Leased worker | Works inside the lease's stated purpose and paths for the applet that holds the lease. | Decide whether the work passed. Take work from anyone else during the lease. Do out-of-scope work (it replies `blocked`). |
 | Reviewer | A worker in another slot, picked by the host daemon. Reviews one handed-back fix, read-only, by the fleet's review rules (`REVIEWER.md`). | Edit files. Fix anything. Review a job it held a lease for. |
 | Root supervisor | Rules on `access` escalations (section 46). For a sub-fleet host they are passed up to it; on a root host it is the host supervisor. | Approve deletions. |
-| Human owner | Chooses the host. The only one who approves deletions and moves of files. | |
+| Human owner | Chooses the host. The only one who approves deletions and moves of files, and the steps an applet marks `human`. | |
 | Host daemon | Starts, watches and restarts the host's applets; enforces every rule below; adds a worker when a lease needs one; runs fix reviews; delivers messages; records audit. | Trust a model's or an applet's claim without checking state. |
 
 ### 1.2 What is reused and what is new
@@ -70,11 +72,39 @@ Nothing else is added: no new port, no second Redis, no system service.
 | Host | Allowed | Notes |
 |---|---|---|
 | Root fleet started with `--lifecycle service` | yes | The simplest team: one fleet, one roster. |
-| Named sub-fleet with `mode: service` | yes | Several teams under one root, or a team next to other work of the root. |
+| Named sub-fleet with `mode: service` | yes | Several teams under one root, or a team next to other work of the root. Start the team with `fleetmux start --lifecycle service` while the root runs: it attaches as a service sub-fleet (design.md section 29, "Attached service sub-fleets"); a roster `subfleets:` entry is optional. |
 | Root fleet in a task lifecycle (`dev_task`, `scheduled`, ...) or a named sub-fleet with `mode: task` | no | The one remaining limit. Ops and lease messages are service requests (section 7 of design.md, contracts.md section 4); a task fleet has no request entry and ends with its task. A roster with `applets:` is refused there. |
 | Split sub-fleet `M<n>` (section 44) | no | It has no roster of its own and ends with its task. |
 
 The transport must be v2, as for every service feature.
+
+### 1.4 Built-in applets
+
+A built-in applet ships with fleetmux and is declared by the program, not by a roster row.
+
+1. The relay (`fleetmux/relay_applet.py`, multi-machine relay development) is the one built-in applet. Its name is
+   `applet-relay-1`.
+2. It is declared only when `relay.enabled` is `true` in the `relay` block of `fleetmux/config/fleet.yaml` (default
+   `false`; a private `fleet.yaml` may turn it on), and only on a root transport v2 service fleet. A sub-fleet or a
+   task fleet never hosts it.
+3. The daemon reads the switch when it starts or resumes, and again at every roster reload
+   (`Fleet.builtin_applets`). A change of the switch takes effect at the next daemon restart or roster reload:
+   turned on, the applet starts; turned off, it is detached and stopped as if its roster row was removed. A
+   missing `relay` block reads as off.
+4. From then on it is an ordinary applet: the same start, heartbeat, stall, restart, crash window and stop as any
+   other (section 2), with every entry default of applet-interface.md section 1.1. The applet lease policy needs at
+   least one worker row; without one the daemon logs `applet.builtin_error` once and does not start it.
+5. The process is `python -m fleetmux.relay run --node <name>`. `<name>` is this machine's name, the
+   `source: self` entry of the fleet-superpowers inventory; without it (no `fleetmux superpowers refresh --name
+   <name>` yet) the daemon logs `applet.builtin_error` once and does not start it.
+6. A roster row may not take a built-in name: such a roster is refused (`roster.rejected`).
+7. The relay entry writes its heartbeat from its own main loop: `relay_applet.loop_heartbeat()` builds the applet
+   SDK without its heartbeat thread (`Applet.from_env(start=False)`), and the loop calls `tick()` on every pass
+   (at most one write per `heartbeat_s`). A loop that hangs stops beating and is stalled after `stale_after_s`,
+   like any applet. An entry that beats from a free-running thread would still beat while its loop hangs.
+8. Known limitation: every root transport v2 service fleet of a machine with the switch on starts its own relay,
+   and two relays of one machine would write the same node record. Turn `relay.enabled` on for one root service
+   fleet per machine.
 
 ## 2. Applet lifecycle
 
@@ -91,12 +121,12 @@ declared --start--> starting --first heartbeat--> up --SIGTERM--> stopping --exi
 | Event | Rule | Decided by |
 |---|---|---|
 | Attach | A row added to the host roster's `applets:` (hot, section 16), or present when the host starts. The host must be allowed by 1.3. | Whoever edits the roster (the roster is the authorization, as for `tabs:` section 31) |
-| Start | After the host supervisor is READY. In its own tab after the daemon's tab. Refused while another host under the same fleet home still runs an applet of that name (2.2). | Program |
+| Start | On the host daemon's tick, as soon as the row is declared. It does not wait for the host supervisor's READY: a supervisor session may itself wait for the applet's port (distributed-development.md, session environment). A background process in its own session and process group, output in `$FLEETMUX_APPLET_RUN/applet.log`; shown as a read-only tab in the host's daemon area (applet-interface.md section 2.6). Refused while another host under the same fleet home still runs an applet of that name (2.2). | Program |
 | Stop | SIGTERM, grace, SIGKILL. Triggered by a detach, a host stop or drain, `fleetmux applet stop`. | Program / operator |
 | Detach | The row is removed from the roster. Sequence in 2.1. | Whoever edits the roster |
 | Resume | The applet restarts with the host and finds its durable state directory. It must be written so that a restart at any point continues or safely redoes the current step. | Applet author |
 | Crash | Any exit other than 0 / 75 / 78. Open leases are ended (`applet_down`), so a dead applet never keeps a worker. Restarted at once. | Program |
-| Stall | Process alive, heartbeat older than `stale_after_s`. Treated as a crash after SIGTERM / SIGKILL. | Program |
+| Stall | Process alive, heartbeat older than `stale_after_s`. Treated as a crash after SIGTERM / SIGKILL. A host daemon gap (the machine slept, design.md section 35) is not counted: after the wake the applet gets a full `stale_after_s` to beat again. | Program |
 | Crashloop | Third crash or stall within an hour: no more restarts; one line to the host supervisor. Cleared by `fleetmux applet start`. The host itself stays up. | Program; operator clears |
 | Host daemon down | 2.3. The applet keeps running, unwatched, and is adopted when the daemon is back. | Program |
 | Rotation of a leased worker | Section 5. The lease stays with the slot. | Program |
@@ -107,12 +137,13 @@ declared --start--> starting --first heartbeat--> up --SIGTERM--> stopping --exi
 
 Attach, detach and move are roster edits. No command is added for them: the roster is already the one place that
 says what a fleet runs, it is already hot-reloaded and validated as a whole, and a second entry point would have
-to be kept in step with it. `fleetmux applet start / stop` still control the process of a row that stays declared.
+to be kept in step with it. `fleetmux applet start / stop` still control the process of a row that stays declared; they are operator control
+and do not wait for leases.
 
 | Action | How | What the host daemon does | What is not touched |
 |---|---|---|---|
 | Attach | Add a row to `applets:` in the running host's roster. | Next tick: validate the whole file; declare the applet; start it if `autostart`. A name that was attached earlier in this run may be attached again. | The fleet is not restarted. No worker is started, stopped or rotated. |
-| Detach | Remove the row. | 1. Refuse new lease requests of this applet (`applet_detaching`). 2. Send `host.draining` (`reason: detach`) and wait up to `detach_wait_s` for the applet to release its leases. 3. Revoke leases still open (`applet_detached`); a turn running under one is stopped with one Escape. 4. SIGTERM, `stop_grace_s`, SIGKILL. 5. Close the tab, clear the applet's Redis keys except ended lease records. Putting the row back before step 3 cancels the detach. | Workers without a lease of this applet. The durable state directory (never deleted). |
+| Detach | Remove the row. | 1. Refuse new lease requests of this applet (`applet_detaching`). 2. Send `host.draining` (`reason: detach`) and wait up to `detach_wait_s` for the applet to release its leases. 3. Revoke leases still open (`applet_detached`); a turn running under one is stopped with one Escape. 4. SIGTERM, `stop_grace_s`, SIGKILL. 5. Clear the applet's Redis keys except ended lease records. Putting the row back before step 3 cancels the detach. | Workers without a lease of this applet. The durable state directory (never deleted). |
 | Move | Detach from the old host, then attach to the new host. | Each host does its own half. The new host starts the applet only after the old process is gone (2.2). | Leases do not move: they end with the detach and the applet applies again on the new host. Workers of both fleets. |
 
 After a detach the worker that held a lease gets a clean session (section 4, as after any lease).
@@ -136,8 +167,12 @@ attach). fleetmux neither copies nor deletes a state directory.
 
 ### 2.3 Who watches the applet
 
-The **host's own daemon**, for a root host and for a sub-fleet host alike. An applet runs in its own terminal
-tab; it is not a child process of the daemon, so a daemon exit does not take it down.
+The **host's own daemon**, for a root host and for a sub-fleet host alike. An applet runs as a
+background process in its own session and process group, not tied to the daemon's life, so a daemon exit does not
+take it down. Its output goes to `$FLEETMUX_APPLET_RUN/applet.log`. Because it is a peer of the daemon, the fleet
+window shows it next to the daemon: one tab per applet in the daemon area's tab row, titled `<name> <state>`,
+with a header (state, phase, heartbeat age, restarts and crashes, open leases, last state change) above a live,
+read-only tail of the log (applet-interface.md section 2.6).
 
 | Duty | Done by | How |
 |---|---|---|
@@ -152,10 +187,10 @@ While the host daemon is down:
 
 | Thing | During the outage | After `daemon --resume` |
 |---|---|---|
-| Applet process | Keeps running and may continue deterministic work. Nobody restarts it if it dies. | Pid alive, heartbeat fresh, owner record of this host: adopted as it is, no restart (`applet.adopted`). Otherwise its leases are ended (`applet_down`) and it is started again; this counts as one crash. |
+| Applet process | Keeps running and may continue deterministic work. Nobody restarts it if it dies. | Pid alive, heartbeat fresh, owner record of this host: adopted as it is, no restart (`applet.adopted`). Otherwise its leases are ended (`applet_down`) and it is started again; this counts as one crash. An adopted applet that later exits has no known exit code (it is no longer the daemon's child) and counts as a crash. |
 | Ops submitted | Stay `pending`; no answer. | Processed in order. The applet may resend with the same `id`. Requests that were waiting for the supervisor are asked again (as for `subfleet.up`, section 29). |
 | Lease messages | Not delivered. | Resume rules of section 17: a message that was in flight is stopped and delivered again when its `replay` allows, otherwise it is answered `timeout`; a turn the worker finished during the outage is done again. A worker that cannot be reattached starts its next generation (`worker.rotated`); the lease stays with the slot. |
-| Lease clocks | Keep running (wall clock). | Leases past their end expire at once. |
+| Lease clocks | Keep running (awake time: a sleep of the machine does not count, design.md section 35). | Leases past their end expire at once. |
 | Reviews | Nothing new starts. | A review that was in flight is redone by the same rules; waiting ones start. |
 | Host Redis gone as well (the host was stopped or reclaimed without a clean applet stop) | The applet cannot reach Redis; after `stale_after_s` the SDK exits `0`. | The next host start starts the applet again. |
 
@@ -170,8 +205,8 @@ into `FLEETMUX_APPLET_STATE`. Leases do not carry across a host down/up or a mov
             request                 grant                  worker READY
   (none) -----------> requested -----------> granted -----------------> active <--------------+
                           |                      |                       |  |                  | renewed
-                          | deny / gate /        | prepare_timeout       |  | renew            |
-                          v no decision          v                       |  v                  |
+                          | deny / gate / no     | prepare_timeout       |  | renew            |
+                          v decision / revoke    v                       |  v                  |
                         denied                revoked                    | renew_requested ----+
                                                                          |      | denied / unanswered
                                              release <-------------------+      v (runs to expires_at)
@@ -185,17 +220,19 @@ into `FLEETMUX_APPLET_STATE`. Leases do not carry across a host down/up or a mov
 | -> `requested` | Applet | Op `applet.lease.request`. |
 | `requested` -> `denied` (program) | Program gate | Bad token, applet not up, paused or detaching, host paused or draining, `max_active` reached, invalid shape, or a real worker limit (3.3). No model turn is spent. A busy fleet alone is not a reason. |
 | `requested` -> `granted` / `denied` | **Host supervisor** | Picks the slot (or accepts the new worker the program offers, 3.3), the term (<= `ttl_max_s`) and may narrow the paths; or denies with a note. The program re-checks the answer. |
-| `requested` -> `denied` (`no_decision`) | Program | No supervisor answer within `decision_wait_s` (default 600 s). |
+| `requested` -> `denied` (`no_decision`) | Program | No supervisor answer within `decision_wait_s` (default 600 s). This is the only time limit on a `requested` lease: the term starts at `active`, so term checks never end it. |
+| `requested` -> `denied` (ended before the decision) | Host supervisor, operator, or program | A `revoke`, `host_down`, `applet_down` or `applet_detached` ends the request. The record keeps that cause as `end_reason`; the applet gets `rejected` with the matching stable reason (applet-interface.md 3.3). |
 | `granted` -> `active` | Program | Worker woken or added if needed, clean session started, lease section and grants written, worker READY. The term starts here, so preparation time is not charged to the applet. |
 | `granted` -> `revoked` (`prepare_failed`) | Program | Not ready within `prepare_timeout_s` (default 300 s). |
 | `active` -> `renew_requested` | Applet | Op `applet.lease.renew` with progress and the time still needed. The host reminds with `lease.expiring` `renew_margin_s` (default 300 s) before the end. |
 | `renew_requested` -> `active` (renewed) | **Host supervisor** | Grants the asked time or less. The program denies by itself past `max_renewals`. |
 | `renew_requested` -> `active` (denied / unanswered) | Host supervisor / program | The lease keeps its current end. `renew_grace_s` (default 0) is the only extension an unanswered renewal can get. |
 | `active` -> `released` | Applet | Op `applet.lease.release`. No supervisor turn. Expected as soon as the job is done. |
-| `active` -> `expired` | Program (clock) | Wall-clock `expires_at` passed. Checked on the daemon tick; a daemon outage past the end means expiry on resume. Not enforced while a review of this lease's fix runs (section 6). |
-| any open -> `revoked` | Host supervisor (`revoke`), operator (`fleetmux applet revoke`), or program (`host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`) | Immediate. |
+| `active` -> `expired` | Program (clock) | `expires_at` (awake time) passed. Checked on the daemon tick; a daemon outage past the end means expiry on resume. Not enforced while a review of this lease's fix runs (section 6). |
+| any open except `requested` -> `revoked` | Host supervisor (`revoke`), operator (`fleetmux applet revoke`), or program (`host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`) | Immediate. |
 
-The lease clock is wall-clock and does not stop for a paused fleet, a rotation or a wall. This keeps the rule
+The lease clock counts awake time (design.md section 35): it stops only while the machine sleeps, not for a paused
+fleet, a rotation or a wall. This keeps the rule
 simple and bounded; an applet that lost time asks for a renewal and says why.
 
 ### 3.2 One job, one lease
@@ -261,19 +298,24 @@ Only two parties can send a leased worker anything: the applet holding the lease
 (READY, handoff and mid-turn rotation prompts, which are fleet housekeeping). A reviewing slot receives only the
 daemon's review message.
 
+Version 1 builds these rows: supervisor `dispatch` / `fresh` refused, `slot_leased`, `max_busy` and idle counts,
+clean session after every result suspended, split proposal and `blocked` returned to the applet, and roster removal
+(`slot_retired`). The other rows (routing board, idle reclaim, long-task nudge, night switch, sub-fleet delegation,
+peer notices) are not built yet; those mechanisms treat a leased slot like any other slot.
+
 ## 5. Rotation, walls and other things that happen to a leased worker
 
 The lease belongs to the **slot**, not to the session. Labels change (`fix-1` -> `fix-1.1`), the slot does not.
 
 | Event | What the fleet does | What the applet sees |
 |---|---|---|
-| Context threshold between messages (section 4, section 22) | Normal handoff rotation. The handoff note gets a "Lease" block (holder, lease id, purpose, paths, end of term, last message and its result); the new generation's start prompt repeats it and the rule file still has the lease section. | `worker.rotated` (`why: handoff`). Next message goes to the new generation. |
+| Context threshold between messages (section 4, section 22) | Normal handoff rotation. The new generation's start prompt carries a "Lease" block (holder, lease id, purpose, paths, end of term, last message and its result, messages in flight) and the rule file still has the lease section. The handoff note itself is not changed. | `worker.rotated` (`why: handoff`). Next message goes to the new generation. |
 | Mid-turn rotation (section 34) | As today: the turn is split, the continuation goes first to the new generation. | `worker.rotated` (`why: midturn`); the message's result arrives later as usual. The request's timeout clock pauses during the split, as today. |
 | Frozen session (section 24, section 43) | Resume the session if possible, else new generation with a skeleton note; the message in flight is redelivered when `replay` allows. | `worker.rotated` (`why: frozen`), or result `stalled`. |
 | Link loss (section 35) | Restart path as today. | `worker.rotated` (`why: link`). |
-| Usage wall (section 23) | The slot moves to the next model on the worker chain, possibly another CLI; the instruction is redelivered once. | `worker.model_changed`. The applet may release if the new model is not acceptable for the job (a parameter of the applet, not of fleetmux). |
+| Usage wall (section 23) | The slot moves to the next model on the worker chain, possibly another CLI; the instruction is redelivered once. | `worker.model_changed` (not sent yet: version 1 reports the new generation as `worker.rotated`). The applet may release if the new model is not acceptable for the job (a parameter of the applet, not of fleetmux). |
 | End of the model chain, budget brake | The fleet pauses as today. | `host.paused`; the lease clock runs; ask for a renewal after `host.resumed` or let it expire. |
-| Message `timeout_s` passes (section 43) | The slot is held (only this slot). A held slot has no reliable exit on every CLI, so the lease is revoked `slot_held` rather than left pointing at a dead end. | Result `timeout`, then `lease.ended`. |
+| Message `timeout_s` passes (section 43) | The slot is held (only this slot). A held slot has no reliable exit on every CLI, so the lease is revoked `slot_held` on the next daemon tick rather than left pointing at a dead end. | Result `timeout`, then `lease.ended`. |
 | Confirmation dialog in the worker's pane | Unchanged: non-delete dialogs go to the supervisor, delete dialogs to the human (section 24, section 53). | Nothing, or a late result. |
 
 A lease does not survive the host going down (section 2). For a sub-fleet host that includes the periodic
@@ -331,10 +373,17 @@ moves on to other work, and executes only what an approval covers.
 | Change the plan, the target, the order; drop or defer part of the job | `plan` | Host supervisor | Decision key `applet` |
 | The worker needs a wider scope than the lease's purpose | `scope` | Host supervisor | Same; an approval is followed by a new lease or a renewal with the new purpose |
 | Write outside the host workspace, network or install needs, anything touching credentials | `access` | Root supervisor | Sub-fleet host: the host supervisor forwards with `report_up` (section 46); it cannot approve this itself. Root host: the host supervisor is the root supervisor and rules on it directly, under the same section 46 rules. Approved paths come back as program grants. |
-| Delete or move files or directories | `delete` | Human owner only | Pending item + channel push; answered by `fleetmux applet answer` or the channel's two-step approval. No supervisor can approve it, on a root host or a sub-fleet host. |
+| Delete or move files or directories | `delete` | Human owner only | Pending item (`awaiting_human`) and a one-line notice with the first line of `what`. Root host: a notice card plus a channel push when the root runs channels. Sub-fleet host: a notice card in the sub-fleet supervisor column only, no channel push. Listed by `fleetmux applet status <name>` (not the `fleetmux status` tree); answered by `fleetmux applet answer` (the channel's two-step approval is not built yet). No supervisor can approve it, on a root host or a sub-fleet host. |
+| Any other step only the human owner may approve (for example a deploy that waits for the user) | `human` | Human owner only | The `delete` path, unchanged: same pending item, notice card and push (by host, as above), `fleetmux applet status` listing, answer command and refusal of any supervisor ruling. |
 | A leased worker replies `blocked` | - | The applet forwards it as `scope` or `plan`, or releases | The applet never answers the worker's question by itself in a way that widens the scope |
 | The applet offered `options` and needs a machine-readable answer | any | as above | An approval carries `choice`, the index of one option. The applet branches on `choice` only. |
 | The supervisor wants the applet to stop or change course | - | Host supervisor | Decision `pause` / `resume` / `revoke`; an operator instruction to the supervisor (section 48) is the way in for anyone outside |
+
+A `human` approval may take hours. The applet does not stop for it: it sends the escalation without waiting
+(the SDK's `escalate(..., wait=False)` returns the op id), goes on with other work, and claims the ruling in a later
+round by op id (`escalations()`, `Escalation.ruling()`; applet-interface.md section 7). Without `wait_s` the
+escalation has no deadline. A host that does not know the class refuses it `invalid` (by the program); the applet
+then keeps its earlier way of asking.
 
 Outside sessions and operators do not instruct a leased worker or an applet's job directly; they tell the
 supervisor, which rules and uses the decisions above. The applet's inbox (`fleetmux applet send`) is for **work
@@ -344,7 +393,7 @@ items** (enqueue this branch), not for plan changes.
 
 | Failure | Detection | Automatic response | Left for a human |
 |---|---|---|---|
-| Applet crashes | Process exit | Leases ended, immediate restart, crashloop at the third in an hour | Clear a crashloop |
+| Applet crashes | Process exit | Leases ended, immediate restart, crashloop at the third in an hour of awake time; a crash within two heartbeats after a wake is not counted (`applet.exit_after_wake`) | Clear a crashloop |
 | Applet hangs | Stale heartbeat | Kill, then as a crash | |
 | Applet has a bad config | Exit 78 | No restart, reason shown | Fix and `fleetmux applet start` |
 | Supervisor never answers a lease request | `decision_wait_s` | `timeout` / `no_decision`; the applet retries later | A supervisor that is stuck is handled by the existing watchdog (section 24, section 36) |
@@ -363,7 +412,7 @@ items** (enqueue this branch), not for plan changes.
 | Two hosts declare the same applet | Owner record (2.2) | The second waits (`applet.attach_wait`) | Remove one row |
 | Host daemon dies | Sub-fleet: the parent's liveness check (section 29). Root: the supervisor's daemon watch (section 36). | Daemon resumed on the same Redis; applets adopted; in-flight messages redone under section 17 | Daemon crashloop; a root whose supervisor cannot run the resume command |
 | Host Redis dies | As above | Restarted from its own directory with the daemon | |
-| Host goes down (any reason) | Planned | Drain, stop applets, end leases | |
+| Host goes down (any reason) | Planned; a lease records the daemon process that issued it | Drain, stop applets; the next daemon ends the earlier daemon's leases `host_down` on its first tick | |
 | Parent of a sub-fleet host is not running | - | Nothing watches the host daemon; on the parent's `start --resume` the host and its applets come back | Start the parent |
 | Machine sleeps past a lease end | Clock on resume | Lease expired; the applet applies again | |
 | Two copies of one applet on one host | Start clears a previous process with the same recorded pid; the token of the older copy stops matching | The older copy's ops are refused `bad_token` | |
@@ -381,7 +430,7 @@ program where stated and by rule files otherwise, as elsewhere in fleetmux (sect
 
 | Party | May | May not | Enforced by |
 |---|---|---|---|
-| Applet | Read and write its state and run directories and whatever its own project needs. Submit `applet.*` ops and lease messages. Read its own `fx:applet:<name>:*` keys and `fx:result:<its ids>`. | Call a model or start an agent CLI. Write any other `fx:*` key. Message a worker without an active lease on it. Message a reviewer. Delete or move files without a human approval. Install launchd / cron / systemd entries. Bind a network port for fleet purposes. | Program: lease and token checks on every op and message. Review + the team guide's checklist for the rest (an applet is ordinary code running as the fleet user; the roster entry that names its command is the authorization). |
+| Applet | Read and write its state and run directories and whatever its own project needs. Submit `applet.*` ops and lease messages. Read its own `fx:applet:<name>:*` keys and `fx:result:<its ids>`. Listen on the one loopback port it declares in `session_env` (distributed-development.md, session environment). | Call a model or start an agent CLI. Write any other `fx:*` key. Message a worker without an active lease on it. Message a reviewer. Delete or move files without a human approval. Install launchd / cron / systemd entries. Bind any other network port for fleet purposes, or bind its declared port on a non-loopback address. | Program: lease and token checks on every op and message. Review + the team guide's checklist for the rest (an applet is ordinary code running as the fleet user; the roster entry that names its command is the authorization). |
 | Leased worker | Write its own directory and the lease's granted paths. Use its normal tools. | Work outside the purpose. Write elsewhere. Delete or move. Take instructions from anyone but the lease holder. Judge the result. | Rule file section + program grants (section 46). Hard sandboxing depends on the worker CLI and is not added by this design. |
 | Reviewer | Read the fix's scope. Write its report in its own directory. | Edit the reviewed files. Take instructions from the applet or the fixer. | `REVIEWER.md`; no write grant is issued. |
 | Host supervisor | Grant, deny, renew, revoke; rule on `plan` / `scope`; on a root host also `access`. | Dispatch to a leased or reviewing slot. Approve `delete`. Approve `access` on a sub-fleet host. Widen paths beyond the request. | Program checks on the decision. |
@@ -401,7 +450,11 @@ audit `detail`; those are shown to models and written to logs.
 - **Supervisor view**: lease requests, renewals and escalations arrive as tagged messages; `applet.notify` lines
   are rate limited so an applet cannot flood the supervisor's context. A hot-added worker appears in the next
   `[Roster change]` list (section 16).
-- **Terminal**: each applet has its own tab next to the daemon's, showing its stdout / stderr.
+- **Log**: each applet's stdout and stderr go to `$FLEETMUX_APPLET_RUN/applet.log`.
+- **Fleet window**: each applet is a tab in its host's daemon area, titled `<name> <state>` (a leading `! ` for an
+  abnormal state). The tab shows a header with the state, phase, heartbeat age, restarts and crashes, open leases
+  and the time of the last state change, above a live, read-only tail of `applet.log` (applet-interface.md
+  section 2.6). A sub-fleet host's applets are in that sub-fleet's page.
 - **History**: the leased worker's and the reviewer's generations, screens and handoff notes are recorded as for
   any worker; lease and review start and end appear in the slot's timeline.
 
@@ -459,6 +512,6 @@ where marked "assumed".
 | 1 | Should an unanswered renewal extend the lease briefly? | (a) Strict: `renew_grace_s` = 0. (b) Default grace of a few minutes. | (a) is the default, assumed; the field exists so a team can choose (b). Applets should ask at `lease.expiring`, five minutes ahead. |
 | 2 | Should leases survive the periodic rotation of a sub-fleet host's supervisor? | (a) No: drain, end leases, applets re-apply after the up. (b) Rotate the host supervisor in place without taking the sub-fleet down. | (a) for version 1, assumed. (b) is a change to named sub-fleets themselves and is worth doing separately; applets written for (a) keep working under (b). A root host is not affected. |
 | 3 | Roster and applet parameters in one project file. The roster parser accepts only roster keys, so one YAML for the whole applet project needs block addressing. | (a) `--roster file.yaml#block` and `subfleets[].roster: file.yaml#block`. (b) Separate roster files next to the project YAML. | (a): small, general, and lets a project keep a single YAML. The team guide shows (a) and marks it proposed, with (b) as the fallback that works on the roster parser as it is. |
-| 4 | Where the human answers a `delete` escalation. | (a) Operator command only. (b) Also the channel two-step approval used for delete dialogs (section 53). | Both, (a) first: it needs no channel setup. |
+| 4 | Where the human answers a `delete` or `human` escalation. | (a) Operator command only. (b) Also the channel two-step approval used for delete dialogs (section 53). | Both, (a) first: it needs no channel setup. |
 | 5 | Applet-specific: when a new fleetmux release needs running fleets to stop, does the release applet ask the human each time or pick a time when no fleet is running? | (a) Ask each time. (b) Applet picks an idle window by a parameter. | Not an interface question; the interface supports both (`applet.escalate` for (a), parameters for (b)). Decide in the release applet's own design. |
 | 6 | Applet-specific: must every change to a repository an applet releases go through the applet's queue? | (a) Yes, the applet is the only path to the released branch. (b) Direct merges allowed. | Not an interface question; decide in that applet's design. |

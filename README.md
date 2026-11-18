@@ -9,7 +9,9 @@ terminal sessions. The supervisor only judges and dispatches; workers only execu
 decides when the work is done. Sessions near their context limit hand over to a fresh session with a written note,
 so one task can run for hours across many model sessions. Official **Claude Code**, official **Codex CLI**, **Pi**
 (Codex models and local models) and **opencode** mix in one fleet, in any supervisor × worker pairing that has
-passed a real smoke run (`fleetmux/config/fleet.yaml#cli_pairs`).
+passed a real smoke run (`fleetmux/config/fleet.yaml#cli_pairs`). Fleets on different machines link over ssh and call each other
+([docs/distributed-development.md](docs/distributed-development.md)). A team's fixed routine runs as an applet: a program next to the daemon
+that borrows a worker from the supervisor when it needs a model ([docs/applets.md](docs/applets.md)).
 
 **In daily use.** Since October 2026 it has run resident service fleets and scheduled task fleets on three Macs
 for a live trading operation: an ops team that starts and stops the other teams, a trading desk, a strategy review
@@ -36,6 +38,13 @@ whatever the caller or the config names. fleetmux adds what a project manager do
    a model tier or pauses the run so it can resume later.
 7. **Teams of teams.** A worker can become the lead of its own sub-fleet, so one resident fleet can run several
    business lines, each started and stopped on its own clock.
+8. **Applets: the team's own software.** The fixed, mechanical core of a team (a release train, a nightly scan, a
+   polling loop) runs as an applet, a process next to the daemon. An applet never calls a model itself. When it needs
+   model work it asks the supervisor for a lease on one worker, for a limited time and scope, and gives the worker
+   back when the job is done. See [docs/applets.md](docs/applets.md).
+9. **Fleets on several machines.** Fleets on different machines link over ssh, with no new port and no broker. Each
+   fleet serves the others and calls them. An always-on fleet owns the goal, so the work goes on when another
+   machine goes offline. See [docs/distributed-development.md](docs/distributed-development.md).
 
 We learned why this matters from our own setup: an assistant gateway we ran lost its chat channels for months
 and nothing outside it noticed, because nothing outside it was checking. In a fleet, the daemon checks every
@@ -127,7 +136,8 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
 - **Resident judgment service** (`service`). Another program sends JSON requests with `fleetmux request`;
   a request that names `to` goes straight to that role's worker (`--worker-names exit-1,reentry-1,...`, one
   prompt per role through `--roles`). The daemon checks each reply against `reply.required` / `reply.allowed`,
-  and the caller holds the fleet outside its working hours with `pause` / `resume`. See *Service mode*.
+  and the caller holds the fleet outside its working hours with `pause` / `resume`. Larger work goes in with
+  `fleetmux task` as a job that runs in its own task-mode sub-fleet. See *Service mode*.
 - **Feature development with independent review** (`dev_task`). The supervisor splits the feature, workers build
   it, and separate reviewer workers judge it; review is capped at three rounds and leftover P0 / P1 go to you
   instead of a fourth round. The task is done only when the delivery gate's `test_cmd` has passed and the work
@@ -145,7 +155,7 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
 - **Day and night models.** `start --roster day.yaml --night-roster night.yaml` and `fleetmux night on|off`
   swap each worker whose profile differs to its night profile (e.g. a free or local model) at an idle boundary, same slot names, and
   tell the supervisor what is done and what is left (a full day → night → day run is not yet accepted end to end). `start --resume` brings an interrupted run back the same way.
-- **Run anywhere, watch from anywhere.** On Linux the `fleetmux` backend replaces cmux; `fleetmux attach` (also
+- **Run anywhere, watch from anywhere.** The default `fleetmux` backend replaces cmux on every platform; `fleetmux attach` (also
   over `ssh -t`) or `fleetmux gui` shows the live page from another terminal, including a phone terminal app.
 
 Chat channels (Telegram, Feishu, WeChat, email, Slack) are a second keyboard for the supervisor, with results and
@@ -186,8 +196,9 @@ What the daemon enforces, independently of what the models claim:
 | `redis-server` | >= 7.0 | Each run starts its own private instance under the release's `.runtime/redis/<token>/` (socket, PID, log, data). TCP is off; it never touches `localhost:6379`. |
 | `tmux` | >= 3.4 | Sub-fleets show one session in two tabs. |
 | `git` | >= 2.30 | The delivery gate fast-forwards branches. |
-| One agent CLI | see `deps.yaml` | [Claude Code](https://code.claude.com), [Codex](https://github.com/openai/codex), [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) or [opencode](https://opencode.ai), logged in. Install only the ones your roster uses. pi also needs Node.js >= 22. |
-| cmux (macOS only) | >= 0.65.0 | The default terminal on macOS. Run `start` inside a cmux terminal, or set cmux's *automation -> socket control mode* away from `cmuxOnly`. Without cmux, macOS uses WezTerm or `--backend fleetmux`. |
+| [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) | see `deps.yaml` | Required, logged in. Also needs Node.js >= 22. |
+| Other agent CLIs | see `deps.yaml` | Optional: [Claude Code](https://code.claude.com), [Codex](https://github.com/openai/codex), [opencode](https://opencode.ai). Used when installed, logged in and at their minimum; otherwise skipped. |
+| cmux (macOS only, optional) | >= 0.65.0 | Needed only for `--backend cmux`. Run `start` inside a cmux terminal, or set cmux's *automation -> socket control mode* away from `cmuxOnly`. |
 
 `scripts/check_deps.py` checks all of these against `deps.yaml` and prints one line per item.
 
@@ -214,8 +225,8 @@ moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
 1. **Install the system packages.**
 
    ```bash
-   sudo apt install redis-server tmux git     # Debian / Ubuntu
-   brew install redis tmux git                # macOS
+   sudo apt install curl redis-server tmux git     # Debian / Ubuntu
+   brew install redis tmux git                     # macOS
    ```
 
 2. **Run the installer.** It needs only `curl` and `tar`. It installs the latest release into
@@ -226,14 +237,17 @@ moves its data over once with `fleetmux home migrate` (docs/design.md §50.1).
    curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
    ```
 
-3. **Install and log in to one agent CLI**, for example Claude Code:
+3. **Install and log in to pi** (required), and optionally other agent CLIs such as Claude Code:
 
    ```bash
+   npm install -g @earendil-works/pi-coding-agent    # pi (needs Node.js >= 22), then run `pi` and log in
    curl -fsSL https://claude.ai/install.sh | bash && claude
    ```
 
 4. **Check.** `fleetmux start --help` prints the options. Run `~/fleetmux-releases/v<version>/.venv/bin/python
-   ~/fleetmux-releases/v<version>/scripts/check_deps.py` again after step 3: every line must say `ok`.
+   ~/fleetmux-releases/v<version>/scripts/check_deps.py` again after step 3: every line must say `ok` or `skip`. fleetmux finds these programs
+   on your login shell's `PATH`. It installs missing ones only when you run `fleetmux setup --install` and confirm,
+   and it never upgrades a program that is already there.
 
 Options: `FLEETMUX_VERSION=0.2.1` installs a given release; `FLEETMUX_RELEASES` and `FLEETMUX_BIN_DIR` move the
 install and the links (see the header of `scripts/install.sh`).
@@ -308,9 +322,18 @@ PATH=<release>/bin:$PATH <release>/.venv/bin/fleetmux-py --help
 `--tool-sha` records the installer-tool commit separately from the application `<sha>`. An installed release is
 not a native PASS and not an acceptance receipt.
 
+`--activate` does not restart anything. Every running fleet keeps the release it started with until you restart
+it with its usual start command. After an install, check:
+
+- `fleetmux status --config <run>/config.json` shows `release: {running, installed, restart_needed}` and prints
+  one line on stderr while the fleet still runs the old release.
+- `fleetmux superpowers show --self` lists every fleet on this machine that runs another release than the
+  installed one; `fleetmux superpowers releases` prints the release of each.
+- A command run by one release on a fleet whose daemon runs another prints one warning line on stderr.
+
 ## Use
 
-Open a cmux terminal, configure your Pi provider/model and replace `local/my-model` below.
+Open any terminal (the default fleetmux backend needs no cmux), configure your Pi provider/model and replace `local/my-model` below.
 New starts require Redis v2 and an explicit development opt-in. Without `--supervisor-cli` / `--worker-cli`, `start`
 takes the default pair from `fleetmux/config/fleet.yaml#cli_pairs`: a **Pi supervisor on `openai-codex/gpt-6-astra` (thinking
 high) with official Claude Code workers**. That table lists every supported pair and its status
@@ -328,36 +351,54 @@ echo '{"goal": "Survey the three most-cited papers on X and write a comparison",
   | fleetmux task -                           # hand the goal to the supervisor
 fleetmux status                               # task + per-agent state, context usage, inbox depth
 fleetmux stop                                 # cancel; confirm runtime retirement before Redis shutdown
+fleetmux                                      # open the running root fleet's window ("Watching in a window")
 ```
+
+**One fleet per machine.** When a root fleet of yours already runs on this machine, `fleetmux start` does not start
+a second one. It attaches: it prints which fleet it attached to, writes a join stub and exits. Submit the work with
+the `fleetmux task` command it prints. The running fleet then runs the work as a job in its own sub-fleet, listed
+in its sidebar in the order the jobs were submitted. The job takes the stub's `--name`, `--roster`, `--roles`,
+`--lifecycle` and `--budget`, so a whole development fleet runs as one job. `status`, `stop` and `result` with the same `--config` act on that
+job only, never on the running fleet. Both modes attach. A service-mode `start` (`--lifecycle service`) becomes a
+service sub-fleet of the running service fleet: it comes up on one of that fleet's workers and runs until it is
+stopped. Send it requests with `fleetmux request --config <stub> -`; `results`, `result`, `status` and `stop` with the
+same `--config` act on that sub-fleet only. A running task fleet takes jobs too, while its own task runs: a task
+`start` attaches to it the same way, and the task fleet completes only after its last job ends. A task fleet takes no
+service sub-fleet: when the only running fleet is a task fleet, a service `start` starts a fleet of its own, or
+refuses when that task fleet runs in the same fleet home. Pass `--no-join` to start a fleet of its own
+([design §19, §29](docs/design.md)). A fleet that is stopping (its Redis no longer answers, or it took a `stop`) is
+not attached to, and neither is a fleet in the same fleet home with the same `--name` (that is the fleet being
+started again): `start` then starts its own fleet.
 
 ### Terminal backend: cmux, WezTerm or fleetmux
 
 fleet talks to the terminal through one pluggable backend. `start --backend cmux|wezterm|fleetmux` picks it, and
 the choice is written into the run's `config.json`: the daemon, the actors, `start --resume` and every
 sub-fleet follow that value, and a run started before this flag existed stays on cmux. Without the flag
-macOS is unchanged — cmux when cmux is installed, WezTerm on a Mac without cmux — and **Linux (including
-WSL2) defaults to fleetmux since M3**; `--backend wezterm` (or `--backend cmux`) still selects the other
-backends explicitly. An explicitly chosen backend that cannot run on the machine is refused before anything
-is provisioned, naming what is missing.
+**every platform (macOS, Linux, WSL2) defaults to fleetmux**; `--backend cmux` or `--backend wezterm` selects
+the other backends explicitly. A backend that cannot run on the machine (default or explicit) is refused
+before anything is provisioned, naming what is missing; a missing fleetmux binary never falls back to cmux.
+A fleetmux run started from a terminal opens a view by itself: a window in the background on a desktop, otherwise
+`fleetmux attach` in that terminal. Pass `--no-view` to open nothing.
 
 ```bash
 fleetmux start --backend wezterm --workers 2 --supervisor-cli pi --worker-cli pi \
   --lifecycle <mode> --pi-model local/my-model --allow-unsandboxed-pi --allow-development-v2
 ```
 
-* **cmux** (default on macOS, the layout described above): supervisor top-left, history browser below,
-  workers as tabs on the right.
-* **WezTerm** (`--backend wezterm` on Linux / WSL2, or the default on a Mac without cmux; needs `wezterm` and
+* **cmux** (`--backend cmux`, macOS only, the layout described above): supervisor top-left, history browser
+  below, workers as tabs on the right.
+* **WezTerm** (`--backend wezterm`; needs `wezterm` and
   `wezterm-mux-server` ≥ 20240203 on `PATH`):
   each run starts its **own private mux server** (its own socket, never your WezTerm). There is no
   browser surface and no tabs inside a split, so the layout degrades: one window, tab 1 with the
   supervisor on the left and `daemon` split below it, one tab per worker. The history page is not
   embedded — fleet prints `<run>/history.html` in `daemon` and opens it with `open` / `xdg-open` when
   a desktop is available. Named sub-fleets still work through tmux.
-* **fleetmux** (the default off macOS since M3; on macOS only with `--backend fleetmux`): fleet's own
+* **fleetmux** (the default on every platform): fleet's own
   fixed-layout terminal written in Rust (`rust/`, MIT) — see the subsection below.
 
-#### fleetmux backend (Linux default since M3)
+#### fleetmux backend (the default)
 
 Each run gets **one private `fleetmux server`** that owns every agent's PTY and screen. You look at it with
 `fleetmux attach`, which is a separate client: open and close it whenever you like, open several at once, run it
@@ -368,9 +409,10 @@ over `ssh`. Closing a viewer never stops an agent.
     --release` and put `target/release/fleetmux` on `PATH`. Run cargo inside `rust/` so that the toolchain
     pinned by `rust/rust-toolchain.toml` is used. On Linux, building the workspace also needs
     `libwebkit2gtk-4.1-dev` (for the `fleetmux-web` window, M2.5; `apt-get install libwebkit2gtk-4.1-dev`);
-  * `scripts/install_fleetmux.sh [--dest DIR]` installs the prebuilt binary pinned by `deps.yaml`
-    (`programs.fleetmux.min`) into `~/.local/bin` by default and refuses it unless its sha256 matches. It
-    downloads from the GitHub release `v<min>` (`.github/workflows/release.yml`). If that release has not been
+  * `scripts/install_fleetmux.sh [--dest DIR]` installs a prebuilt binary into `~/.local/bin` by default and
+    refuses it unless its sha256 matches. It downloads from the GitHub release `v$FLEETMUX_VERSION` when that is
+    set (`scripts/install.sh` sets it to the release it installs), else `v<min>` of `deps.yaml`
+    (`programs.fleetmux.min`) (`.github/workflows/release.yml`). If that release has not been
     published yet, the script fails and installs nothing; build from source instead.
   * `$FLEETMUX_BIN` points fleet at a specific binary; otherwise `fleetmux` on `PATH` is used.
     `fleetmux --version` must print `fleetmux <x.y.z> (protocol 1)` with a version of at least `deps.yaml`'s
@@ -388,6 +430,18 @@ over `ssh`. Closing a viewer never stops an agent.
   It holds `ctl.sock` (0600, the directory 0700, same-uid peers only), `server.json`, `panes.json`,
   `layout.json` (your ratios survive a server restart), `start.lock` and `server.log`. fleet derives the path
   from the run, so every fleet process finds the same server.
+* **Check the tabs without a screen** (over ssh, for example): `fleetmux tabs` lists every tab of the running
+  fleet, root page and sub-fleet pages, with its page, group, title, type, pid and pane id. `fleetmux tabs read`
+  prints the text of one tab; the blank rows below the text are not counted. Both are read-only: they never type
+  into a pane and never start a server.
+
+  ```bash
+  fleetmux tabs [--config <config.json or join stub>] [--json]   # one tab per line
+  fleetmux tabs read <pane id | title prefix> [--lines N]         # the last N text rows of that tab (default 50)
+  ```
+
+  Exit codes: `0` ok, `2` no such tab, several tabs match the prefix, or the run is not on the fleetmux backend,
+  `3` the server cannot be read.
 * **Watching a fleet on another machine** (fix-m25-2): `ssh -t <host> fleetmux attach --runtime <dir>` shows the
   terminal, but that viewer runs on `<host>`, so `C-b o` can only open a window there. To get the history window
   on your own desktop, run the viewer on your machine and forward the server's socket with your own SSH:
@@ -439,6 +493,61 @@ over `ssh`. Closing a viewer never stops an agent.
   * On a desktop, `fleetmux start` prints `Watch it in a window: fleetmux gui --runtime <dir>` before the usual
     `Watch it with: … attach …` line. `--gui` and `--attach` cannot be combined, and `--gui` is refused without a
     desktop.
+  * Without `--attach`, `--gui` or `--no-view`, `start` opens a view itself when a person runs it at a terminal
+    (stdin and stdout are TTYs). On a desktop with `fleetmux-web`, and not over ssh, it starts `fleetmux gui` in the
+    background and returns; the window's output goes to `<run>/gui.log`. On macOS it then raises the window
+    through System Events, because a window started in the background does not take the focus by itself. Otherwise it becomes `fleetmux attach`.
+    `start` itself opens nothing when there is no terminal (launchd, a script's pipe), when it runs inside a
+    fleetmux pane, or when a `fleetmux gui` / `fleetmux attach` is already open on the same runtime; the daemon
+    still opens the window (next item). Scripts that keep running after `start` should pass `--no-view`, which
+    also keeps the daemon from opening the window for that run.
+  * **Bare `fleetmux` opens the root fleet's window.** Typed with no arguments in any terminal on the machine
+    (also in the root fleet's sidebar bash page), `fleetmux` is `fleetmux gui`: it finds the live root fleet of this
+    machine (a service root first) and shows its window. Without a desktop, without `fleetmux-web`, or over ssh
+    (`SSH_CONNECTION` set) it becomes `fleetmux attach` on that fleet, also when the window is open on the desktop.
+    Otherwise, when a `fleetmux gui` is already open on that fleet, it is brought to the front (macOS) and nothing
+    new starts; with no window, the window starts in the background (output in `<run>/gui.log`), comes to the
+    front, and the command prints `Opened a window (log: ...)` and returns.
+    With no live root fleet (and no fleet running in this fleet home) it starts one with the defaults in the
+    `bare` block of `fleetmux/config/fleet.yaml`: it prints one line naming the fleet and its home, then runs
+    `fleetmux start --lifecycle service --name main --resume auto --no-join` in `~/.fleetmux/fleets/main`. A
+    resumable earlier run of that home is resumed; otherwise (also after `fleetmux stop`, which finishes a run) a new
+    run starts. The models are the default pair of the `discovery` block. The new root's daemon opens its window;
+    `fleetmux` waits for it (at most `bare.window_wait_s`, 30 s by default) and brings it to the front. If no window
+    has appeared by then, `fleetmux` opens it (or raises one that appeared meanwhile) itself and returns. Over ssh or
+    without a desktop it attaches instead. This also works inside a fleetmux pane and without a terminal. If `start`
+    fails (for example a missing flag it requires), `fleetmux` prints start's message and exits with its code.
+
+    To make bare `fleetmux` resume an existing root fleet instead of starting `main`, replace the block as a whole in
+    your own `~/.fleetmux/fleet.yaml` and name that fleet, its roster and any `start` flags it was started with:
+
+    ```yaml
+    bare:
+      name: remote-dev                        # its fleet home: ~/.fleetmux/fleets/remote-dev
+      roster: ~/.fleetmux/fleets/remote-dev/roster.yaml
+      start_args: [--allow-unsandboxed-pi]    # only if you decided this for that fleet; never shipped by default
+    ```
+
+    The shipped block waives no safety check. When the default pair runs a pi agent, `start` refuses without
+    `--allow-unsandboxed-pi` (pi has no sandbox); adding that flag to `start_args` is your explicit decision, after
+    reviewing what pi may do. Keys: `enabled` (false: the history window described below, or one line and exit 1),
+    `name`, `lifecycle` (default `service`), `home` (default `~/.fleetmux/fleets/{name}`), `roster` or `workers`,
+    `start_args` (further `start` flags; the flags `fleetmux` sets itself, the view flags and the CLI / model flags
+    are refused), `window_wait_s` / `window_poll_s` (how long and how often it looks for the daemon's window).
+    `fleetmux --help` still prints the usage.
+  * **The window stays open.** The root fleet's daemon checks every 30 s for its `fleetmux gui` window and opens it
+    when it is missing, also when the fleet was started over ssh, by a script or by a scheduler, and after the
+    window was closed. No launchd or cron item is needed. On macOS it opens on the desktop of the user logged in at
+    the console; on Linux it needs `DISPLAY` / `WAYLAND_DISPLAY` or the user's Wayland session. With nobody at the
+    desktop it logs `gui.no_desktop` once and checks again later. Sub-fleets show in the root's window and open none.
+    To turn it off, set this in `~/.fleetmux/fleet.yaml` (or start the run with `--no-view`):
+
+    ```yaml
+    gui:
+      keep_open: false
+      check_s: 30
+      backoff_max_s: 600
+    ```
   * Click into the page to use it (the lower-left group gets the focus); the prefix key still works inside the page
     and gives the keyboard back to the terminal. `C-b o` selects the history tab and focuses the page. `C-b d`
     or closing the window detaches (exit 0); the agents keep running. `browser_goto` / `browser_url` /
@@ -487,7 +596,8 @@ over `ssh`. Closing a viewer never stops an agent.
   fleet's card keeps a grey dot and `已关闭 · 可恢复` ("closed · restorable"; a run a lifecycle timeout stopped with `resumable` says
   `到点停 · 可恢复`, "stopped at the time limit · restorable"), draws `↺` on its first row (it restores that card's run by
   id) instead of `×`, and the pane area shows the closed-fleet placeholder; the server exits 10 s after the last
-  pane and viewer are gone, and the run can still be resumed with `start --resume` afterwards. While no fleet runs,
+  pane and viewer are gone, and the run can still be resumed with `start --resume` afterwards. While no root fleet runs on this machine
+  and `bare.enabled` is false in `~/.fleetmux/fleet.yaml` (or this HOME runs a fleet that is not the root),
   `fleetmux gui` (or `./start.sh gui`: the Python `gui` subcommand, `fleet.py gui`) is the one-command window on that history: it scans this
   HOME's `runs/` once, writes the grey cards newest-closed-first (at most 16, only runs whose runtime is this
   HOME's) and execs `fleetmux gui --runtime <that runtime>`; with no resumable run it prints
@@ -528,10 +638,11 @@ over `ssh`. Closing a viewer never stops an agent.
   behind the workers and lists it on the history page, and a bash opened while no fleet runs is taken in by the next
   root fleet. It is no worker: no slot, no work, not counted by `--max-busy`, not in the roster; a sub-fleet never
   takes one in. Each bash gets a `bash-<n>` card after the fleet cards, in creation order (green dot,
-  `终端 · 运行中` ("terminal · running"), `~`, `×` on its first row); a shell that exits takes its card and its tab with it. Opening a bash
-  or clicking its card shows the root page, cancels a zoom of another pane, selects the tab and focuses its group —
-  the topbar reads `bash-<n> · 终端 · 运行中` and the fleet card's blue bar gives way — and clicking the fleet's card
-  focuses the supervisor group again (the bash stays a tab of the worker area). A bash card's `×` closes the
+  `终端 · 运行中` ("terminal · running"), `~`, `×` on its first row); a shell that exits takes its card, its tab and its page with it. Opening a bash
+  or clicking its card shows a clean bash: its own page, where the shell fills the content area with none of the
+  fleet's panes — the topbar reads `bash-<n> · 终端 · 运行中` and the fleet card's blue bar gives way. The main
+  fleet's page is not touched. Clicking the fleet's card brings that page back as it was; the same shell is a live
+  tab at the end of its worker area. A bash card's `×` closes the
   bash right away while the shell sits at its prompt; while a program runs in the foreground (the PTY's
   foreground process group is not the shell's own) the same confirmation box asks first —
   `bash-<n> 里还有程序在跑，关掉会结束它。` ("a program is still running in bash-<n>; closing will end it.") with
@@ -632,8 +743,8 @@ Successors are named `<slot>.<generation>` for the supervisor and the workers al
 ## Service mode (resident fleet)
 
 `start --mode service` keeps the fleet running with no goal and no end: it answers a stream of
-requests. The supervisor only routes; each worker can have its own prompt; answers are JSON checked by
-the daemon, not by a model.
+requests. The supervisor routes each request to a worker or answers a simple one itself; each worker can have its
+own prompt; answers are JSON checked by the daemon, not by a model.
 
 ```bash
 fleetmux start --lifecycle service --worker-names exit-1,reentry-1,rung-1 --roles ~/my-roles \
@@ -669,6 +780,64 @@ fleetmux pause --reason "market closed"; fleetmux resume
   ending it. Calendars (market hours, holidays) are the caller's business: pause and resume from outside.
 - Callers on the same machine can skip the CLI: push `{"kind": "request", "request_id": ..., "spec": ...}`
   to `fx:events` on the private socket named in `~/.fleetmux/latest.json`, then read `fx:result:<id>`.
+
+### Jobs: submit work to a running root fleet
+
+Both modes stay. Run work that has an end and a deliverable as a task. On a service fleet, submit it with `fleetmux task`: each job runs in its own task-mode sub-fleet. A task fleet takes jobs the same way while its own task runs (see rule 8).
+
+1. **Submit the job.** `fleetmux task` against a service fleet returns a job id at once.
+2. **Let the program run it.** The program takes one idle worker, makes it the supervisor of a new task-mode
+   sub-fleet, and gives the sub-fleet the job's goal as its task. The supervisor of the service fleet is only told.
+3. **Read the result.** `fleetmux result <job id>` exits 3 while the job runs and prints the result when the
+   sub-fleet ends. Status `ok` (completed), `blocked`, or `failed`. The result names the sub-fleet's run and
+   workspace directories.
+
+```bash
+echo '{"goal": "Survey the five vendor APIs and write a comparison report",
+       "hours": 6, "workers": 3,
+       "artifacts": [{"path": "worker-1/report.md", "min_chars": 800}]}' \
+  | fleetmux task -                     # {"status": "accepted", "job_id": "job-...", ...}
+fleetmux status                         # "jobs": id, state, slot, subfleet, waiting
+fleetmux result job-0123456789 --wait 60
+
+# a development fleet as one job: its roster, roles, delivery gate and review step
+echo '{"goal": "Implement the export command", "name": "export-cmd", "lifecycle": "dev_task",
+       "roster": "/abs/path/dev-roster.yaml", "roles": "/abs/path/roles",
+       "deliver": {"repo": "/abs/path/repo", "feature_branch": "feat/export", "deploy_branch": "main",
+                   "test_cmd": ["pytest", "-q"], "queue": "/abs/path/queue.json", "review_file": "review.json"}}' \
+  | fleetmux task -
+```
+
+Rules:
+
+1. **Use the job keys only.** `goal` (required), `hours`, `artifacts`, `budget`, `lifecycle`, `workers`,
+   `supervisor_profile`, `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `review_file`. Other keys are
+   refused.
+2. **Run a development fleet as a job.** `roster` (absolute path) gives the sub-fleet its workers, role files and
+   cards. `roles` (absolute directory) adds `<agent>.md` rules, as `start --roles` does. `name` titles the sub-fleet.
+   With `lifecycle: dev_task`, `deliver` is required and the sub-fleet runs the same review step and delivery gate as
+   a root dev_task run; the gate record comes back in the result as `delivery`.
+3. **Set defaults in one block.** `fleet.yaml#job_subfleet` (`workers: 2`, `supervisor_profile: null`,
+   `worker_profiles: []`, `hours: 4`); override it in `~/.fleetmux/fleet.yaml`. A job's own keys win.
+4. **Expect a new worker, not a wait.** With no idle worker the program adds one worker row to the root roster;
+   it becomes the job's sub-fleet supervisor and is retired after the job. Without a roster file, at
+   `limits.job_hot_add_max`, or at a tree-wide cap the job waits, and `status` shows why under `waiting`.
+5. **No small fixed cap.** Jobs have no default `max_children` / `max_agents_total` / `child_workers_max`; a root
+   roster `limits:` value still caps them.
+6. **Use `request` for quick questions.** A `request` with `to` goes straight to that worker; without `to`, the
+   supervisor routes it to one worker or answers a simple one itself.
+   A job is never routed by the supervisor: its decision JSON cannot dispatch, answer or skip a job id.
+7. **Start a service fleet next to it.** `fleetmux start --lifecycle service` while a service fleet runs makes a
+   service sub-fleet of it, not a job: the program takes an idle worker (or adds one) as its supervisor and keeps it
+   up until `fleetmux stop --config <stub>` (op `subfleet.detach`). Its requests go to its own bus with
+   `fleetmux request --config <stub> -`. A `start` of a task fleet becomes a job as above.
+8. **Send jobs to a task fleet.** While a root task fleet runs its own task, `fleetmux task` to it is a job, not a
+   second task. Its supervisor cannot route a job. Its COMPLETED is held while a job is open (no strike); the task
+   completes when the last job ends. With no task running, the first `task` is the fleet's own task;
+   `fleetmux task --job` is refused then.
+
+Requirements: transport v2, a backend with sub-fleets, and at least one official Claude Code worker (only such a
+worker can become a sub-fleet supervisor). Details: docs/design.md section 58.
 
 ## Worker roster YAML (hot add / remove)
 
@@ -717,6 +886,16 @@ whole directory is copied to `<run>/fleet-config/` and the run follows that copy
   defaults; running workers keep their generation. Logged as `advisor.on` / `advisor.off` (`who`), and the
   daemon tab's `STATE` line shows `adv=on|off`.
 - **Companion tabs** (docs/design.md §31): optional top-level `tabs: [{name, command, cwd?, env?}]` (name `^[a-z][a-z0-9-]*$`, unique; cwd relative to the roster, `~` ok; env strings) - terminal programs (not agents) opened as tabs after the control tab of the loading fleet's workspace, `--focus false`. On every fleet start (`start`, `--resume`, a sub-fleet's `daemon --resume`) each running process whose command line exactly equals the tab's program is SIGTERMed (SIGKILL after ~5 s) before the tab opens; matching rule in §31. Closed by `stop` / `close_all`; a tab closed while the daemon runs is not reopened until the next start. Programs run as the fleet's user: the roster is the authorization.
+- **Project rules and MCP**: `start --project-dir DIR` creates the run under
+  `DIR/.fleetmux/runs/` (exclusive with `--runs-dir`) and appends `.fleetmux/` once to DIR's git
+  `info/exclude`. Every agent cwd is then inside DIR, so Claude Code loads DIR's `CLAUDE.md` as a parent
+  directory, also with `--setting-sources project` (advised slots); DIR's `.claude/settings.json` is not
+  loaded. Optional top-level `import_claude_md: [path, ...]` copies each file's text to the end of every
+  agent's AGENTS.md / CLAUDE.md at each spawn (copied, not an `@path` line: Claude Code asks "Allow external
+  CLAUDE.md file imports?" for any file outside the cwd, `~/.claude/...` included, and fleet pre-answers No);
+  `~/.claude/CLAUDE.md` there is skipped for plain Claude slots, which load it themselves. Optional
+  `import_mcp: [{from: <mcp json>, servers: [name, ...]}]` merges those servers into each Claude agent's
+  `mcp.json` (a kit's same-named server wins); paths are relative to the roster, `~` ok.
 - Needs PyYAML in the Python that runs the daemon.
 
 ## Handoff window and ratio per model
@@ -813,6 +992,8 @@ A busy worker can be turned into the supervisor of its own fleet for one numbere
   worker continues as `worker-1` of the main fleet.
 - Limits (program-enforced, reasons returned): `max_depth` 2, `max_children` 3, `max_agents_total` 12,
   `child_workers_max` 3; override in config `limits` or in the roster YAML `limits:` (read on each check).
+  Jobs (section "Jobs") have no default for the last three; a `limits:` value still caps them, and
+  `job_hot_add_max` caps the workers added for jobs.
 - Only official Claude Code worker tabs can be handed over (a Pi bridge cannot reconnect to another Redis).
 - `status` shows the whole tree; `stop` on the main fleet stops sub-fleets first; `start --resume` on the
   main fleet restarts sub-fleets that were running.
@@ -1126,7 +1307,7 @@ timed-out gate names that path in its problem (`tests failed (exit N); log: <pat
 
 ## Known limitations
 
-- On macOS the default backend is cmux (WezTerm without cmux); on Linux it is fleetmux's own terminal (see
+- The default backend is fleetmux's own terminal on every platform; cmux and WezTerm need `--backend` (see
   *Terminal backend*). On macOS the daemon uses `caffeinate` when available so the machine does not sleep.
 - A new cmux workspace briefly steals focus when it is created (cmux ignores `--focus false` for
   `new-workspace`); the daemon switches you back.

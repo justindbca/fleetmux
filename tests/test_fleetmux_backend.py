@@ -627,7 +627,7 @@ def test_spawn_places_pane_by_type_table(impl):
     s1 = spawn(mgr, 'supervisor-1', type_='supervisor')    # supervisor  -> supervisor, first
     adv = spawn(mgr, 'advisor-1', type_='advisor')         # advisor     -> supervisor, end
     s2 = spawn(mgr, 'supervisor-1.1', type_='supervisor')
-    t1 = spawn(mgr, 'evermem-shell', type_='tab')          # tab         -> lower, end
+    t1 = spawn(mgr, 'index-service', type_='tab')          # tab         -> lower, end
     d1 = spawn(mgr, 'control', type_='daemon')             # daemon      -> lower, first without history
     h = spawn(mgr, 'history', type_='history')             # history     -> lower, first
     d2 = spawn(mgr, 'control-2', type_='daemon')           # daemon      -> lower, right after history
@@ -639,7 +639,7 @@ def test_spawn_places_pane_by_type_table(impl):
     for pid, want in ((w1, 'worker'), (s1, 'supervisor'), (adv, 'advisor'), (t1, 'tab'), (d1, 'daemon'),
                       (h, 'history')):
         assert rows[pid]['type'] == want
-    assert rows[w1]['title'] == 'worker-1' and rows[t1]['title'] == 'evermem-shell'
+    assert rows[w1]['title'] == 'worker-1' and rows[t1]['title'] == 'index-service'
 
 
 def test_spawn_interactive_cli_prompt_file_and_auto_close_shell(impl):
@@ -1137,12 +1137,12 @@ def test_tab_into_before_inserts_successor_at_old_slot(impl):
 
 def test_tab_panes_lists_live_tabs_only(impl):
     mgr = new_mgr(impl)
-    t1 = spawn(mgr, 'evermem-shell', type_='tab')
+    t1 = spawn(mgr, 'index-service', type_='tab')
     t2 = spawn(mgr, 'scratch', type_='tab')
     spawn(mgr, 'worker-1')
-    assert mgr.tab_panes() == {t1: 'evermem-shell', t2: 'scratch'}
+    assert mgr.tab_panes() == {t1: 'index-service', t2: 'scratch'}
     assert ctl(impl, 'pane.kill', pane=t2)['ok'] is True
-    assert mgr.tab_panes() == {t1: 'evermem-shell'}
+    assert mgr.tab_panes() == {t1: 'index-service'}
 
 
 # ================================================================ browser cell (= history pane)
