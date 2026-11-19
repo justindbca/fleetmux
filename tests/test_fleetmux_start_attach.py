@@ -43,6 +43,9 @@ def fleetmux_start(tmp_path, monkeypatch):
     monkeypatch.setattr(fleet, 'resolve_backend', lambda requested=None, platform=None: (requested or 'fleetmux', None))
     monkeypatch.setattr(fleet, 'backends_check', lambda name: True)
     monkeypatch.setattr(fleet, 'manager_for', lambda cfg: mgr)
+    # No keep-awake tool on this host (mock_start hides caffeinate the same way): keep_awake_prefix() uses the real
+    # which / run, so a Linux host's systemd-inhibit would be probed for real -- through auto_world's recording Popen.
+    monkeypatch.setattr(fleet, 'keep_awake_prefix', lambda: [])
     execs = []
 
     def execvp(file, argv):

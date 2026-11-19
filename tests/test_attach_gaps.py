@@ -319,8 +319,9 @@ def test_supervisor_and_worker_settings_are_forwarded(tmp_path):
     overrides, model, _ = join.start_settings(parsed('--supervisor-model', 'fable', '--supervisor-cli', 'claude',
                                                      '--worker-kit', str(kit)), service=True)
     assert model == 'fable' and overrides['worker_kit'] == str(kit.resolve())
-    overrides, _, _ = join.start_settings(parsed('--worker-model', 'opus', '--claude', '/bin/claude'), service=False)
-    assert overrides['worker_model'] == 'opus' and overrides['claude'] == '/bin/claude'
+    claude = str(tmp_path / 'tools' / 'claude')  # not /bin/claude: on merged-/usr Linux /bin is a symlink to usr/bin
+    overrides, _, _ = join.start_settings(parsed('--worker-model', 'opus', '--claude', claude), service=False)
+    assert overrides['worker_model'] == 'opus' and overrides['claude'] == claude
 
 
 @pytest.mark.parametrize('argv, service, words', [

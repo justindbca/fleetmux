@@ -826,6 +826,15 @@ bare:
   start_args: []
   window_wait_s: 30                 # s, longest wait for the daemon's window before bare opens it itself
   window_poll_s: 0.5                # s, between two looks for that window
+  # host_terminal_env: environment variables that mark a host terminal, a terminal that is itself a pane of another
+  # program. When one of them is set (non-empty), stdin and stdout are a terminal and the command does not run
+  # inside a fleetmux pane, bare `fleetmux` attaches to the root fleet in that terminal (fleetmux attach --runtime)
+  # instead of raising or opening the desktop window, also when the window is open; with no root it starts the bare
+  # root fleet and then attaches without waiting for its window. Without a terminal (a pipe, a script) or inside a
+  # fleetmux pane the window path is kept. start's automatic view does not read this list. HC_TERMINAL_ID marks a
+  # Herdr terminal pane (HC_SCOPE is not used: commands Herdr runs without a terminal have it too).
+  # [] turns this off; anything but a list of variable names is refused.
+  host_terminal_env: [HC_TERMINAL_ID]
 
 relay:
   # Multi-machine relay development (fleetmux/relay/). Several machines work on the tasks of one job through one

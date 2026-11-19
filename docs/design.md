@@ -959,7 +959,7 @@ Decision (plan A): write our own fixed-layout terminal in Rust that serves only 
   - Keys (prefix `C-b`), mouse, paging, copy, multiple viewers and the 256-color downgrade: see `PROTOCOL.md` §10–§14.
   - Prefix + `o` opens `history.html` on the machine where attach runs; if it cannot, it only shows the path.
 - **`start` wiring**: when a live root fleet already runs on this machine, `start` attaches to it (§19 "One root fleet per machine"): it prints one line naming the root and the `fleetmux task` command, and opens no view. Otherwise, with the fleetmux backend, `start` prints one line `fleetmux attach --runtime <dir>` in the terminal. `start --attach` execs that command after start completes; with other backends, `--attach` refuses with exit 2.
-- **Automatic view** (`fleet.auto_view`): without `--attach` / `--gui` / `--no-view`, a fleetmux `start` opens a view for the person who ran it. Conditions, in order: stdin and stdout are TTYs (`interactive_terminal`); no ancestor process is a `fleetmux server` (`inside_fleetmux_pane`: the start runs in a sidebar bash or other pane, which already shows the server); no `fleetmux gui` / `fleetmux attach` is open on the same runtime (`viewer_running`). If they hold: a desktop with `fleetmux-web` and no `SSH_CONNECTION` gets `fleetmux gui` started in the background in a new session (stdin from /dev/null, output to `<run>/gui.log`) and `start` returns; otherwise `start` execs `fleetmux attach`. The automatic choice never refuses: a missing window half falls back to attach instead of the exit 2 of an explicit `--gui`. `--resume` returns before this point and opens nothing. The test suite pins `interactive_terminal` to false (`tests/conftest.py`). Bare `fleetmux` (section 50) is not this automatic view: it opens the root fleet's window from a fleetmux pane and without a terminal too. With no root fleet it starts the `bare` root fleet with stdin from /dev/null, so this automatic view stays off for that `start`; the new root daemon's `gui_keep` opens the window, bare waits for it (`bare.window_wait_s`) and raises it, and opens it itself only when that wait runs out.
+- **Automatic view** (`fleet.auto_view`): without `--attach` / `--gui` / `--no-view`, a fleetmux `start` opens a view for the person who ran it. Conditions, in order: stdin and stdout are TTYs (`interactive_terminal`); no ancestor process is a `fleetmux server` (`inside_fleetmux_pane`: the start runs in a sidebar bash or other pane, which already shows the server); no `fleetmux gui` / `fleetmux attach` is open on the same runtime (`viewer_running`). If they hold: a desktop with `fleetmux-web` and no `SSH_CONNECTION` gets `fleetmux gui` started in the background in a new session (stdin from /dev/null, output to `<run>/gui.log`) and `start` returns; otherwise `start` execs `fleetmux attach`. The automatic choice never refuses: a missing window half falls back to attach instead of the exit 2 of an explicit `--gui`. `--resume` returns before this point and opens nothing. The test suite pins `interactive_terminal` to false (`tests/conftest.py`). Bare `fleetmux` (section 50) is not this automatic view: it opens the root fleet's window from a fleetmux pane and without a terminal too. With no root fleet it starts the `bare` root fleet with stdin from /dev/null, so this automatic view stays off for that `start`; the new root daemon's `gui_keep` opens the window, bare waits for it (`bare.window_wait_s`) and raises it, and opens it itself only when that wait runs out. The host-terminal rule of bare `fleetmux` (`bare.host_terminal_env`, section 50 item 2) is not part of this automatic view: in a host terminal on a desktop `start` still opens the window.
 - **Window keep-open** (`fleetmux/gui_keep.py`, `fleet.yaml#gui`): a root fleet's window stays on the desktop, and the fleet does this itself (§1): no launchd / cron item opens or reopens it. Every `gui.check_s` seconds (default 30) the root daemon looks for a `fleetmux gui --runtime <its runtime>` process (`ps`, runtime compared by real path; an `attach` does not count). The process is the window: it exits when the window is closed. When there is none, the daemon starts one the way `auto_view` does (new session, stdin from /dev/null, output to `<run>/gui.log`). This also covers a fleet started over ssh or by a scheduler: the first check opens the window, so `start` over ssh needs no extra step.
   - macOS: a process started from an ssh session can open a window on the desktop of the same user when that user is logged in at the console, so the daemon starts `fleetmux gui` directly (no `open`, no `launchctl asuser`, which needs root from ssh). The desktop exists when `/dev/console` is owned by the daemon's user; owned by root (nobody logged in) or by another user: no window, one `gui.no_desktop` log line, checked again every `check_s`.
   - Linux: the daemon's `DISPLAY` / `WAYLAND_DISPLAY`; without them, a `wayland-*` socket in `$XDG_RUNTIME_DIR` (else `/run/user/<uid>`), passed to the window as `WAYLAND_DISPLAY` / `XDG_RUNTIME_DIR`. An X11-only session that the daemon's environment does not name is not found: one `gui.no_desktop` line.
@@ -1355,6 +1355,18 @@ This section is the design record of the change.
      `fleetmux attach --runtime <runtime>`, also when a window is open (the root daemon keeps one open on the
      desktop, which a person over ssh does not see). This runs before `gui_problem()`, which would refuse without a
      desktop.
+     The same attach runs in a host terminal, a terminal that is itself a pane of another program (such as a Herdr
+     terminal), so the root fleet's view is drawn in that terminal: `open_window.in_host_terminal` holds when one of
+     the variables in `bare.host_terminal_env` is set and non-empty (shipped: `HC_TERMINAL_ID`, which a Herdr
+     terminal pane has and a command Herdr runs without a terminal does not), stdin and stdout are TTYs
+     (`interactive_terminal`), and no ancestor is a `fleetmux server` (`inside_fleetmux_pane`; panes inherit the
+     variable from a fleet started in a host terminal, and inside a pane the window path is kept). It attaches also
+     when a window is open. Without a terminal (a pipe, a script) the window path of items 3-4 is kept. The list is
+     read and validated only when a window could open here (`window_here` holds), before any raise, spawn or exec,
+     and in item 5 before the start; over ssh or without a desktop it is not read, so even a bad value leaves that
+     attach path as it was.
+     `fleet.window_here` is not changed: it is shared with `start`'s automatic view (section 33.6), which keeps
+     opening the window in a host terminal.
   3. Window already open: `gui_keep.gui_running(runtime)` returns the pid of `fleetmux gui --runtime <runtime>`
      (an `attach` does not count). On macOS `bring_window_to_front(pid)` raises its `fleetmux-web`. No new window and
      no server start; one line (it says "brought it to the front" only when the raise worked); exit 0.
@@ -1367,7 +1379,9 @@ This section is the design record of the change.
      user block: `~/.fleetmux/fleet.yaml` replaces it as a whole, missing keys take the built-in defaults
      (`fleet_config.BARE`), a bad value is refused before anything starts (`fleet_config.bare()`). Defaults:
      `enabled: true`, `name: main`, `lifecycle: service`, `home: ~/.fleetmux/fleets/{name}`, `roster` / `workers`
-     null, `start_args: []`, `window_wait_s: 30`, `window_poll_s: 0.5`. No model key: `start` takes the
+     null, `start_args: []`, `window_wait_s: 30`, `window_poll_s: 0.5`, `host_terminal_env: [HC_TERMINAL_ID]`
+     (item 2; a list of environment variable names, `[]` turns it off, anything else, `null` included, is
+     refused; a private block without the key takes the shipped list). No model key: `start` takes the
      `discovery` default pair; `start_args` may not carry the CLI / model flags, the flags bare sets itself, or
      `--no-view` / `--gui` / `--attach`.
      - One line names the fleet, its lifecycle and its home. Then `fleet.run_start` runs this release's
@@ -1381,8 +1395,9 @@ This section is the design record of the change.
      - The window: stdin from /dev/null keeps `start`'s automatic view off in the child, whatever terminal bare
        has. Bare takes the root from `<home>/latest.json` (right after `start` its daemon may not hold its lock or
        answer yet, so `join.find_root` is not asked) and runs the shared step of items 2-4 (`open_window.show`)
-       with a wait: no window here -> exec `attach --runtime` (over ssh the fleet is started, then attached, no
-       wait). Otherwise the window comes from the new root daemon's `gui_keep`: bare looks for
+       with a wait: no window here or a host terminal (item 2) -> exec `attach --runtime` (over ssh or in a host
+       terminal the fleet is started, then attached, no wait; the root daemon still keeps its desktop window,
+       `gui.keep_open`). Otherwise the window comes from the new root daemon's `gui_keep`: bare looks for
        `fleetmux gui --runtime <runtime>` (`gui_keep.gui_running`) at once and then every `window_poll_s`, at most
        `window_wait_s` in total, and raises it on macOS. The daemon's first check runs only after `start_all` (a new
        run) or a resume's reconcile and replay, so the wait can run out on a healthy start: then bare falls back
@@ -1405,6 +1420,12 @@ This section is the design record of the change.
   one fallback (opening, or raising a window that appeared), the shipped and private `bare` block, no sandbox waiver,
   refused values, no model flags, `enabled: false`, `--resume auto` in the bare home only, a resumed run, ssh /
   no desktop -> start then attach, a live root starts nothing, `fleet.run_start` and the conftest guard),
+  `tests/test_host_terminal.py` (host terminal with a terminal -> attach, also with a window open; no terminal, no
+  listed variable, `HC_SCOPE` alone, an empty value, `[]`, inside a pane -> the window path; ssh unchanged; shipped,
+  private and default list; bad values refused on every path before anything is shown),
+  `tests/test_host_terminal_bare.py` (no root in a host terminal -> start then attach without a wait; no terminal
+  or `[]` -> the wait as before; a bad list refused before any start),
+  `tests/test_host_terminal_auto_view.py` (`start`'s automatic view unchanged in a host terminal),
   `tests/test_gui_keep.py` (`gui_running` returns the pid), `rust/crates/app/tests/forward_cli.rs`
   (`no_arguments_forwards_gui_to_the_python_cli`, `dash_h_still_prints_usage_and_exits_0`).
 - **The Python CLI's own entry point is `fleetmux-py`**: `pyproject.toml` installs the console script `fleetmux-py` (`fleetmux.fleet:main`) into `<release>/.venv/bin/`, for launch scripts and `FLEETMUX_PYTHON_CLI`; `python -m fleetmux.fleet` works as well. It is not called `fleetmux`: that name belongs to the Rust binary in `<release>/bin/`, and whichever came first on `PATH` would win. An earlier version of this section kept the pre-fleetmux command, environment variables and release paths as permanent aliases; that was reversed: the aliases are gone, and only `fleetmux home migrate` (§50.1) still knows the old names.

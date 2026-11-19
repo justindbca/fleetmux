@@ -11,6 +11,9 @@ and adds no process scan or launcher of its own:
 * no desktop, no `fleetmux-web`, or an ssh session (`fleet.window_here`, the rule `start`'s auto view uses): exec
   `fleetmux attach --runtime <runtime>`, also when a window is open (the root daemon keeps one open on the
   desktop, which a person over ssh does not see);
+* a host terminal (`in_host_terminal`: a terminal that is itself a pane of another program, marked by one of the
+  variables in fleet.yaml#bare.host_terminal_env, with stdin and stdout at that terminal and not inside a fleetmux
+  pane): the same attach, also when a window is open; `fleet.window_here` and `start`'s auto view are unchanged;
 * an open window: `gui_keep.gui_running` (the `fleetmux gui --runtime <runtime>` pid), raised with
   `fleet.bring_window_to_front` on macOS; nothing new is started;
 * a root just started: its daemon's gui_keep opens the window; bare looks for it every `bare.window_poll_s` up to
@@ -56,6 +59,9 @@ def start_bare_root():
         raise SystemExit('fleetmux: fleet.yaml#bare: ' + str(exc)) from exc
     if not s['enabled']:
         return None
+    from fleetmux.backends.fleetmux import fleetmux_bin
+    if fleet.window_here(fleetmux_bin()):
+        host_terminal_env()  # a bad host list is refused before the start, where show() would read it
     home = Path(s['home'])
     print('No root fleet is running on this machine; starting ' + s['name'] + ' (' + s['lifecycle']
           + ' lifecycle, fleet home ' + str(home) + '; a resumable earlier run there is resumed)')
@@ -100,7 +106,10 @@ def show(root, wait=None):
     runtime = str(fleet.manager_for(fleet.load(root['config'])).runtime_root)
     found = fleetmux_bin()
     binary = found or 'fleetmux'
-    if not fleet.window_here(found):  # first: over ssh the daemon's window is open on a desktop nobody here sees
+    # over ssh the daemon's window is open on a desktop nobody here sees; in a host terminal the view goes into it.
+    # The host list is read only where a window could open (a bad one is refused there, before any raise / spawn /
+    # exec); without a window here this is the attach path as before, whatever the list holds.
+    if not fleet.window_here(found) or in_host_terminal(host_terminal_env()):
         attach = [binary, 'attach', '--runtime', runtime]
         sys.stdout.flush()
         os.execvp(attach[0], attach)
@@ -127,6 +136,25 @@ def show(root, wait=None):
         fleet.bring_window_to_front(proc.pid)
     print('Opened a window (log: ' + str(log) + ')')
     return 0
+
+
+def host_terminal_env():
+    """fleet.yaml#bare.host_terminal_env, validated; a bad value ends the command before it acts."""
+    try:
+        return fleet_config.host_terminal_env()
+    except (OSError, ValueError) as exc:
+        raise SystemExit('fleetmux: fleet.yaml#bare: ' + str(exc)) from exc
+
+
+def in_host_terminal(names=None):
+    """A person at a host terminal: a terminal that is itself a pane of another program (one of ``names``, default
+    fleet.yaml#bare.host_terminal_env, is set and non-empty), stdin and stdout at that terminal, and not inside a
+    fleetmux pane (panes inherit the variable from a fleet started there). Cheapest check first."""
+    from fleetmux import fleet
+    if names is None:
+        names = host_terminal_env()
+    return bool(any(os.environ.get(n) for n in names) and fleet.interactive_terminal()
+                and not fleet.inside_fleetmux_pane())
 
 
 def daemon_opens_window():

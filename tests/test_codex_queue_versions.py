@@ -168,8 +168,13 @@ class Reached(Exception):
     pass
 
 
-def _start_codex(tmp_path, monkeypatch, answer, claude='/bin/echo'):
+def _start_codex(tmp_path, monkeypatch, answer, claude=None):
     from fleetmux import cmux_manager, redis_runtime
+    if claude is None:  # start runs `<claude> --version`: a stand-in that prints no version, not the host's echo
+        stand_in = tmp_path / 'claude-stand-in'
+        stand_in.write_text('#!/bin/sh\necho "claude stand-in (test)"\n')
+        stand_in.chmod(0o755)
+        claude = str(stand_in)
     probed, saved = [], {}
     monkeypatch.setattr(cmux_manager, 'cmux_available', lambda: True)
     monkeypatch.setattr(codex_queue, 'capability', lambda codex, **kw: probed.append(codex) or answer)

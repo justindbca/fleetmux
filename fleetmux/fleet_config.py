@@ -11,6 +11,7 @@ a file whose top-level keys are all block names is read as blocks, anything else
 """
 import copy
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -157,7 +158,8 @@ def job_subfleet():
 
 
 BARE = {'enabled': True, 'name': 'main', 'lifecycle': 'service', 'home': '~/.fleetmux/fleets/{name}', 'roster': None,
-        'workers': None, 'start_args': [], 'window_wait_s': 30, 'window_poll_s': 0.5}
+        'workers': None, 'start_args': [], 'window_wait_s': 30, 'window_poll_s': 0.5,
+        'host_terminal_env': ['HC_TERMINAL_ID']}
 # start flags the bare block may not carry in start_args: the ones bare sets itself, the views (gui_keep must stay
 # on), and the CLI / model choice (that is fleet.yaml#discovery's default pair).
 BARE_OWN_FLAGS = ('--lifecycle', '--mode', '--name', '--resume', '--no-join', '--fleet-home', '--cmux-state-dir',
@@ -166,10 +168,30 @@ BARE_MODEL_FLAGS = ('--supervisor-cli', '--worker-cli', '--supervisor-model', '-
                     '--supervisor-pi-model', '--profile', '--supervisor-profile', '--worker-profile')
 
 
+ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+
+
+def host_terminal_env():
+    """bare.host_terminal_env (docs/design.md section 50): the environment variables that mark a host terminal, a
+    terminal that is itself a pane of another program; bare `fleetmux` typed there attaches in place. A tuple of
+    names, () when off (``[]``); missing from the block = BARE's list. A bad value is refused (ValueError)."""
+    raw = block('bare')
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError('fleet.yaml#bare must be a mapping with only: ' + ', '.join(BARE))
+    value = raw.get('host_terminal_env', BARE['host_terminal_env'])
+    if not isinstance(value, list) or not all(isinstance(n, str) and ENV_NAME.fullmatch(n) for n in value):
+        raise ValueError('fleet.yaml#bare.host_terminal_env must be a list of environment variable names '
+                         '([] = off), got ' + repr(value))
+    return tuple(value)
+
+
 def bare():
     """bare (docs/design.md section 50): the root fleet bare `fleetmux` starts when no root fleet runs. Keys missing
     from the block take BARE; ``home`` comes back with ``{name}`` filled in and ``~`` expanded. A bad value is refused
-    (ValueError), before anything starts."""
+    (ValueError), before anything starts. ``host_terminal_env`` is checked only by host_terminal_env(), read where a
+    window could open, so a bad list does not stop the ssh / no-desktop start."""
     raw = block('bare') or {}
     if not isinstance(raw, dict) or set(raw) - set(BARE):
         raise ValueError('fleet.yaml#bare must be a mapping with only: ' + ', '.join(BARE))

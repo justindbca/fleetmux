@@ -508,6 +508,10 @@ over `ssh`. Closing a viewer never stops an agent.
     Otherwise, when a `fleetmux gui` is already open on that fleet, it is brought to the front (macOS) and nothing
     new starts; with no window, the window starts in the background (output in `<run>/gui.log`), comes to the
     front, and the command prints `Opened a window (log: ...)` and returns.
+    In a terminal that is itself a pane of another program (a Herdr terminal, marked by a variable listed in
+    `bare.host_terminal_env`, shipped `[HC_TERMINAL_ID]`) it attaches in that terminal instead, also when the
+    window is open; without a terminal or inside a fleetmux pane it keeps the window. Set `host_terminal_env: []`
+    in your own `bare` block to turn this off.
     With no live root fleet (and no fleet running in this fleet home) it starts one with the defaults in the
     `bare` block of `fleetmux/config/fleet.yaml`: it prints one line naming the fleet and its home, then runs
     `fleetmux start --lifecycle service --name main --resume auto --no-join` in `~/.fleetmux/fleets/main`. A
