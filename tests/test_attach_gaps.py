@@ -4,12 +4,16 @@ Only private test Redis, fake cmux and fake CLIs (fixtures of test_subfleet / te
 """
 from pathlib import Path
 
+import pytest
+
 from test_service_attach import attach_up, op, root  # noqa: F401  (fixture)
 from test_subfleet import hook, result, step, stop_child_like_daemon, svc  # noqa: F401  (fixture)
+from test_named_subfleet_chain import named_chain_as_before  # noqa: F401  (fixture)
 from fleetmux import fleet, named_subfleet, remote, subfleet
 
 
 # ------------------------------------------------------------------ a drain with a dead child supervisor
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_detach_ends_the_drain_at_once_when_the_child_supervisor_is_dead(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -29,6 +33,7 @@ def test_detach_ends_the_drain_at_once_when_the_child_supervisor_is_dead(root):
     assert remote.result(f.r, rid)[0] == remote.FOUND
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_detach_with_a_live_busy_supervisor_still_drains(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -121,6 +126,7 @@ def _bind_page(rec):
     fleet.save(path, cfg)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_a_detached_child_keeps_no_history_viewer_and_shows_detached(root, monkeypatch):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -137,6 +143,7 @@ def test_a_detached_child_keeps_no_history_viewer_and_shows_detached(root, monke
     assert ('archive', 'docs') not in calls
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_detaching_a_child_that_is_already_down_marks_it_and_drops_its_page(root, monkeypatch):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -155,6 +162,7 @@ def test_detaching_a_child_that_is_already_down_marks_it_and_drops_its_page(root
     assert calls == [('archive', 'docs'), ('unarchive', 'docs')] and not f.r.hgetall(named_subfleet.DETACHED)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_an_attached_child_stopped_with_the_root_keeps_its_record_page(root, monkeypatch):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -173,6 +181,7 @@ import json  # noqa: E402
 from fleetmux import applet_host  # noqa: E402
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_an_attached_childs_applet_state_is_keyed_by_the_sub_fleet(root):
     t, f = root, root.f
     _, rec, _ = attach_up(t)
@@ -339,6 +348,7 @@ def test_options_that_cannot_apply_to_a_sub_fleet_are_refused(argv, service, wor
     assert words in str(exc.value.code) and 'Nothing was started' in str(exc.value.code)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_the_root_applies_the_forwarded_settings_to_the_attached_child(root, tmp_path):
     t, f = root, root.f
     kit = tmp_path / 'root-kit'
@@ -380,6 +390,7 @@ def test_a_supervisor_model_gets_a_worker_on_that_model(root):
     assert child_cfg['supervisor_model'] == 'fable-test'  # the adopting slot's model, not the root's
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_a_child_config_names_the_adopting_slots_model_not_the_roots(root):
     t, f = root, root.f
     f.cfg['supervisor_model'] = 'root-supervisor-model'
@@ -394,12 +405,14 @@ from test_service_split import split_tree  # noqa: E402,F401  (fixture)
 from test_escalate import ok_check  # noqa: E402,F401  (fixture)
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # §58 model chains: the slot keeps its model, as this test assumes
 def test_a_job_from_a_task_stub_takes_the_forwarded_settings(split_tree, tmp_path, monkeypatch):  # noqa: F811
     t, f = split_tree, split_tree.f
     f.cfg.update(worker_kit=str(tmp_path), supervisor_split=True)
-    overrides = dict(join.START_RESET, max_busy=1, worker_model='opus-test')
+    # §58 model chains (D10): a forwarded --worker-model is the job's worker chain [X]; it must resolve here
+    overrides = dict(join.START_RESET, max_busy=1, worker_model='haiku')
     _, _, cfg, _ = dev_job(t, tmp_path, monkeypatch, overrides=overrides)
-    assert cfg['max_busy'] == 1 and cfg['worker_model'] == 'opus-test'
+    assert cfg['max_busy'] == 1 and cfg['worker_model'] == 'haiku'
     assert cfg['worker_kit'] is None and cfg['supervisor_split'] is False
 
 

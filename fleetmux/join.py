@@ -70,7 +70,7 @@ STOP_WAIT, STOP_POLL = 120, 0.5  # s: how long `start` waits for a stopping flee
 # Every `start` option, by what an attach does with it (a test checks that each option of the start parser is in
 # exactly one group). Only options the person typed count: a value equal to the parser default is not "given".
 START_TAKEN = ('workers', 'worker_names', 'roster', 'kit_fleet', 'roles', 'lifecycle', 'mode', 'name', 'budget')
-START_LOCAL = ('attach', 'gui', 'no_view', 'no_join', 'resume', 'fleet_home', 'backend', 'extend_hours',
+START_LOCAL = ('attach', 'gui', 'no_view', 'no_join', 'resume', 'no_restore', 'fleet_home', 'backend', 'extend_hours',
                'transport_version', 'allow_development_v2')  # about this command, not the started fleet
 START_MACHINE = ('codex', 'pi', 'redis_server', 'redis_runtime_dir', 'cmux_bin', 'cmux_state_dir', 'codex_home',
                  'pi_agent_dir', 'host', 'security', 'no_security', 'prompt_table', 'chrome_script',
@@ -276,7 +276,25 @@ def _occupied(home):
     run = Path(data['run']) if isinstance(data, dict) and data.get('run') else None
     if run is None or not run.is_dir():
         return False
+    if _fleet().open_job_rows(run):  # section 58 "Restart": stopped with open jobs, continued by the next start
+        return True
     return live_run(home) is not None or not (run / 'result.json').exists()
+
+
+def own_stub(home, name, root_home):
+    """section 60: an existing service stub of this home for child ``name`` of the root in ``root_home`` (a start
+    run again after the root restored the child), else None."""
+    fleet = _fleet()
+    home = Path(home)
+    for path in [home / 'latest.json'] + sorted((home / 'joins').glob('*.json') if (home / 'joins').is_dir() else []):
+        try:
+            stub = fleet.load(path).get(KEY)
+        except (OSError, ValueError, AttributeError):
+            continue
+        if (isinstance(stub, dict) and stub.get('kind') == 'service' and stub.get('child') == name
+                and str(stub.get('root_home')) == str(root_home)):
+            return path
+    return None
 
 
 def stub_path(home, name):
@@ -519,7 +537,7 @@ def attach_service(args, root, home):
         raise SystemExit('start: the running service fleet ' + root['config'] + ' did not take ' + name + ' as a '
                          'service sub-fleet: ' + reason + '. Nothing was started. Pass --no-join to start this '
                          'service fleet on its own')
-    path = stub_path(home, name)
+    path = own_stub(home, name, root['home']) or stub_path(home, name)  # section 60: the same start again, one stub
     child = child_config_path({'root_config': root['config'], 'child': name})
     fleet.save(path, {KEY: dict(options, kind='service', child=name, attach_id=answer['id'], child_config=str(child),
                                 root_config=root['config'], root_home=root['home'], root_mode=root['mode'],
@@ -571,6 +589,50 @@ def _root(stub):
     if not (run / 'daemon.lock').is_file() or not fleet.daemon_running(run):
         raise JoinError('the root fleet ' + str(config) + ' is no longer running; run `fleetmux start` again')
     return cfg
+
+
+def _root_live(stub):
+    """True while the daemon of the stub's root run holds its lock."""
+    fleet = _fleet()
+    try:
+        cfg = fleet.load(stub.get('root_config'))
+    except (OSError, ValueError, TypeError):
+        return False
+    run = Path(cfg.get('run') or Path(stub['root_config']).parent)
+    return (run / 'daemon.lock').is_file() and fleet.daemon_running(run)
+
+
+def follow_home(path, data):
+    """section 58 "Restart": the stub's root run is down but another root runs in the same fleet home (``root_home``): the
+    stub follows it (root_config rewritten, the old one kept in ``previous_roots``), so task / status / stop / result
+    keep finding their jobs. Returns the (possibly updated) stub."""
+    stub = data[KEY]
+    home = stub.get('root_home')
+    if not home or _root_live(stub):
+        return stub
+    root = live_root(home)
+    if root is None or _resolved(root['config']) == _resolved(stub.get('root_config') or '/'):
+        return stub
+    sys.stderr.write('the root fleet of ' + str(home) + ' now runs ' + root['config'] + '; ' + str(path)
+                     + ' follows it\n')
+    stub['previous_roots'] = list(stub.get('previous_roots') or []) + [stub.get('root_config')]
+    stub.update(root_config=root['config'], root_mode=root['mode'])
+    _fleet().save(path, data)
+    return stub
+
+
+def mirrored_result(stub, job):
+    """section 58: the result a root kept on disk for ``job`` (<run>/job-results/<job id>.json), in the stub's root run or a
+    root run it followed before; None when there is none."""
+    fleet = _fleet()
+    for config in [stub.get('root_config')] + list(reversed(stub.get('previous_roots') or [])):
+        try:
+            cfg = fleet.load(config)
+            run = Path(cfg.get('run') or Path(config).parent)
+            return fleet.load(run / fleet.JOB_RESULTS / (job + '.json'))
+        except (OSError, ValueError, TypeError):
+            continue
+    return None
 
 
 def submit(root_config, spec):
@@ -638,6 +700,7 @@ def cli(args, path, data):
             return 2
     job = (stub.get('jobs') or [None])[-1]
     try:
+        stub = follow_home(path, data)
         if args.cmd == 'task' and getattr(args, 'recheck', None):  # the gate of a job: rechecked on the root
             _root(stub)
             return _passthrough(*fleet_cli(['task', '--recheck', args.recheck, '--config', str(stub['root_config'])],
@@ -662,7 +725,13 @@ def cli(args, path, data):
             target = getattr(args, 'id', None) or job
             if not target:
                 raise JoinError('no job submitted through ' + str(path) + ' yet')
+            disk = mirrored_result(stub, target)
+            if disk is not None and not _root_live(stub):  # the root is down: the result it kept on disk
+                print(json.dumps(disk, ensure_ascii=False))
+                return 0
             code, out = root_result(stub, target, getattr(args, 'wait', 0) or 0)
+            if code == 2 and disk is not None:  # expired from the root's Redis (RESULT_TTL)
+                out, code = disk, 0
             print(json.dumps(out, ensure_ascii=False))
             return code
         if not job:
@@ -672,6 +741,8 @@ def cli(args, path, data):
             print(json.dumps({'join': str(path), 'root_config': stub.get('root_config'), 'job': None,
                               'state': 'attached, no job submitted'}, ensure_ascii=False, indent=2))
             return 0
+        if args.cmd == 'stop' and not _root_live(stub):
+            return cancel_while_down(stub, job)
         _root(stub)
         row, item = job_view(stub, job)
         if row is None:  # no longer open on the root: it ended (or the root never knew it)
@@ -694,12 +765,36 @@ def cli(args, path, data):
         return 2
 
 
-def stop_job(stub, job, row, item):
-    """Stop the sub-fleet that runs ``job``, never the root: ``stop --config <that sub-fleet's config>``."""
+def cancel_while_down(stub, job):
+    """section 58 "Restart": the root is not running: the cancel is written to <root run>/job-cancels/<job id>.json and
+    applied (before anything is resumed) when the root starts again."""
     fleet = _fleet()
+    try:
+        cfg = fleet.load(stub['root_config'])
+    except (OSError, ValueError, TypeError) as exc:
+        raise JoinError('the root fleet config ' + str(stub.get('root_config')) + ' is unreadable: ' + str(exc)) from exc
+    run = Path(cfg.get('run') or Path(stub['root_config']).parent)
+    note = run / fleet.JOB_CANCELS / (job + '.json')
+    fleet.save(note, {'job': job, 'by': 'operator', 'at': time.time()})
+    print(json.dumps({'job': job, 'state': 'cancel recorded', 'note': 'the root fleet is not running; the cancel is '
+                      'applied when the root starts again (' + str(note) + ')'}, ensure_ascii=False))
+    return 0
+
+
+def stop_job(stub, job, row, item):
+    """Cancel ``job`` on the root (`task --cancel`: a queued / starting / suspended job ends at once with a result;
+    the cancel of a running one is recorded first), then, for a running one, stop its sub-fleet, never the root:
+    ``stop --config <that sub-fleet's config>``."""
+    fleet = _fleet()
+    code, out, err = fleet_cli(['task', '--cancel', job, '--config', str(stub['root_config'])])
+    answer = parse_json(out)
+    if answer.get('status') in ('cancelled', 'ended', 'stopping'):
+        print(json.dumps(answer, ensure_ascii=False))
+        return 0
     if not item or not item.get('run'):
-        raise JoinError('job ' + job + ' is ' + str(row.get('state') or 'queued') + ' and has no sub-fleet yet; '
-                        'the root has no command to cancel a job before its sub-fleet starts')
+        raise JoinError('job ' + job + ' is ' + str(row.get('state') or 'queued') + ' and has no sub-fleet yet, and '
+                        'the root did not cancel it: ' + str(answer.get('reason') or err.strip() or out.strip()
+                                                                 or 'exit code ' + str(code)))
     child_config = Path(item['run']) / 'config.json'
     try:
         parent = fleet.load(child_config).get('parent_config')
@@ -776,7 +871,17 @@ def service_cli(args, path, stub):
         print(json.dumps(out, ensure_ascii=False))
         return code
     if args.cmd == 'stop':  # a program down through the root: drain, then down; never the root itself
-        _root(stub)
+        try:
+            _root(stub)
+        except JoinError:
+            if not stub.get('root_home'):
+                raise
+            # section 60: the root is down; the cancel is written where its next start reads it (never brought back)
+            from fleetmux import restart_state
+            restart_state.write_cancel({'fleet_home': stub['root_home']}, name, how='stop while the root was down')
+            print(json.dumps({'child': name, 'cancelled': True, 'root': 'down', 'note': 'the next start of the root '
+                              'does not bring it back'}, ensure_ascii=False))
+            return 0
         spec = {'id': 'detach-' + uuid.uuid4().hex[:12], 'op': 'subfleet.detach', 'name': name}
         code, out, err = fleet_cli(['request', '--config', str(stub['root_config']), '-'], stdin=json.dumps(spec))
         answer = parse_json(out)

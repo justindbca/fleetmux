@@ -25,15 +25,25 @@ from pathlib import Path
 from typing import Optional
 
 from fleetmux import fleetmux_history, subfleet
+from fleetmux.i18n import t
 from fleetmux import history as history_page
 
 MAX_FLEETS = 16
 THROTTLE_S = 1.0  # every kv.set makes the server redraw, so at most one push per second
 HISTORY_RESCAN_S = 30.0  # a directory scan costs more than a kv compare, so rescan the ↺ history rarely (§18.4)
-STATE_TEXT = {'running': '运行中', 'paused': '已暂停', 'stopping': '正在关闭'}
+STATE_TEXT = {'running': ('sidebar.state.running', 'running'), 'paused': ('sidebar.state.paused', 'paused'),
+              'stopping': ('sidebar.state.stopping', 'stopping')}  # key, English (ui.language, §63)
 SIDEBAR_REASON = 'fleetmux 侧栏「关闭整个 fleet」'  # §12.1: what request_close records as the reason
-REFUSED_REASON = '这个 run 没有 lifecycle，请在终端跑 start.sh stop'
+
+
+def refused_reason() -> str:
+    """kv ``stop_request.reason`` of a refused close (the terminal shows it on the status line)."""
+    return t('sidebar.refused', 'This run has no lifecycle. Run start.sh stop in a terminal.')
+
+
 PAGE_ID_RE = re.compile(r'[A-Za-z0-9._-]{1,64}')  # a fleetmux page id (M4 design §4.1)
+CHILD_STOP = 'child_stop'  # root-only kv: a child card's confirmed close request (design section 19)
+SIDEBAR_BY = 'fleetmux-sidebar'  # who cancelled / took down a sub-fleet from the sidebar
 
 
 def _fleet():
@@ -52,27 +62,105 @@ def _home(path: str) -> str:
     return path
 
 
-def _child(key: str, item: dict) -> dict:
-    """One sub-fleet card from a ``subfleet.tree()`` item: flat, no indent."""
+def _child(key: str, item: dict, close: Optional[dict] = None) -> dict:
+    """One sub-fleet card from a ``subfleet.tree()`` item: flat, no indent. A sub-fleet whose stop was sent is drawn
+    ``stopping`` (no close button); ``close`` (design section 19): the texts of its close box, only for a card the
+    sidebar may close (:func:`stop_path`)."""
     run = item.get('run')
     workers = item.get('workers')
     count = workers if isinstance(workers, int) else len(workers or [])
     card = {'id': Path(run).name if run else key, 'title': item.get('title') or key}
     if item.get('state') in subfleet.ACTIVE:
-        card.update(state='running', line1='运行中 · %d worker' % count,
-                    line2='由 %s 委派' % (item.get('slot') or '?'))
+        stopping = item.get('state') == 'stopping'
+        line1 = (t('sidebar.child.stopping', 'stopping, workers {count}', count=count) if stopping else
+                 t('sidebar.child.line1', 'running, workers {count}', count=count))
+        card.update(state='stopping' if stopping else 'running', line1=line1,
+                    line2=t('sidebar.child.line2', 'delegated by {slot}', slot=item.get('slot') or '?'))
     else:
-        card.update(state='reclaimed', line1='已收回 · 结局 %s' % (item.get('outcome') or '—'),
-                    line2='只读，可看记录')
+        card.update(state='reclaimed', line1=t('sidebar.reclaimed.line1', 'reclaimed, outcome {outcome}',
+                                               outcome=item.get('outcome') or t('sidebar.no_outcome', '-')),
+                    line2=readonly_line2())
+    if close:
+        card['close'] = close
     return card
 
 
-def _walk(tree: dict, out: list, runs: Optional[list] = None) -> None:
-    """Pre-order over ``subfleet.tree()``: each sub-fleet, then its own sub-fleets (``runs``: each card's run)."""
-    for key, item in (tree or {}).items():
+def readonly_line2() -> str:
+    """Second line of a reclaimed (read-only) sub-fleet card; lifecycle_close uses it for a tree closed with its root."""
+    return t('sidebar.readonly.line2', 'read-only, log kept')
+
+
+def stop_path(f, run) -> tuple:
+    """Design section 19: how the sidebar may stop the sub-fleet in ``run``: ``(kind, key, '')`` with kind ``job`` (key:
+    the job id), ``named`` or ``attached`` (key: its name), else ``(None, None, reason)``. One rule for the card's button
+    and for the request the server sends after the box was confirmed: a direct child of this fleet, still running, a
+    job whose row is open and not being cancelled, or a named / attached sub-fleet not already going down. Split /
+    escalate children and deeper levels have no stop path here."""
+    d = Path(run) if run else None
+    if d is None or not (d / 'subfleet.json').is_file():
+        return None, None, 'no such sub-fleet of this fleet'
+    if d.parent != Path(f.cfg['run']) / 'sub':
+        return None, None, 'only a direct sub-fleet of this fleet can be closed here'
+    rec = subfleet.record(d)
+    if rec.get('state') != 'running':
+        return None, None, 'it is not running (state %s)' % (rec.get('state') or '?')
+    jid = rec.get('job')
+    if jid:
+        rows = getattr(f, 'job_state', None)
+        job = (rows() if rows else {}).get(jid)
+        if job is None:
+            return None, None, 'job %s is not open on this fleet' % jid
+        if job.get('cancel'):
+            return None, None, 'job %s is already being cancelled' % jid
+        return 'job', jid, ''
+    if rec.get('named'):
+        from fleetmux import named_subfleet
+        name = rec.get('name') or rec.get('task_id') or d.name
+        if named_subfleet.ops(f, name, 'down'):
+            return None, None, '%s is already going down' % name
+        return ('attached' if name in named_subfleet.attached(f) else 'named'), name, ''
+    return None, None, 'only a job or a named sub-fleet can be closed from the sidebar'
+
+
+def _close_texts(kind: str, key: str, item: dict) -> dict:
+    """The close box of a child card: it names the sub-fleet and says which path confirming takes."""
+    title = item.get('title') or key
+    if kind == 'job':
+        return {'title': t('sidebar.child_close.job_title', 'Close sub-fleet "{title}" (job {job})?', title=title,
+                           job=key),
+                'body': t('sidebar.child_close.job_body', 'Cancels this job: the sub-fleet stops and its result is '
+                          'recorded as cancelled (published as failed, outcome cancelled). The run log and the '
+                          'artifacts written so far are kept.')}
+    how = 'subfleet detach' if kind == 'attached' else 'subfleet down'
+    return {'title': t('sidebar.child_close.named_title', 'Close named sub-fleet "{name}"?', name=key),
+            'body': t('sidebar.child_close.named_body', 'Takes it down with {how}: it drains, then stops. The run log '
+                      'is kept.', how=how)}
+
+
+def _running_first(tree: dict) -> list:
+    """One level of ``subfleet.tree()`` (creation order) for the sidebar: the running sub-fleets in creation order,
+    then the finished ones newest first, so the card cap never hides a running one. Pages are never dropped here."""
+    items = list((tree or {}).items())
+    running = [kv for kv in items if kv[1].get('state') in subfleet.ACTIVE]
+    finished = [kv for kv in items if kv[1].get('state') not in subfleet.ACTIVE]
+    return running + finished[::-1]
+
+
+def _walk(tree: dict, out: list, runs: Optional[list] = None, f=None) -> None:
+    """Pre-order over ``subfleet.tree()``: each sub-fleet, then its own sub-fleets (``runs``: each card's run); at every
+    level the running ones first (:func:`_running_first`). ``f`` (the root's own level only): a card the sidebar may
+    close carries its ``close`` texts (design section 19); deeper levels never do."""
+    for key, item in _running_first(tree):
         if len(out) >= MAX_FLEETS:
             return
-        out.append(_child(key, item))
+        close = None
+        if f is not None and item.get('state') == 'running':
+            try:  # the card push never fails over its close button: on any error the card simply has none
+                kind, name, _ = stop_path(f, item.get('run'))
+            except Exception:
+                kind = name = None
+            close = _close_texts(kind, name, item) if kind else None
+        out.append(_child(key, item, close))
         if runs is not None:
             runs.append((out[-1], item.get('run')))
         _walk(item.get('subfleets') or {}, out, runs)
@@ -114,15 +202,25 @@ def _live_fleets(tree: dict, out: list) -> None:
         _live_fleets(item.get('subfleets') or {}, out)
 
 
+CLOSE_MAX = 400  # Rust's sidebar parse refuses a longer `close` string and then draws no sidebar
+
+
 def _close(f, title: str, tree: dict) -> dict:
     """The close-confirm text: the root, plus every live sub-fleet it takes down with it (§12.1)."""
-    body = '会停掉监工、%d 个 worker' % len(f.workers)
+    body = t('close.body.head', 'Stops the supervisor and its workers ({workers})', workers=len(f.workers))
     live = []
     _live_fleets(tree, live)
+    tail = t('close.body.tail', '. Running work is interrupted. The run log is kept; restore it later with the '
+                                'restore button in the sidebar.')
     if live:
-        body += '，以及它的子 fleet ' + '、'.join('%s（含 %d 个 worker）' % item for item in live)
-    body += '。正在做的活会中断。运行记录保留，之后可以在侧栏点 ↺ 恢复，接着原来的活。'
-    return {'title': '关闭整个 fleet「%s」？' % title, 'body': body}
+        items = t('close.body.sep', ', ').join(
+            t('close.body.child', '{title} (workers: {workers})', title=name, workers=n) for name, n in live)
+        children = t('close.body.children', ', and its sub-fleets {list}', list=items)
+        if len(body) + len(children) + len(tail) > CLOSE_MAX:
+            children = t('close.body.children_n', ', and its {n} sub-fleets', n=len(live))
+        body += children
+    body = (body + tail)[:CLOSE_MAX]
+    return {'title': t('close.title', 'Close the whole fleet "{title}"?', title=title), 'body': body}
 
 
 def _history(f) -> list:
@@ -149,16 +247,17 @@ def payload(f, history: Optional[list] = None) -> dict:
         'id': root_id,
         'title': title,
         'state': state,
-        'line1': '%s · 监工+%d worker（%d忙）' % (STATE_TEXT[state], len(f.workers), busy),
+        'line1': t('sidebar.line1', '{state}, workers {workers}, busy {busy}', state=t(*STATE_TEXT[state]),
+                   workers=len(f.workers), busy=busy),
         'line2': _home(cfg.get('fleet_home') or str(Path(cfg['run']).parent.parent)),
     }]
     tree = subfleet.tree(cfg)
     if _pages(f):
         runs = []
-        _walk(tree, cards, runs)
+        _walk(tree, cards, runs, f=f)
         _add_pages(cards[0], runs)
     else:
-        _walk(tree, cards)
+        _walk(tree, cards, f=f)
     cards.extend(fleetmux_history.cards(_history(f) if history is None else history))
     return {'v': 1, 'current': root_id, 'fleets': cards[:MAX_FLEETS], 'close': _close(f, title, tree)}
 
@@ -183,10 +282,50 @@ def _stop_request(f) -> None:
         return  # already closing: the second tick must not ask again
     from fleetmux import lifecycle_close
     if not lifecycle_close.managed(f):
-        f.mgr._kv_set('stop_request', _kv_text({'v': 1, 'state': 'refused', 'reason': REFUSED_REASON}))
+        f.mgr._kv_set('stop_request', _kv_text({'v': 1, 'state': 'refused', 'reason': refused_reason()}))
         return
     lifecycle_close.request_close(f, 'user', SIDEBAR_REASON, resumable=True, via='fleetmux-sidebar')
     f.mgr._kv_set('stop_request', _kv_text({'v': 1, 'state': 'accepted'}))
+
+
+def close_child(f, card_id: str) -> tuple:
+    """Design section 19: stop the sub-fleet of child card ``card_id`` (its run directory's name) once the user confirmed
+    its box. The card is checked again by :func:`stop_path`, never trusted by its id alone. ``('accepted', note)`` or
+    ``('refused', reason)``: a job through ``Fleet.job_cancel`` (its result is published failed with outcome
+    ``cancelled`` when the sub-fleet is collected), a named sub-fleet through an approved ``subfleet.down`` (the
+    confirmation is the approval; the gate still refuses an autostart one), an attached one through ``detach``."""
+    try:
+        d = next((d for d in subfleet.children_dirs(f.cfg['run']) if d.name == card_id), None) if card_id else None
+        kind, key, why = stop_path(f, d)
+        if kind == 'job':
+            f.job_cancel(key, by=SIDEBAR_BY)
+            return 'accepted', 'job %s 已取消，子 fleet 正在停' % key
+        if kind in ('named', 'attached'):
+            from fleetmux import named_subfleet
+            why = named_subfleet.sidebar_down(f, key, attached=kind == 'attached')
+            if not why:
+                return 'accepted', '%s 正在收回（%s）' % (key, 'subfleet detach' if kind == 'attached' else 'subfleet down')
+    except Exception as exc:  # never kills the daemon tick; the user sees why
+        why = 'the stop failed: %s' % str(exc)[:200]
+    f.log('sidebar.child_stop_refused', card=card_id, reason=why)
+    return 'refused', why
+
+
+def _child_stop_request(f) -> None:
+    """Handle kv ``child_stop`` once per request (``id`` + ``at``): only a ``requested`` value, which the server writes
+    after ``y`` in a child card's box, is acted on, and it is answered ``accepted`` / ``refused`` with a reason."""
+    try:
+        req = json.loads(f.mgr.kv_get(CHILD_STOP) or 'null')
+    except ValueError:
+        return
+    if not isinstance(req, dict) or req.get('state') != 'requested':
+        return
+    key = (str(req.get('id') or ''), req.get('at'))
+    if key == getattr(f, '_fmx_child_stop', None):
+        return  # already handled: a repeated tick or a value written back never acts twice
+    f._fmx_child_stop = key
+    state, reason = close_child(f, key[0])
+    f.mgr._kv_set(CHILD_STOP, _kv_text({'v': 1, 'state': state, 'id': key[0], 'reason': reason}))
 
 
 def _clear_restorable(f) -> None:
@@ -207,6 +346,7 @@ def tick(f, now: Optional[float] = None) -> None:
     if _fleet().run_backend(f.cfg) != 'fleetmux':
         return  # another backend's manager has no kv_get: never touch f.mgr
     _stop_request(f)  # before the throttle: a close request is handled on the tick that reads it
+    _child_stop_request(f)  # design section 19: a child card's confirmed close, same rule
     _clear_restorable(f)  # the daemon is back: the ↺ list belongs to a server without a fleet
     now = time.monotonic() if now is None else now
     last = getattr(f, '_fmx_sidebar_at', None)

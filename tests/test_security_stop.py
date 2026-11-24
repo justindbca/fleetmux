@@ -25,7 +25,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import audits, event, fx  # noqa: F401  (fx: pi supervisor + worker-1/2, service, v2)
 from test_channels_contract import FakeChannel
 from test_lifecycle_close import stop_tail
-from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, runtime_v2, subfleet, tabs
+from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, restart_state, runtime_v2, subfleet, tabs
 from fleetmux.channels import envelope, security, stop
 
 OLD_PARTS = ['roster', 'advisor', 'lifecycle', 'result', 'contracts', 'subfleet', 'tabs', 'fleetmux',
@@ -649,6 +649,7 @@ def test_tick_table_appends_security_after_channels(monkeypatch):
     monkeypatch.setattr(subfleet, 'tick', boom('subfleet'))
     monkeypatch.setattr(tabs, 'open_all', boom('tabs'))
     monkeypatch.setattr(fleetmux_sidebar, 'tick', boom('fleetmux'))
+    monkeypatch.setattr(restart_state, 'tick', boom('restart'))
 
     class Stop(BaseException):
         pass

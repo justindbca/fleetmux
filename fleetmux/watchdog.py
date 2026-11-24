@@ -1082,7 +1082,8 @@ class Watchdog:
         try:
             new = f.spawn(slot, rt.resume_prompt(slot, 'it froze: ' + why).format(label=label) if thread else
                           '[Same-task takeover] You are ' + label + ' (taking over from ' + prev + ', which '
-                          'froze and was stopped). Read the handoff note ' + str(note) + '. In this turn only read '
+                          + ('was held (' + why + ') and was stopped by the daemon' if reason in ('regen', 'requeue') else
+                             'froze and was stopped') + '). Read the handoff note ' + str(note) + '. In this turn only read '
                           'the note, do no task work, and make your final reply exactly READY.'
                           + (' ' + revive.pop('text') if revive else ''), launch_held=True)
         except RuntimeError as exc:
@@ -1098,10 +1099,25 @@ class Watchdog:
                 slot, msg, msg, retired=True, note=str(note), previous=prev))
         if thread:  # queued before the gate opens; the successor gets it after its READY (pump: idle only)
             rt.redeliver(slot, msg, 'after the session of ' + prev + ' froze')
+        elif reason == 'requeue':
+            self.requeue_after_retire(slot, prev, label, why, msg)
+        if reason == 'requeue':
+            # §24 held requeue: the successor owns the slot; the old generation's held / requeue marks go with it
+            # (the budget log requeue_log stays).
+            f.setf(slot, requeue_due='', requeue_state='', held_since='', held_at='', held_alert_at='',
+                   held_tried='', hold_pause='')
+        if reason == 'regen':
+            # §24 supervisor regeneration: the successor owns the slot; the StopFailure / held / regen marks of the
+            # old generation go with it (the budget log regen_log stays). A StopFailure message is already queued
+            # once at the head (its lease is idle: msg is empty, so tell adds nothing).
+            f.setf(slot, stopfail_at='', stopfail_g='', stopfail_retry_at='', regen_due='', api_error='',
+                   regen_state='', regen_gen=generation + 1, link_lost='0', link_offline=0, held_since='', held_at='',
+                   held_alert_at='', held_tried='', hold_pause='')
         f.setf(slot, launch_ready=1, retired_pane='')
         history.record(f.run_dir, slot=slot, label=prev, generation=generation, handoff='' if thread else str(note),
                        snapshot=str(snapshot), source='midturn' if is_midturn else 'frozen-resume' if thread
-                       else 'frozen', timed_out=True)
+                       else 'regen' if reason == 'regen' else 'requeue' if reason == 'requeue' else 'frozen',
+                       timed_out=True)
         f.refresh_history()
         self.audit('watch.frozen_restarted', slot=slot, level='error', prev=prev, label=label, reason=why,
                    screen=path, handoff='' if thread else str(note), message_id=msg.get('message_id', ''),
@@ -1109,8 +1125,11 @@ class Watchdog:
         if revive:
             self.audit('supervisor.revived', slot=slot, level='error', prev=prev, label=label, reason=why, **revive)
         self.next_check.pop(slot, None)
-        if not is_midturn and not thread:
-            self.tell(slot, prev, label, why, msg)
+        if not is_midturn and not thread and reason != 'requeue':  # requeue: requeue_after_retire told the caller
+            self.tell(slot, prev, label, why, msg, regen=reason == 'regen')
+        if reason == 'regen':
+            self.audit('supervisor_regen.done', slot=slot, level='error', prev=prev, label=label, reason=why,
+                       message_id=msg.get('message_id', ''))
         return True
 
     def revive_summary(self, info, msg):
@@ -1135,6 +1154,46 @@ class Watchdog:
                     applied=applied if msg.get('message_id') else None,
                     decisions=[clock(at) + ' ' + d for at, d in decisions])
 
+    def regen_requeue(self, prev, label, why, msg):
+        """§24 supervisor regeneration: the held message, whose delivery confirm_retired just cancelled (result not
+        applied, old session proven gone), goes once to the new generation with a "previous generation did not
+        finish" note and no bus deadline. A request-bound routing prompt whose request already has its public
+        result (published when it was held) is not sent again: that result stands."""
+        from fleetmux.fleet import REQ
+        from fleetmux.runtime_v2 import NO_DEADLINE_MS, REGEN_NOTE
+        f, rt = self.f, self.rt
+        rid, kind = msg.get('request_id'), msg.get('kind')
+        if f.service and kind != 'followup' and rid and not f.r.hgetall(REQ + rid):
+            raw = f.r.get(rt.prefix + ':public:' + hashlib.sha256(rid.encode()).hexdigest())
+            status = (json.loads(raw).get('status') if raw else '') or ''
+            self.audit('supervisor_regen.request_settled', slot='supervisor', request_id=rid, level='warn',
+                       message_id=msg.get('message_id', ''), detail={'status': status})
+            return
+        if not f.running():
+            self.audit('supervisor_regen.message_dropped', slot='supervisor', level='warn',
+                       message_id=msg.get('message_id', ''), error='task not running')
+            return
+        text = (msg.get('body') or {}).get('text', '')
+        note = REGEN_NOTE.format(prev=prev, why=why, label=label)
+        rt.queue('supervisor', note + text, request_id=rid, kind=kind, deadline_at=NO_DEADLINE_MS)
+
+    def requeue_after_retire(self, slot, prev, label, why, msg):
+        """§24 held requeue: the old session is proven gone and its delivery cancelled (confirm_retired). The request
+        goes to the successor once more by the lost-slot rules (redeliverable / replay_request: replay + 1 within
+        max_attempts, never with replay false). A request that may no longer be re-run but is still open is
+        published failed; one that already has its result (e.g. its own timeout) is left as it is."""
+        from fleetmux.fleet import REQ
+        f, rt = self.f, self.rt
+        rid = msg.get('request_id') if msg else ''
+        if msg and rt.redeliverable(slot, msg):
+            rt.redeliver(slot, msg, 'after the held session of ' + prev + ' was stopped')
+            self.audit('held_requeue.replayed', slot=slot, level='warn', prev=prev, label=label, request_id=rid,
+                       message_id=msg.get('message_id', ''))
+        elif rid and f.r.hgetall(REQ + rid):
+            rt.transaction('requeue-publish-' + uuid.uuid4().hex, lambda: rt.publish(
+                rid, 'failed', worker=label, error=prev + ' was held (' + why + ') and stopped; the request was not '
+                're-run (attempts used or replay false)'))
+
     def abort_rotation(self, slot, old, label, new, screen, why):
         """Undo a failed rotation: remove the successor, give the slot back to the frozen session, hold it.
 
@@ -1153,7 +1212,7 @@ class Watchdog:
                     'successor ' + str(new) + '; two sessions may hold slot ' + slot + '. Close one by hand.')
             f.setf(slot, launch_ready=0, retired_pane=old.get('pane', ''))
             rt.transaction('watch-frozen-' + uuid.uuid4().hex, lambda: rt.hold(slot, text))
-            rt.finish('blocked', text)
+            rt.finish('blocked', text, kind='integrity', slot=slot)
             return False
         f.setf(slot, **{k: v for k, v in old.items() if k != 'watch_state'})
         f.setf(slot, watch_state='frozen', launch_ready=old.get('launch_ready', '1'),
@@ -1164,10 +1223,12 @@ class Watchdog:
             slot, 'frozen; ' + why + '. Successor removed, frozen session left as it was (screen ' + screen + ')'))
         return False
 
-    def tell(self, slot, prev, label, why, msg):
+    def tell(self, slot, prev, label, why, msg, regen=False):
         """The cancelled work is not re-run: the supervisor (or the request's caller) decides."""
         from fleetmux.fleet import REQ
         f, rt = self.f, self.rt
+        if regen and msg and slot == 'supervisor':
+            return self.regen_requeue(prev, label, why, msg)
         if not msg or not f.running():
             return
         if slot == 'supervisor':

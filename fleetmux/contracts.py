@@ -29,7 +29,7 @@ SAMPLE_RULE = 'sample is required and must itself satisfy min_chars / contains /
 SKELETON_TRIES = None  # user 10/13: fix interfaces until everything passes; only the task `hours` budget bounds it
 SKELETON = '__skeleton__'  # owner marker of the P1 skeleton delivery
 READY_RE = re.compile(r'(' + IF_RE + r')@(\d+) provided: ready\b')
-REPORT_KEYS = ('interface_change', 'escalate', 'proposal', 'workers')
+REPORT_KEYS = ('interface_change', 'escalate', 'proposal', 'workers', 'delta_t', 'delta_c')  # delta_*: §62
 EXTRA_SECTIONS = re.compile(r'^[\s>*#_-]*(interfaces|peer notices|question for supervisor)[\s*_]*:[\s*_]*(.*)$', re.I)
 
 
@@ -473,7 +473,8 @@ def dispatch(state, items, resolve):
             raise ValueError('serial_reason must be integration or exploratory')
         row = dict(tasks.get(m) or {'id': m, 'attempts': 0, 'stale': []})
         row.update(to=slot, provides=lists['provides'], consumes=lists['consumes'], edits=lists['edits'],
-                   depends_on=lists['depends_on'], serial_reason=reason, instruction=item['instruction'].strip())
+                   depends_on=lists['depends_on'], serial_reason=reason, instruction=item['instruction'].strip(),
+                   leaf=item.get('leaf') is True)
         row['stale'] = []
         tasks[m] = row
     for m in seen:

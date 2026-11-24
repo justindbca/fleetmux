@@ -143,7 +143,7 @@ def test_aborted_failed_unfinished_keeps_hold_path_and_resumes_clock(plan, flag)
 
 def test_wall_wins_over_midturn_and_does_not_split(plan):
     f, rt, source, env = order_plan(plan)
-    f.on_wall = lambda *args: {'wall': {'scope': 'account'}}
+    f.on_wall = lambda *args, **kw: {'wall': {'scope': 'account'}}  # safeguards: callers pass wall=
     f.notify_later = lambda rec: None
     rt.settle(SLOT, dict(delivery=env, candidates=[], failed=False, aborted=False,
                        wall_text="You've hit your usage limit"))

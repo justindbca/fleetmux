@@ -205,6 +205,24 @@ walls:
   notices:
     - "You've used \\d+(?:\\.\\d+)?% of your\\b"
     - "/usage-credits to keep using"
+  # Safeguards refusal (user 2026-11-23, docs/design.md section 23): the Claude CLI's own refusal of one message,
+  # "API Error: <model>'s safeguards flagged this message (https://www.anthropic.com/legal/aup). ...", ending the
+  # turn with StopFailure (error invalid_request). Scope model_pool (only that model is skipped), kind safeguards.
+  # Read only from CLI-owned text: the StopFailure hook's error fields and the transcript's API-error row, and on a
+  # screen only a line that also matches safeguards_screen (the CLI's own error line: the result glyph U+23BF, then
+  # "API Error:"). A turn text or a report pasted into a pane is never read for it.
+  # The slot then walks its role's WHOLE discovery chain: first the entries whose model matches a safeguards_prefer
+  # pattern (discover.matches, the only_via pattern form; gpt = the OpenAI family on pi), in chain order, then the
+  # other entries in chain order, skipping the flagged model; none usable -> stop.
+  # StopFailure: the transcript's API-error row of this turn and error_details are read; last_assistant_message only
+  # when no such row could be read yet and the hook's error type is one of safeguards_error_types.
+  # A private walls block that lacks one of these four keys gets the shipped value; a key set to [] turns it off.
+  safeguards:
+    - "safeguards flagged this message"
+  safeguards_screen:
+    - "^\\s*\u23bf\\s+API Error:.{0,80}?safeguards flagged this message"
+  safeguards_prefer: [gpt]
+  safeguards_error_types: [invalid_request]
   # Same CLI one tier down (2026-09-20). Codex gpt-5.6-* names are copied as-is: v1 design §91
   # flags them as stale; fix them here when the Codex catalogue is confirmed. Not read by the wall decision since
   # 2026-11-11 (the discovery chain replaced it); kept as the copy of the operator's cli_tier_map.yaml.
@@ -341,7 +359,7 @@ models:
     domains: null
     context_window: 200000
     handoff_ratio: null
-    max_concurrent: 1
+    max_concurrent: null
     roles_allowed:
     - orchestrator
     - falsifier
@@ -711,6 +729,57 @@ daemon_watch:
   # root, the user channel; again at most every held_realert_s. Works when the sub-fleet's daemon itself is down.
   subfleet_stuck_after_s: 600
   subfleet_check_s: 60
+  # Supervisor regeneration (docs/design.md §24): this fleet's own supervisor (not an adopted sub-fleet supervisor)
+  # held and not recovered by the existing path (stop proof -> API-error retry) for held_after_s, or ended by an
+  # API / network error -> the daemon ends that session (kill and verify, screen kept in history) and starts its
+  # next generation; the unsettled message goes to it once with a note. At most supervisor_regen_max new
+  # generations within supervisor_regen_window_s awake seconds (its own budget, separate from the link-restart
+  # limit); supervisor_regen_backoff_s between two (seconds, or a list: the k-th wait, the last repeats). Before
+  # each, a connectivity probe: auto = the CLI's declared route port, plus the TCP probes when the last error is a
+  # network error; tcp = always both; off = none. Offline waits backoff[0] and spends nothing. Used up -> reported
+  # outward (parent fleet, lifecycle notify, the run's channels), never to the supervisor itself. Each key is
+  # validated on its own; a bad value keeps its default. Read by the daemon; not passed to the pi extension.
+  supervisor_regen: true
+  supervisor_regen_max: 3
+  supervisor_regen_window_s: 3600
+  supervisor_regen_backoff_s: [60, 300, 900]
+  supervisor_regen_probe: auto
+  # Supervisor BLOCKED on a sub-fleet notice (docs/design.md section 24): at a root fleet (no parent), a BLOCKED that answers a
+  # [sub-fleet stuck] / [sub-fleet held] notice about one of its own sub-fleets only marks that sub-fleet as waiting
+  # for a human (`attention` in its record, shown by `fleetmux status`); the root is not paused and its task does not
+  # end. The marked sub-fleet is not reported to the supervisor again until it moves; the user channel still is.
+  # false = every BLOCKED pauses the root (service) / ends its task (task). A fleet with a parent always keeps that.
+  # Read by the daemon; not passed to the pi extension.
+  subfleet_blocked_marks_child: true
+  # No route for human notices (docs/design.md section 24): a root fleet with no channels entry that pushes run_closed
+  # or daemon_down, no FLEETMUX_TG_CMD / notify_commands.tg and no initiator says so at start (stderr), at the daemon
+  # start (audit notify.no_route) and in `fleetmux status` (human_notice). Every notice for a human that left on no
+  # leg is counted in <run>/notify-undelivered.json with the full text of the latest one. false = no warning, no
+  # count. Read by the daemon; not passed to the pi extension.
+  no_route_alarm: true
+  # Held requeue (docs/design.md section 24): a service worker whose turn on a pure request was interrupted (cause in
+  # held_requeue_causes: aborted = Escape / abort, lease_expired, renew_failed; also known: failed, unfinished,
+  # unconfirmed) is held alone, with no public result and no fleet pause. After held_requeue_after_s seconds the
+  # daemon ends that session (kill and verify), starts its next generation and routes the request again (replay + 1
+  # within max_attempts). Not for task mode, replay: false, operator requests, applet slots, mid-turn messages, or a
+  # turn that ended with a tool still running. At most held_requeue_max new generations per slot within
+  # held_requeue_window_s awake seconds. Giving up = today's behaviour: failed published, run paused, escalated.
+  # Each key is validated on its own; a bad value keeps its default. Read by the daemon; not passed to pi.
+  held_requeue: true
+  held_requeue_causes: [aborted, lease_expired, renew_failed]
+  held_requeue_after_s: 30
+  held_requeue_max: 3
+  held_requeue_window_s: 3600
+  # Pause review (docs/design.md section 24): a run paused for pause_review_after_s awake seconds is checked by its
+  # daemon, then every pause_review_every_s. A cause that no longer holds is lifted and audited (pause_review.lifted).
+  # A supervisor fault that still holds goes to supervisor regeneration. Never lifted: operator, budget line, delete
+  # dialog, security, integrity, opencode refusal, a general BLOCKED. A wall pause is lifted at the wall's reset time
+  # or after pause_review_wall_retry_s, at most 3 times for one wall. Each key is validated on its own; a bad value
+  # keeps its default. Read by the daemon; not passed to the pi extension.
+  pause_review: true
+  pause_review_after_s: 1800
+  pause_review_every_s: 300
+  pause_review_wall_retry_s: 3600
 
 fresh_dispatch:
   # docs/design.md §37. A dispatch without "fresh": true to a worker already above this share of its context
@@ -784,11 +853,24 @@ job_subfleet:
   # supervisor_profile: agent card the slot runs on as sub-fleet supervisor (a claude card); null = its own model.
   # worker_profiles: one agent card per sub-fleet worker; [] = the fleet's default worker model.
   # hours: the sub-fleet task's time budget.
-  # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
+  # supervisor / worker: model chains for the job's sub-fleet supervisor and workers. Write them like
+  # discovery.supervisor / discovery.worker: a list of model patterns, highest priority first. null = use the
+  # discovery chain. [] is an error. The program resolves a chain on this machine (probe cache, only_via, cli_order,
+  # cli_pairs) and takes the first usable entry. It never falls back to a model that is not on the chain.
+  # A job spec may give its own "supervisor" / "worker" chain; the spec wins over this block.
+  # A chain in a higher layer voids a card in a lower layer, and a card in a higher layer voids a chain in a lower
+  # layer (layers: job spec, this block, discovery). Do not set a chain and a card in this block for the same role:
+  # supervisor with supervisor_profile, or worker with a non-empty worker_profiles, is refused.
+  # The supervisor of a job is an adopted official Claude Code pane: the program skips non-Claude supervisor entries
+  # (for example Astra on pi) and records why. Workers run claude or pi.
+  # Override the whole block in the private file (~/.fleetmux/fleet.yaml). A private block that sets
+  # supervisor_profile keeps that card: its missing supervisor key is null.
   workers: 2
   supervisor_profile: null
   worker_profiles: []
   hours: 4
+  supervisor: null
+  worker: null
 
 gui:
   # The root fleet daemon keeps its `fleetmux gui` window open (docs/design.md "Window keep-open"). Every check_s
@@ -807,7 +889,8 @@ bare:
   # its own (docs/design.md section 50): it prints one line, then runs
   #   start --lifecycle <lifecycle> --name <name> --resume auto --no-join [--roster R | --workers N] <start_args>
   # with FLEETMUX_HOME=<home> and FLEETMUX_STATE=<home>/state, stdin from /dev/null. `--resume auto` resumes a
-  # resumable earlier run of that home (a run stopped with `fleetmux stop` is finished: a new run starts); other
+  # resumable earlier run of that home (a run stopped with `fleetmux stop` is finished: a new run starts, unless it
+  # still holds open jobs, which continues it: docs/design.md section 58 "Restart"); other
   # fleet homes are not touched. No model is set here: start takes the fleet.yaml#discovery default pair. The new
   # root's daemon opens the window (gui block): bare looks for it every window_poll_s, up to window_wait_s, and
   # brings it to the front; when the wait runs out it opens (or raises) the window itself once and returns. With
@@ -873,3 +956,45 @@ relay:
     settle_s: 600               # s, a returning machine stays online this long before it takes new tasks
     budget_pause_gap_s: 60      # s, daemon tick gaps above this do not count against a time budget
     write_back_seconds: 300     # s, interval of writing changed hot keys back
+
+restart_resume:
+  # Restart state (docs/design.md section 60). The daemon writes a snapshot of its fleet (hot roster items, sub-fleets,
+  # applets, jobs, in-flight Redis communication, errors) under <fleet home>/restart/<fleet>/ every snapshot_every_s
+  # seconds, at the start of an operator stop, at a resume and before every new supervisor generation. After a
+  # restart, and after every supervisor generation change, it compares the newest snapshot with the fleet now,
+  # restores attached service sub-fleets as they were (jobs: section 58) and opens a reconcile ledger that the
+  # supervisor rules item by item. Each key is validated on its own; a bad value keeps its default.
+  enabled: true
+  snapshot_every_s: 300      # s between two timer snapshots (the stop / resume / generation ones come on top)
+  keep_timer: 12             # timer snapshots kept (an unconsumed baseline is always kept)
+  keep_events: 20            # stop / resume / supervisor-generation snapshots kept
+  ruling_remind_s: 3600      # s between two reminders of open ledger items to the supervisor
+  item_payload_max: 20000    # bytes of one item's text kept in a snapshot (a request spec, a message)
+  inline_items: 30           # items listed in the supervisor's notice; the rest are in the ledger's Markdown file
+  keep_child_dirs: 20        # restart/job-* and split-* directories kept once their fleet ended and the ledger closed
+
+# Decomposition tree (docs/design.md §62): the supervisor hands in a tree first and dispatches its blocks; the program
+# keeps it in Redis fx:tree and <run>/tree.json. The private file's block replaces this one as a whole.
+decompose:
+  enabled: true                 # false = the old path (fx:items dispatch, dispatch leaf, contracts, 40-minute nudge)
+  unit: minutes                 # estimates and actuals are minutes; costs are session minutes
+  # Initial costs are medians (p50) of measured task-mode distributions; null = no data (counts 0).
+  # margin follows cold_start: a saving under one cold start is noise.
+  split: {k: 2, margin: 7.4, floor: 2}    # split only when dT >= k x dC and dT >= margin; blocks under floor merge
+  # cold_start: session start to its first file edit, all task-mode slots (n=160; dev slots alone p50 9.8).
+  # per_decision: a worker's blocked request to the next delivery to that slot (n=137).
+  # merge: a delivery to an integration slot to its settle (n=106).
+  # supervisor: a sub-fleet supervisor online the whole time counts 1 session minute per minute: the upper bound by
+  # definition; the measured online ratio is not used (the sub-fleet span it divides by includes idle time after
+  # the work ends, so it reads low).
+  # spawn: approval to the sub-fleet being up.
+  cost: {cold_start: 7.4, per_decision: 0.32, merge: 1.45, supervisor: 1.0, spawn: 0.3}   # session minutes
+  overrun_ratio: 5              # a block on the longest chain past est x this: the supervisor is told
+  returns_alert: 3              # returns of one block before the supervisor gets its cause line
+  write_back_seconds: 300       # s, interval of writing changed values back to the private fleet.yaml
+  session_minute_tokens: 9472   # display only: tokens per session minute (provisional)
+
+# Interface language (docs/design.md §63): system (follow the system language) | en | zh-Hans.
+# The private ~/.fleetmux/fleet.yaml may set its own `ui:` block; applies at the next start / server restart.
+ui:
+  language: system

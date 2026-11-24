@@ -15,6 +15,9 @@ assert.ok(!Value.Check(schema,{...base,dispatch:[{to:'worker-1',instruction:'Wri
 // design §37: fresh = a clean next generation of the worker before this dispatch
 assert.ok(Value.Check(schema,{...base,dispatch:[{to:'worker-1',instruction:'Write worker-1/a.md please',fresh:true}]}),'fresh must be accepted');
 assert.ok(!Value.Check(schema,{...base,dispatch:[{to:'worker-1',instruction:'Write worker-1/a.md please',fresh:'yes'}]}),'fresh is a boolean');
+// design §44 leaf: a block not worth splitting, never nudged to split
+assert.ok(Value.Check(schema,{...base,dispatch:[{to:'worker-1',instruction:'Write worker-1/a.md please',leaf:true}]}),'leaf must be accepted');
+assert.ok(!Value.Check(schema,{...base,dispatch:[{to:'worker-1',instruction:'Write worker-1/a.md please',leaf:'yes'}]}),'leaf is a boolean');
 const one={...base,dispatch:[{to:'worker-1',instruction:'Write worker-1/a.md please'}]};
 assert.ok(Value.Check(schema,{...one,advisor:'on'})&&Value.Check(schema,{...one,advisor:'off'}),'advisor on/off must be accepted');
 assert.ok(!Value.Check(schema,{...one,advisor:'yes'})&&!Value.Check(schema,{...one,advisor:true}),'advisor is on or off only');

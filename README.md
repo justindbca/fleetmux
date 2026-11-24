@@ -4,7 +4,22 @@
 
 **English** · [中文](README.zh-CN.md) · [Français](README.fr.md) · [Español](README.es.md)
 
-**The always-on AI team, across machines and harnesses.** Run a team, not a single assistant: fleetmux runs one supervisor agent and N worker agents as visible
+**The always-on AI team, across machines and harnesses.**
+
+- Delivery is accepted by the program, not by the model's own report: a claim that fails the check goes back to the worker.
+- Agents run resident, and a session near its context limit hands over to a fresh session automatically.
+- When a model hits its usage wall, the slot moves to the next usable model.
+
+![fleetmux demo: scripted agents claim done, the program rejects the claim, the fixed work passes](https://raw.githubusercontent.com/justindbca/fleetmux/main/docs/images/fleetmux-demo.svg)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+fleetmux demo
+```
+
+<!-- numbers -->
+
+Run a team, not a single assistant: fleetmux runs one supervisor agent and N worker agents as visible
 terminal sessions. The supervisor only judges and dispatches; workers only execute; a daemon, not the models,
 decides when the work is done. Sessions near their context limit hand over to a fresh session with a written note,
 so one task can run for hours across many model sessions. Official **Claude Code**, official **Codex CLI**, **Pi**
@@ -616,8 +631,7 @@ over `ssh`. Closing a viewer never stops an agent.
   `fleetmux server` per fleet tree, one page per fleet): a card that carries `page` switches every viewer to that
   fleet's page — click it, or step onto it with `←` / `→` / `C-b (` / `C-b )` — and the highlighted card and the
   topbar follow the page shown; a reclaimed child fleet's page is a read-only record (`已收回 · 只读`, "reclaimed · read-only", over its
-  empty groups, its `history_view` tab below), and a child card has no `×` (child fleets start and stop through
-  their roster and `subfleet.up` / `down`). A card without `page` (an older daemon) still only says
+  empty groups, its `history_view` tab below), and a running child card has a close button when the root daemon marks it closeable: a confirmation box names the sub-fleet; confirming cancels a job sub-fleet's job (its result is published failed with outcome `cancelled`) or takes a named sub-fleet down (`subfleet.down`; an attached one through `subfleet.detach`); a stopping, reclaimed or closed card, a split sub-fleet's card and a deeper level's card have none. A card without `page` (an older daemon) still only says
   `切换 fleet：S3 开放` ("switch fleet: available in S3"). In `fleetmux gui` and the M2.5 window a sub-fleet link of `history.html` switches the page
   the same way (the server does it, so it works with the child daemon gone). With a sidebar the cells start on row 1
   (their tab row) and the cards on row 2; the topbar has no background of its own. A card's `×` (running / paused
@@ -815,8 +829,10 @@ echo '{"goal": "Implement the export command", "name": "export-cmd", "lifecycle"
 Rules:
 
 1. **Use the job keys only.** `goal` (required), `hours`, `artifacts`, `budget`, `lifecycle`, `workers`,
-   `supervisor_profile`, `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `review_file`. Other keys are
-   refused.
+   `supervisor_profile`, `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `review_file`, `tree`, `by`. Other
+   keys are refused. `tree` is the absolute path of the job's tree file (check it first with
+   `fleetmux tree check <file>`); `by` names who wrote it (default `submitter`). With the decompose switch on, a
+   `lifecycle: dev_task` job without `tree` is refused (docs/design.md section 62).
 2. **Run a development fleet as a job.** `roster` (absolute path) gives the sub-fleet its workers, role files and
    cards. `roles` (absolute directory) adds `<agent>.md` rules, as `start --roles` does. `name` titles the sub-fleet.
    With `lifecycle: dev_task`, `deliver` is required and the sub-fleet runs the same review step and delivery gate as

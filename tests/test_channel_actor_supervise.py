@@ -23,7 +23,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture: the re
 from test_runtime_v2 import audits, fx, receive, req  # noqa: F401  (fx: pi supervisor + pi worker, service, v2)
 from test_fleet import FakeMgr
 from test_channels_contract import Audit
-from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, subfleet, tabs
+from fleetmux import channels, fleet, fleetmux_sidebar, lifecycle_close, restart_state, subfleet, tabs
 from fleetmux.channels import envelope, supervise
 
 OLD_PARTS = ['roster', 'advisor', 'lifecycle', 'result', 'contracts', 'subfleet', 'tabs', 'fleetmux',
@@ -111,6 +111,7 @@ def tick_parts(monkeypatch):
     monkeypatch.setattr(subfleet, 'tick', boom('subfleet'))
     monkeypatch.setattr(tabs, 'open_all', boom('tabs'))
     monkeypatch.setattr(fleetmux_sidebar, 'tick', boom('fleetmux'))
+    monkeypatch.setattr(restart_state, 'tick', boom('restart'))
 
     class Stop(BaseException):
         pass

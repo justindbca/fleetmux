@@ -6,7 +6,10 @@
 //! `{"v":1,"current":"<id>","fleets":[{"id","title","state","line1","line2"},…],"close":{"title","body"}}`:
 //! 1..=[`MAX_FLEETS`] fleets, every value a string of at most 200 characters, `current` one of the ids, and the
 //! optional `close` object (two strings of at most 400 characters each) the close confirmation box shows. M4: a card
-//! may carry a sixth key `page` (a string, the fleet page it shows; [`Entry::page`]). Anything
+//! may carry a sixth key `page` (a string, the fleet page it shows; [`Entry::page`]). A child card may also carry
+//! its own `close` object (the same two strings; [`Entry::close`], design section 19 "Closing a sub-fleet from the
+//! sidebar"): the root daemon sends it only for a running sub-fleet it can stop, and only then does that card get a
+//! `×`, whose box writes the root-only kv `child_stop` (`server/view.rs`). Anything
 //! else is [`parse`]'s `Err` (one English sentence; the server logs it and draws no sidebar), unknown keys are
 //! ignored.
 //!
@@ -44,6 +47,7 @@ use fleetmux_term::cell_width;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::i18n::{Lang, tr, tr_fmt};
 use crate::render::draw::text_cols;
 
 /// Columns the sidebar takes on the left while shown (plan §2.1).
@@ -69,8 +73,35 @@ pub struct Entry {
     pub line1: String,
     pub line2: String,
     /// M4 (design m4 R8): the optional sixth key, the fleet page this card shows (`""` = the root page). A click
-    /// selects that page; a child card with a page has no `×` (R10). Absent = the S1 / S2 card as before.
+    /// selects that page; a child card with a page has a `×` only with [`Entry::close`]. Absent = the S1 / S2 card as
+    /// before.
     pub page: Option<String>,
+    /// Design section 19: the optional per-card `close` object of a child card, the texts of its close box. The root
+    /// daemon sends it only for a running direct child it can stop (a job, a named or an attached sub-fleet); a child
+    /// card with a `page` and without it has no `×`.
+    pub close: Option<Close>,
+}
+
+/// A close request for a child card (design section 19): the server's own request in kv `child_stop` until the
+/// root daemon answers it. Only `Requested` hides the card's `×` and keeps a line on the status line; an answer is a
+/// one-shot notice (`server/view.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ChildStop {
+    #[default]
+    None,
+    /// `y` in a child card's box wrote `{"v":1,"state":"requested","id",…}` for that card.
+    Requested(String),
+    /// The root daemon took it (`state: accepted`), with its note.
+    Accepted(String, String),
+    /// The root daemon refused it (`state: refused`), with its reason.
+    Refused(String, String),
+}
+
+impl ChildStop {
+    /// Whether a request for card `id` is still out (its `×` stays hidden until the answer).
+    pub fn pending_for(&self, id: &str) -> bool {
+        matches!(self, ChildStop::Requested(x) if x == id)
+    }
 }
 
 /// The texts of the close confirmation box, from kv `sidebar`'s optional `close` (plan §11.1): the daemon writes
@@ -146,6 +177,11 @@ pub struct Side {
     /// foreground). Set with [`Side::confirm`]; while it names a page of [`Side::bash`] the box speaks about that page
     /// instead of the fleet, and `y` closes it.
     pub close_bash: Option<PaneId>,
+    /// The child card (its `id`) a close box is open for (design section 19). Set with [`Side::confirm`]; the box then
+    /// shows that card's `close` texts and `y` writes kv `child_stop` instead of `stop_request`.
+    pub close_child: Option<String>,
+    /// The child close request in kv `child_stop` (design section 19), see [`ChildStop`].
+    pub child_stop: ChildStop,
     pub hidden: bool,
     /// The width the user dragged the edge to (plan §16.2, `SIDEBAR_MIN_W`..=`SIDEBAR_MAX_W`): the **requested**
     /// width, kept in kv. [`width`] returns the **effective** width (at least this, [`shown_min`] and the window's
@@ -182,6 +218,9 @@ pub struct Side {
     /// The (selected card, card count) [`follow_selection`] last saw: the selected card is scrolled into view only
     /// when this pair changes, so a kv push or a layout change that moves no card leaves the user's scroll alone.
     pub followed: Option<(Option<usize>, usize)>,
+    /// The interface language (docs/design.md §63): what Python passed when it started the server
+    /// ([`crate::i18n::Lang::from_env`], set at boot); every text this module and `draw.rs` show follows it.
+    pub lang: Lang,
 }
 
 /// A fresh sidebar: no kv `sidebar` yet, shown, at the default width [`SIDEBAR_W`] (plan §16.2: the server resets
@@ -193,6 +232,8 @@ impl Default for Side {
             bash: Vec::new(),
             bash_sel: None,
             close_bash: None,
+            close_child: None,
+            child_stop: ChildStop::None,
             hidden: false,
             width: SIDEBAR_W,
             inset: 0,
@@ -204,6 +245,7 @@ impl Default for Side {
             resuming: false,
             scroll: 0,
             followed: None,
+            lang: Lang::default(),
         }
     }
 }
@@ -275,7 +317,7 @@ pub(crate) fn current_title(side: &Side) -> Option<(String, String)> {
     if let Some(sel) = side.bash_sel.as_ref()
         && let Some(b) = side.bash.iter().position(|p| p == sel)
     {
-        return Some((format!("{BASH_TITLE}{}", b + 1), BASH_LINE1.to_string()));
+        return Some((format!("{BASH_TITLE}{}", b + 1), tr(side.lang, "card.bash.line1", BASH_LINE1)));
     }
     let data = side.data.as_ref()?;
     data.fleets
@@ -284,18 +326,20 @@ pub(crate) fn current_title(side: &Side) -> Option<(String, String)> {
         .map(|e| (e.title.clone(), e.line1.clone()))
 }
 /// A bash card's first line (plan §14.2): the shell pane runs for as long as its card exists.
-const BASH_LINE1: &str = "终端 · 运行中";
+const BASH_LINE1: &str = "terminal, running"; // key card.bash.line1 (ui.language, design §63)
 /// A bash card's second line (plan §14.2): the shell starts in `$HOME`, drawn as `~`.
 const BASH_LINE2: &str = "~";
 /// The closed fleet's placeholder (plan §13.3 / §13.6-3): the title is `fleet「<current card title>」已关闭` in white
 /// bold, then the restore hint (grey) and the exit hint (dark grey).
-pub const PLACEHOLDER_TITLE_HEAD: &str = "fleet「";
-pub const PLACEHOLDER_TITLE_TAIL: &str = "」已关闭";
-pub const PLACEHOLDER_RESTORE: &str = "运行记录保留。点侧栏卡片上的 ↺ 或按 ^b r 恢复，接着原来的活。";
-pub const PLACEHOLDER_EXIT: &str = "关掉这个窗口（或 ^b d）后 10 秒服务退出；之后仍可在终端 start --resume。";
+/// English defaults; `draw.rs` looks each up in the interface language (keys `placeholder.*`, design §63).
+pub const PLACEHOLDER_TITLE: &str = "fleet \"{title}\" closed";
+pub const PLACEHOLDER_RESTORE: &str =
+    "Run log kept. Press ^b r or the restore button on the card to continue where it stopped.";
+pub const PLACEHOLDER_EXIT: &str =
+    "Close this window (or ^b d) and the server exits after 10 s; start --resume in a terminal still works.";
 /// The history list's placeholder (plan §18.4-5 / §18.7-6): no fleet is running, the grey cards' `↺` bring one back.
 /// The S2b `fleet「<name>」已关闭` lines stay for the single just-closed card ([`just_closed`]).
-pub const PLACEHOLDER_NO_FLEET: &str = "没有在跑的 fleet；点侧栏卡片上的 ↺ 恢复";
+pub const PLACEHOLDER_NO_FLEET: &str = "No fleet is running. Use the restore button on a card to bring one back.";
 /// The close confirmation box's widest form (plan §2.5: `min(60, cols − 4)`), its border glyphs and its texts.
 const MODAL_MAX_W: u16 = 60;
 const MODAL_TL: char = '╭';
@@ -305,20 +349,23 @@ const MODAL_BR: char = '╯';
 const MODAL_H: char = '─';
 const MODAL_V: char = '│';
 /// The line above the buttons (plan §2.5).
-const MODAL_HINT: &str = "按 y 确认，其他任意键取消";
+const MODAL_HINT: &str = "Press y to confirm, any other key to cancel"; // modal.hint
 /// The two buttons, right-aligned on the box's last inner row (plan §2.5).
-const MODAL_CANCEL: &str = "[ 取消 ]";
+const MODAL_CANCEL: &str = "[ Cancel ]"; // modal.cancel
 /// The bash page's close box (plan §14.2): the same box as the fleet's, with the page (`bash-<n>`) as its subject.
-const MODAL_TITLE_BASH_HEAD: &str = "关闭 bash 页「";
-const MODAL_TITLE_BASH_TAIL: &str = "」？";
-const MODAL_BODY_BASH: &str = " 里还有程序在跑，关掉会结束它。";
-const MODAL_CONFIRM_BASH: &str = "[ 关闭 bash 页 ]";
-const MODAL_CONFIRM: &str = "[ 关闭 fleet ]";
+const MODAL_TITLE_BASH: &str = "Close bash page \"{name}\"?"; // modal.bash.title
+const MODAL_BODY_BASH: &str = "{name} still has a program running; closing ends it."; // modal.bash.body
+const MODAL_CONFIRM_BASH: &str = "[ Close bash page ]"; // modal.bash.confirm
+const MODAL_CONFIRM: &str = "[ Close fleet ]"; // modal.fleet.confirm
+/// Design section 19: the confirm button and the default texts of a child card's box.
+const MODAL_CONFIRM_CHILD: &str = "[ Close sub-fleet ]"; // modal.child.confirm
+const MODAL_TITLE_CHILD: &str = "Close sub-fleet \"{title}\"?"; // modal.child.title
+const MODAL_BODY_CHILD: &str = "Stops this sub-fleet. The run log is kept."; // modal.child.body
 /// The default title (wrapped around the first card's title) and body, used when kv `sidebar` has no `close`
 /// (plan §11.1).
-const MODAL_TITLE_HEAD: &str = "关闭整个 fleet「";
-const MODAL_TITLE_TAIL: &str = "」？";
-const MODAL_BODY: &str = "会停掉监工和全部 worker（含它的子 fleet）。正在做的活会中断。运行记录保留，之后可以在侧栏点 ↺ 恢复，接着原来的活。";
+const MODAL_TITLE: &str = "Close the whole fleet \"{title}\"?"; // close.title (the same key as Python's)
+const MODAL_BODY: &str = "Stops the supervisor and all workers (and its sub-fleets). Running work is interrupted. \
+The run log is kept; restore it later with the restore button in the sidebar."; // modal.fleet.body
 
 /// kv `sidebar` → [`Data`]. Rules in the module doc; any deviation is `Err` with one English sentence.
 pub fn parse(json: &str) -> Result<Data, String> {
@@ -368,6 +415,11 @@ pub fn parse(json: &str) -> Result<Data, String> {
             None => None,
             Some(_) => Some(field("page")?),
         };
+        // Design section 19: a card's own `close` is optional; when present it follows the top-level rules.
+        let close = match o.get("close") {
+            None => None,
+            Some(value) => Some(parse_close(value, &format!("fleets[{i}].close"))?),
+        };
         fleets.push(Entry {
             id: field("id")?,
             title: field("title")?,
@@ -375,6 +427,7 @@ pub fn parse(json: &str) -> Result<Data, String> {
             line1: field("line1")?,
             line2: field("line2")?,
             page,
+            close,
         });
     }
     if !fleets.iter().any(|e| e.id == current) {
@@ -386,30 +439,34 @@ pub fn parse(json: &str) -> Result<Data, String> {
     // (the box then shows the default text), anything else rejects the whole value.
     let close = match obj.get("close") {
         None => None,
-        Some(value) => {
-            let o = value
-                .as_object()
-                .ok_or("sidebar kv `close` must be an object")?;
-            let field = |key: &str| -> Result<String, String> {
-                match o.get(key) {
-                    None => Ok(String::new()),
-                    Some(serde_json::Value::String(s)) if s.chars().count() <= 400 => Ok(s.clone()),
-                    Some(serde_json::Value::String(_)) => Err(format!(
-                        "sidebar kv `close.{key}` is longer than 400 characters"
-                    )),
-                    Some(_) => Err(format!("sidebar kv `close.{key}` must be a string")),
-                }
-            };
-            Some(Close {
-                title: field("title")?,
-                body: field("body")?,
-            })
-        }
+        Some(value) => Some(parse_close(value, "close")?),
     };
     Ok(Data {
         current,
         fleets,
         close,
+    })
+}
+
+/// A `close` object (the top-level one or a card's, `at` names it in the error): two optional strings of at most
+/// 400 characters each; a missing one stays empty (the box then shows the default text).
+fn parse_close(value: &serde_json::Value, at: &str) -> Result<Close, String> {
+    let o = value
+        .as_object()
+        .ok_or_else(|| format!("sidebar kv `{at}` must be an object"))?;
+    let field = |key: &str| -> Result<String, String> {
+        match o.get(key) {
+            None => Ok(String::new()),
+            Some(serde_json::Value::String(s)) if s.chars().count() <= 400 => Ok(s.clone()),
+            Some(serde_json::Value::String(_)) => Err(format!(
+                "sidebar kv `{at}.{key}` is longer than 400 characters"
+            )),
+            Some(_) => Err(format!("sidebar kv `{at}.{key}` must be a string")),
+        }
+    };
+    Ok(Close {
+        title: field("title")?,
+        body: field("body")?,
     })
 }
 
@@ -804,12 +861,14 @@ fn card_title_w(sb: u16) -> u16 {
 /// `stop_request` is in flight. A reclaimed, stopping or closed one has nothing left to close, and after a request
 /// the button goes away so it cannot be pressed twice.
 ///
-/// M4 (design m4 R10): a child fleet's card that carries a `page` never gets one — a child fleet is started and
-/// stopped through `subfleet.up` / `down` and its roster, not here. The root card (`page` `""` or none) keeps it.
+/// Design section 19 "Closing a sub-fleet from the sidebar": a child fleet's card that carries a `page` gets one
+/// only when the root daemon sent it a `close` object (a running direct child it can stop) and no request for it is
+/// out ([`Side::child_stop`]). The root card (`page` `""` or none) keeps its own as before.
 pub(crate) fn closeable(side: &Side, e: &Entry) -> bool {
     side.stop == Stop::None
         && matches!(e.state.as_str(), "running" | "paused")
-        && e.page.as_deref().is_none_or(str::is_empty)
+        && (e.page.as_deref().is_none_or(str::is_empty)
+            || (e.close.is_some() && !side.child_stop.pending_for(&e.id)))
 }
 
 /// Whether a card is a fleet the sidebar closed (plan §13.3 / §13.6-1): its first row shows `↺` instead of `×`.
@@ -1048,7 +1107,7 @@ fn draw_cards(buf: &mut Buffer, side: &Side, sb: u16, content_rows: u16, top: u1
         let selected = sel == Some(j);
         match card_at(side, j) {
             Some(Card::Fleet(e)) => draw_fleet_card(buf, side, e, sb, y0, selected),
-            Some(Card::Bash(_, b)) => draw_bash_card(buf, b, sb, y0, selected),
+            Some(Card::Bash(_, b)) => draw_bash_card(buf, b, sb, y0, selected, side.lang),
             None => {}
         }
         // After the texts, which only set foregrounds: the selected card's bar covers the wide characters' second
@@ -1082,13 +1141,13 @@ fn draw_fleet_card(buf: &mut Buffer, side: &Side, e: &Entry, sb: u16, y0: u16, s
 
 /// One bash card (plan §14.2 / §14.5-3): the same shape as a fleet card — green dot, `bash-<n>`, `终端 · 运行中`,
 /// `~` and the `×` at `sb − 3`. `b` is the card's place in [`Side::bash`], so its title is `bash-<b + 1>`.
-fn draw_bash_card(buf: &mut Buffer, b: usize, sb: u16, y0: u16, selected: bool) {
+fn draw_bash_card(buf: &mut Buffer, b: usize, sb: u16, y0: u16, selected: bool, lang: Lang) {
     let line = if selected { Color::White } else { Color::Gray };
     let title_w = card_title_w(sb);
     let text_w = card_text_w(sb);
     let title = format!("{BASH_TITLE}{}", b + 1);
     put(buf, CARD_TEXT_X, y0, title_w, &fit_title(&title, title_w), Color::White, true);
-    put(buf, CARD_TEXT_X, y0 + 1, text_w, &ellipsize(BASH_LINE1, text_w), line, false);
+    put(buf, CARD_TEXT_X, y0 + 1, text_w, &ellipsize(&tr(lang, "card.bash.line1", BASH_LINE1), text_w), line, false);
     put(buf, CARD_TEXT_X, y0 + 2, text_w, &ellipsize(BASH_LINE2, text_w), line, false);
     put(buf, 1, y0, 1, &DOT.to_string(), dot_color("running"), false);
     // Plan §14.2: a bash card always carries its `×`; the shell is the server's own pane, not a fleet.
@@ -1106,12 +1165,20 @@ fn bash_close_name(side: &Side) -> Option<String> {
 
 /// The confirm button's text: the fleet's while the box closes a fleet, the bash page's while it closes a page
 /// (plan §14.2: the same box, the page as its subject).
-fn modal_confirm_label(side: &Side) -> &'static str {
+fn modal_confirm_label(side: &Side) -> String {
     if bash_close_name(side).is_some() {
-        MODAL_CONFIRM_BASH
+        tr(side.lang, "modal.bash.confirm", MODAL_CONFIRM_BASH)
+    } else if close_child_card(side).is_some() {
+        tr(side.lang, "modal.child.confirm", MODAL_CONFIRM_CHILD)
     } else {
-        MODAL_CONFIRM
+        tr(side.lang, "modal.fleet.confirm", MODAL_CONFIRM)
     }
+}
+
+/// The child card a [`Side::close_child`] box is about, `None` while no child box is open.
+fn close_child_card(side: &Side) -> Option<&Entry> {
+    let id = side.close_child.as_ref()?;
+    side.data.as_ref()?.fleets.iter().find(|e| &e.id == id)
 }
 
 /// What the close confirmation box says (plan §11.1): kv `sidebar`'s `close.{title, body}` when the daemon sent
@@ -1120,8 +1187,18 @@ pub fn modal_text(side: &Side) -> (String, String) {
     // Plan §14.2: a bash page's box names the page and says what closing it costs.
     if let Some(name) = bash_close_name(side) {
         return (
-            format!("{MODAL_TITLE_BASH_HEAD}{name}{MODAL_TITLE_BASH_TAIL}"),
-            format!("{name}{MODAL_BODY_BASH}"),
+            tr_fmt(side.lang, "modal.bash.title", MODAL_TITLE_BASH, &[("name", &name)]),
+            tr_fmt(side.lang, "modal.bash.body", MODAL_BODY_BASH, &[("name", &name)]),
+        );
+    }
+    // Design section 19: a child card's box names that sub-fleet and takes the card's own texts.
+    if let Some(e) = close_child_card(side) {
+        let given = |s: Option<&String>| s.filter(|s| !s.is_empty()).cloned();
+        let close = e.close.as_ref();
+        return (
+            given(close.map(|c| &c.title))
+                .unwrap_or_else(|| tr_fmt(side.lang, "modal.child.title", MODAL_TITLE_CHILD, &[("title", &e.title)])),
+            given(close.map(|c| &c.body)).unwrap_or_else(|| tr(side.lang, "modal.child.body", MODAL_BODY_CHILD)),
         );
     }
     let data = side.data.as_ref();
@@ -1130,14 +1207,14 @@ pub fn modal_text(side: &Side) -> (String, String) {
         .and_then(|d| d.fleets.first())
         .map(|e| e.title.as_str())
         .unwrap_or_default();
-    let default_title = format!("{MODAL_TITLE_HEAD}{name}{MODAL_TITLE_TAIL}");
+    let default_title = tr_fmt(side.lang, "close.title", MODAL_TITLE, &[("title", name)]);
     let pick = |given: Option<&str>, fallback: &str| match given {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => fallback.to_string(),
     };
     (
         pick(close.map(|c| c.title.as_str()), &default_title),
-        pick(close.map(|c| c.body.as_str()), MODAL_BODY),
+        pick(close.map(|c| c.body.as_str()), &tr(side.lang, "modal.fleet.body", MODAL_BODY)),
     )
 }
 
@@ -1259,8 +1336,8 @@ fn modal_buttons(side: &Side, r: LRect) -> Option<(LRect, LRect)> {
     if r.w < 8 || r.h < 8 {
         return None;
     }
-    let cw = text_cols(modal_confirm_label(side));
-    let kw = text_cols(MODAL_CANCEL);
+    let cw = text_cols(&modal_confirm_label(side));
+    let kw = text_cols(&tr(side.lang, "modal.cancel", MODAL_CANCEL));
     let by = r.y + r.h - 2;
     let cx = r.x + r.w - 2 - cw;
     let kx = cx.checked_sub(1 + kw)?;
@@ -1312,12 +1389,13 @@ pub fn draw_modal(buf: &mut Buffer, side: &Side, cols: u16, rows: u16) {
         put(buf, text_x, r.y + 3 + i as u16, iw, line, Color::White, false);
     }
     let hint_y = r.y + 4 + body.len() as u16;
-    put(buf, text_x, hint_y, iw, &ellipsize(MODAL_HINT, iw), Color::Gray, false);
+    put(buf, text_x, hint_y, iw, &ellipsize(&tr(side.lang, "modal.hint", MODAL_HINT), iw), Color::Gray, false);
     if let Some((cancel, confirm)) = modal_buttons(side, r) {
-        put(buf, cancel.x, cancel.y, cancel.w, MODAL_CANCEL, Color::White, false);
+        let cancel_label = tr(side.lang, "modal.cancel", MODAL_CANCEL);
+        put(buf, cancel.x, cancel.y, cancel.w, &cancel_label, Color::White, false);
         fill_bg(buf, cancel.x, cancel.y, cancel.w, Color::DarkGray);
         let label = modal_confirm_label(side);
-        put(buf, confirm.x, confirm.y, confirm.w, label, Color::White, true);
+        put(buf, confirm.x, confirm.y, confirm.w, &label, Color::White, true);
         fill_bg(buf, confirm.x, confirm.y, confirm.w, Color::Red);
     }
 }
@@ -3686,6 +3764,43 @@ mod tests {
 
     /// Plan §14.2: the bash close box is the fleet box with the page as its subject — its title and body name
     /// `bash-<n>`, its confirm button closes a bash page, and the fleet box keeps its own text and button.
+    /// ui.language = en (docs/design.md §63): the close boxes, the bash card and the placeholder texts in English,
+    /// no CJK character; the box glyphs and the `↺` / `×` buttons are drawn, not words.
+    #[test]
+    fn english_close_boxes_and_bash_card_have_no_cjk() {
+        let cjk = |t: &str| t.chars().any(|c| matches!(c as u32, 0x3000..=0x303f | 0x3400..=0x9fff | 0xff00..=0xffef));
+        let mut s = bash_side(&["a-1", "a-2"]);
+        s.lang = Lang::En;
+        s.confirm = true;
+        s.close_bash = Some("a-2".to_string());
+        assert_eq!(
+            modal_text(&s),
+            (
+                "Close bash page \"bash-2\"?".to_string(),
+                "bash-2 still has a program running; closing ends it.".to_string()
+            )
+        );
+        let mut b = buf();
+        draw_modal(&mut b, &s, 240, 60);
+        let joined = (0..60).map(|y| span_text(&b, y, 0, 240)).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("[ Close bash page ]") && joined.contains("[ Cancel ]"), "{joined}");
+        assert!(joined.contains("Press y to confirm, any other key to cancel"), "{joined}");
+        assert!(!cjk(&joined), "{joined}");
+        s.close_bash = None;
+        let (title, body) = modal_text(&s);
+        assert_eq!(title, "Close the whole fleet \"fleetmux-demo\"?");
+        assert!(body.starts_with("Stops the supervisor and all workers") && body.is_ascii(), "{body}");
+        let mut b = buf();
+        draw_modal(&mut b, &s, 240, 60);
+        let joined = (0..60).map(|y| span_text(&b, y, 0, 240)).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("[ Close fleet ]") && !cjk(&joined), "{joined}");
+        s.bash_sel = Some("a-1".to_string());
+        assert_eq!(current_title(&s), Some(("bash-1".to_string(), "terminal, running".to_string())));
+        for text in [PLACEHOLDER_TITLE, PLACEHOLDER_RESTORE, PLACEHOLDER_EXIT, PLACEHOLDER_NO_FLEET, MODAL_BODY] {
+            assert!(text.is_ascii(), "{text}");
+        }
+    }
+
     #[test]
     fn the_bash_close_box_names_the_page_and_its_button() {
         let mut s = bash_side(&["a-1", "a-2"]);
@@ -3750,21 +3865,69 @@ mod tests {
         assert!(parse(&bad).is_err(), "{bad}");
     }
 
-    /// M4 R10: a child card that carries `page` has no `×` (drawn or hit) and its close columns pick the card; the
-    /// root card (`page` `""`) keeps its `×`; a child card without `page` keeps the old one.
+    fn paged_close(id: &str, title: &str, page: &str, state: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","title":"{title}","state":"{state}","line1":"运行中","line2":"~/x","page":"{page}","close":{{"title":"关闭子 fleet「{title}」？","body":"取消这件 job"}}}}"#
+        )
+    }
+
+    /// Design section 19 "Closing a sub-fleet from the sidebar": a running child card that carries `page` gets a `×`
+    /// only when the root daemon sent it a `close` object; without one (a finished, split or deeper child) it has none
+    /// and its close columns pick the card; a `stopping` child has none; the root card (`page` `""`) and a child card
+    /// without `page` keep theirs as before. After the box was confirmed for a card, that card's `×` goes away until
+    /// the daemon answers.
     #[test]
-    fn m4_child_cards_with_a_page_have_no_close_button() {
-        let s = shown(&doc(
+    fn m4_running_child_cards_with_a_close_have_a_close_button() {
+        let mut s = shown(&doc(
             "r",
-            &[paged("r", "root", ""), paged("c", "child", "M0"), fleet("o", "old", "running")],
+            &[
+                paged("r", "root", ""),
+                paged_close("c", "child", "M0", "running"),
+                fleet("o", "old", "running"),
+                paged("n", "noclose", "M1"),
+                paged_close("s", "stopping", "M2", "stopping"),
+            ],
         ));
         let mut b = buf();
         draw(&mut b, &s, SIDEBAR_W, 59, 2);
         assert_eq!(b[(31, 2)].symbol(), "×", "root row {:?}", row_text(&b, 2, 33));
         assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 2), SideHit::Close(0));
-        assert_eq!(b[(31, 6)].symbol(), " ", "child row {:?}", row_text(&b, 6, 33));
-        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 6), SideHit::Pick(1));
+        assert_eq!(b[(31, 6)].symbol(), "×", "child row {:?}", row_text(&b, 6, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 6), SideHit::Close(1));
         assert_eq!(b[(31, 10)].symbol(), "×", "old child row {:?}", row_text(&b, 10, 33));
         assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 10), SideHit::Close(2));
+        assert_eq!(b[(31, 14)].symbol(), " ", "child without close {:?}", row_text(&b, 14, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 14), SideHit::Pick(3));
+        assert_eq!(b[(31, 18)].symbol(), " ", "stopping child {:?}", row_text(&b, 18, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 18), SideHit::Pick(4));
+        s.child_stop = ChildStop::Requested("c".to_string());
+        let mut b = buf();
+        draw(&mut b, &s, SIDEBAR_W, 59, 2);
+        assert_eq!(b[(31, 6)].symbol(), " ", "requested child {:?}", row_text(&b, 6, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 6), SideHit::Pick(1));
+        assert_eq!(b[(31, 2)].symbol(), "×", "the root keeps its own");
+    }
+
+    #[test]
+    fn m4_card_close_object_is_optional_and_must_be_an_object() {
+        let d = parse(&doc("r", &[paged("r", "root", ""), paged_close("c", "child", "M0", "running")]))
+            .expect("a card with close parses");
+        assert_eq!(d.fleets[0].close, None);
+        let close = d.fleets[1].close.as_ref().expect("the card's close");
+        assert_eq!(close.title, "关闭子 fleet「child」？");
+        assert_eq!(close.body, "取消这件 job");
+        let bad = doc("r", &[paged("r", "root", ""), paged("c", "child", "M0").replace("}", r#","close":"x"}"#)]);
+        assert!(parse(&bad).is_err(), "{bad}");
+    }
+
+    /// The child box names the card and takes the daemon's texts; without them it falls back to the card's title.
+    #[test]
+    fn the_child_box_names_its_card() {
+        let mut s = shown(&doc("r", &[paged("r", "root", ""), paged_close("c", "child", "M0", "running")]));
+        s.close_child = Some("c".to_string());
+        assert_eq!(modal_text(&s), ("关闭子 fleet「child」？".to_string(), "取消这件 job".to_string()));
+        let mut s = shown(&doc("r", &[paged("r", "root", ""), paged("c", "child", "M0")]));
+        s.close_child = Some("c".to_string());
+        assert!(modal_text(&s).0.contains("child"), "{:?}", modal_text(&s));
     }
 }

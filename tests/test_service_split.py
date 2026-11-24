@@ -26,6 +26,10 @@ from test_v2_codex_claude import answer_turn, typed
 from fleetmux import fleet, runtime_v2, subfleet
 from fleetmux.channels import envelope
 
+# D27: these split tests are not about models; the supervisor chain is pinned to the run's default model, so the slot
+# keeps its model as before (tests/test_subfleet_supervisor_chain.py covers the chain)
+pytestmark = pytest.mark.usefixtures('job_chains_as_before')
+
 ROOT = Path(__file__).resolve().parents[1]
 PROPOSAL = [{'instruction': 'Fetch sources one to three into part-a.md', 'output': 'part-a.md', 'kind': 'research'},
             {'instruction': 'Fetch sources four and five into part-b.md', 'output': 'part-b.md', 'kind': 'research'}]

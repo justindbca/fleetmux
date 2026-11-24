@@ -161,6 +161,7 @@ export default function (pi: ExtensionAPI) {
   const dispatch = Type.Object({ to: Type.String(), instruction: Type.String({ minLength: 12 }),
     id: Type.Optional(Type.String()), advise_note: Type.Optional(Type.String()), fresh: Type.Optional(Type.Boolean()),
     review: Type.Optional(Type.Boolean()),  // the review the delivery gate reads (Fleet.mark_review)
+    leaf: Type.Optional(Type.Boolean()),  // §44 leaf block: never nudged to split
     // §44 监工直接开子 fleet (supervisor_split): the daemon checks the switch, the shape and the limits
     split: Type.Optional(Type.Object({ reason: Type.String({ minLength: 1 }),
       proposal: Type.Array(Type.Object({ instruction: Type.String({ minLength: 12 }), output: Type.String({ minLength: 1 }),
@@ -176,7 +177,26 @@ export default function (pi: ExtensionAPI) {
     // §44: an approve may pick the split's models (cards, hosts and capacity are checked by the daemon)
     supervisor_profile: Type.Optional(Type.String()), worker_profiles: Type.Optional(Type.Array(Type.String())),
     // §46: an approve of a sub-fleet report may narrow the paths the program grants (never widen: the daemon checks)
-    paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))) });
+    paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+    // design §62: the cause of a [blocked] ruling (required there while the decomposition tree is on)
+    cause: Type.Optional(Type.Union([Type.Literal("shared_decision"), Type.Literal("file_overlap"),
+      Type.Literal("missing_dep"), Type.Literal("scope"), Type.Literal("other")])) });
+  // design §62: a decomposition tree entry: a block (by id) or a decision; the daemon checks the shape
+  const treeEntry = Type.Object({ id: Type.Optional(Type.String()), parent: Type.Optional(Type.String()),
+    goal: Type.Optional(Type.String()),
+    cut: Type.Optional(Type.Union([Type.Literal("function"), Type.Literal("decision"), Type.Literal("serial")])),
+    owns: Type.Optional(Type.Array(Type.String())), decides: Type.Optional(Type.Array(Type.String())),
+    consumes: Type.Optional(Type.Array(Type.String())), after: Type.Optional(Type.Array(Type.String())),
+    depends_on: Type.Optional(Type.Array(Type.String())),
+    serial_reason: Type.Optional(Type.Union([Type.Literal("integration"), Type.Literal("exploratory"), Type.Null()])),
+    est: Type.Optional(Type.Object({ minutes: Type.Number({ exclusiveMinimum: 0 }), sessions: Type.Optional(Type.Integer({ minimum: 1 })) })),
+    accept: Type.Optional(Type.String()),
+    claim: Type.Optional(Type.Object({ leaf: Type.Boolean(), reason: Type.Optional(Type.String()) })),
+    merge_of: Type.Optional(Type.Array(Type.String())),
+    split_from: Type.Optional(Type.Union([Type.Object({ id: Type.String(), dT: Type.Number(), dC: Type.Number() }), Type.Null()])),
+    decision: Type.Optional(Type.Object({ id: Type.String(), q: Type.Optional(Type.String()), owner: Type.Optional(Type.String()),
+      status: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("decided"), Type.Literal("pending_user")])),
+      answer: Type.Optional(Type.String()) })) });
   const decisionSchema = service ? Type.Object({ status: Type.Union([Type.Literal("RUNNING"), Type.Literal("BLOCKED")]),
     reason: Type.Optional(Type.String()), dispatch: Type.Array(dispatch), skip: Type.Optional(Type.Array(Type.Object({ reason: Type.String() }))),
     escalations: Type.Optional(Type.Array(escalation)),
@@ -194,7 +214,14 @@ export default function (pi: ExtensionAPI) {
       withdraw: Type.Optional(Type.Array(Type.String())),
       // M15: an explicit, bounded dependency wait — only with an empty dispatch; the daemon checks the rest.
       waiting: Type.Optional(Type.Object({ for: Type.String({ minLength: 12 }), check: Type.String({ minLength: 12 }),
-        for_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 12 })) }, { additionalProperties: false })) });
+        for_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 12 })) }, { additionalProperties: false })),
+      // design §62: the decomposition tree (first reply: tree only), its removals, and the closing tune
+      tree: Type.Optional(Type.Array(treeEntry)), tree_drop: Type.Optional(Type.Array(Type.String())),
+      decompose_tune: Type.Optional(Type.Array(Type.Object({ param: Type.Union([Type.Literal("split.k"),
+        Type.Literal("split.margin"), Type.Literal("split.floor"), Type.Literal("cost.cold_start"),
+        Type.Literal("cost.per_decision"), Type.Literal("cost.merge"), Type.Literal("cost.supervisor"),
+        Type.Literal("cost.spawn"), Type.Literal("overrun_ratio"), Type.Literal("returns_alert")]), value: Type.Number(),
+        reason: Type.String({ minLength: 1 }) }))) });
   pi.registerTool({
     name: supervisor ? "fleet_decision" : "fleet_result", label: supervisor ? "派工候选" : "结果候选",
     description: supervisor ? "Submit your final fleet decision for daemon validation. Route only this delivery's request; transport IDs are bound by code." :

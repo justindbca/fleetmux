@@ -6,6 +6,8 @@ real ``claude_stop`` hooks, a fake cmux world.
 import json
 from pathlib import Path
 
+import pytest
+
 from test_contracts import cf, inbox, item, p0_reply, report, write  # noqa: F401  (fixture + helpers)
 from test_escalate import escalate, ok_check, parallel_m0  # noqa: F401
 from test_fleet import received  # noqa: E402
@@ -87,6 +89,7 @@ def test_spawn_refused_once_attempts_are_used(tree):
 WORK_REPORT = 'Done:\n- {done}\nEvidence:\n- {ev}\nNot done: none\nBlocked: none\n'
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # D27: the split supervisor keeps the slot's model (pinned chain)
 def test_contract_subfleet_writes_its_own_dir_and_the_parent_check_passes(tree, monkeypatch):
     """Acceptance P0 path: contract parent task, M0 provides worker-1/sources.md, worker-1 escalates,
     the child (whose workers may only write inside the child workspace) delivers there; the parent

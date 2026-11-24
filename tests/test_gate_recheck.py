@@ -136,6 +136,7 @@ def end_child(t, cf):
     step(t)
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # §58 model chains: the slot keeps its model
 def test_job_blocked_then_fixed_then_recheck_publishes_ok(split_tree, tmp_path, monkeypatch, repo):
     t, f = split_tree, split_tree.f
     jid, key, child_run, cf = blocked_job(t, tmp_path, monkeypatch, repo)
@@ -163,6 +164,7 @@ def test_job_blocked_then_fixed_then_recheck_publishes_ok(split_tree, tmp_path, 
         lifecycle_recheck.compute(f.cfg, jid, f.r)
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # §58 model chains: the slot keeps its model
 def test_job_recheck_refused_while_the_job_is_open(split_tree, tmp_path, monkeypatch, repo):
     t, f = split_tree, split_tree.f
     jid, key, child_run, cf = blocked_job(t, tmp_path, monkeypatch, repo)

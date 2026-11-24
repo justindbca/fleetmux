@@ -16,6 +16,7 @@ from test_subfleet import (World, adopt_by_hook, WorldMgr, ask, child_daemon, di
                            start_tree, step, stop_child_like_daemon, supervisor_answers, supervisor_texts,
                            typed_return)
 from test_subfleet_tmux import attach_view, detach_view, meta, tmux_view_info
+from test_named_subfleet_chain import named_chain_as_before  # noqa: F401  (fixture)
 from fleetmux import fleet, named_subfleet, roster, subfleet
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
@@ -221,6 +222,7 @@ def test_autostart_crash_revive_and_crashloop_leave_the_parent_tab_in_place(tmp_
             pass
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the slot keeps its model
 def test_delegation_after_rotation_uses_the_next_generations_tmux_session(ntmux, monkeypatch):
     t, f = ntmux, ntmux.f
     usage = {'worker-1': (90, 100)}
@@ -277,6 +279,7 @@ def test_parent_resume_takes_back_external_and_reattaches_autostart_views(ntmux)
     assert moved(t, sid) == []
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the slot keeps its model
 def test_hot_declared_plain_slot_falls_back_once_then_its_next_generation_runs_in_tmux(tmp_path, monkeypatch):
     t = service_tree(tmp_path, monkeypatch, declared_at_start=False)
     try:

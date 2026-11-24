@@ -558,10 +558,15 @@ def test_stop_on_stub_stops_the_jobs_sub_fleet_never_the_root(stubbed, tmp_path,
     assert stops == [['stop', '--config', str(run / 'config.json')]]
 
 
-def test_stop_on_stub_refuses_a_queued_job(stubbed, tmp_path, monkeypatch, capsys):
+def test_stop_on_stub_cancels_a_queued_job_through_the_root(stubbed, tmp_path, monkeypatch, capsys):
     with_job(stubbed, tmp_path, state='queued', child=False)
-    assert run_main(['stop', '--config', str(stubbed.path)], monkeypatch) == 2
+    stubbed.replies['task'] = (0, json.dumps({'status': 'cancelled', 'job': 'job-abc'}), '')
+    assert run_main(['stop', '--config', str(stubbed.path)], monkeypatch) == 0  # section 58 "Restart": cancelled, a result
+    assert [c[0] for c in stubbed.calls if c[0][0] == 'task'] == [['task', '--cancel', 'job-abc', '--config',
+                                                                    str(stubbed.root)]]
     assert not [c for c in stubbed.calls if c[0][0] == 'stop']
+    stubbed.replies['task'] = (2, json.dumps({'status': 'rejected', 'reason': 'older root'}), '')
+    assert run_main(['stop', '--config', str(stubbed.path)], monkeypatch) == 2  # a root that cannot cancel: says why
     assert 'no sub-fleet yet' in capsys.readouterr().err
 
 

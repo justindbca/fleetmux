@@ -628,7 +628,7 @@ fn kv_is_per_page_and_reserved_keys_are_root_only() {
         c.ok("kv.get", json!({"key": "history_url"}))["value"],
         json!("file:///r/root/sub/M0/history.html")
     );
-    for key in ["sidebar", "stop_request", "restorable", "sidebar_width"] {
+    for key in ["sidebar", "stop_request", "restorable", "sidebar_width", "child_stop"] {
         expect_code(
             &mut c,
             &srv,
@@ -942,7 +942,7 @@ fn reclaimed_page_draws_the_read_only_banner() {
     v.wait_text("已收回 · 只读", T);
 }
 
-// ------------------------------------------------------------------ sidebar S3 (R8–R10)
+// ------------------------------------------------------------------ sidebar S3 (R8-R9; a child card's close button: design section 19)
 
 /// Root supervisor printing ROOT-BODY, child page M0 (and M1 when `two`) each with a supervisor printing its body,
 /// a sidebar whose child cards carry `page`, and an attached viewer showing it.
@@ -1071,24 +1071,43 @@ fn sidebar_highlight_and_topbar_follow_the_current_page_not_kv_current() {
     );
 }
 
+/// Design section 19 "Closing a sub-fleet from the sidebar": a running child card that the root daemon sent a `close`
+/// object draws its `×`; the same card without one draws none; `child_stop` (the confirmed request) is a root-page
+/// kv key that a child page's connection can neither set nor read.
 #[test]
 #[ignore = "m4"]
-fn child_cards_have_no_close_button() {
-    let (srv, mut v) = s3_world("child_cards_have_no_close_button", false);
+fn running_child_cards_have_a_close_button() {
+    let (srv, mut v) = s3_world("running_child_cards_have_a_close_button", false);
     let (r_root, _) = wait_card(&mut v, "root-fleet", T);
     let (r_m0, _) = wait_card(&mut v, "child-m0", T);
-    let root: String = (0..CARD_COLS).map(|c| v.cell(r_root, c).ch).collect();
-    assert!(
-        root.contains('×'),
-        "control: the root card has its ×: {root:?} {}",
-        srv.at()
-    );
-    let child: String = (0..CARD_COLS).map(|c| v.cell(r_m0, c).ch).collect();
+    fn row(v: &mut Viewer, r: u16) -> String {
+        (0..CARD_COLS).map(|c| v.cell(r, c).ch).collect()
+    }
+    let child = row(&mut v, r_m0);
     assert!(
         !child.contains('×'),
-        "a child card with `page` draws ×: {child:?} {}",
+        "control: a child card without `close` draws no ×: {child:?} {}",
         srv.at()
     );
+    let mut value: Value = serde_json::from_str(&sidebar_json(
+        "f-root",
+        &[("f-root", "root-fleet", "running", Some("")), ("f-m0", "child-m0", "running", Some("M0"))],
+    ))
+    .expect("sidebar json");
+    value["fleets"][1]["close"] = json!({"title": "关闭子 fleet「child-m0」？", "body": "取消这件 job"});
+    srv.ok("kv.set", json!({"key": "sidebar", "value": value.to_string()}));
+    let deadline = std::time::Instant::now() + T;
+    while !row(&mut v, r_m0).contains('×') && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let child = row(&mut v, r_m0);
+    assert!(child.contains('×'), "a running child card with `close` draws no ×: {child:?} {}", srv.at());
+    let root = row(&mut v, r_root);
+    assert!(root.contains('×'), "the root card keeps its ×: {root:?} {}", srv.at());
+    let mut c = bind(&srv, "M0");
+    expect_code(&mut c, &srv, "kv.set", json!({"key": "child_stop", "value": "x"}), "bad_request");
+    expect_code(&mut c, &srv, "kv.get", json!({"key": "child_stop"}), "bad_request");
+    srv.ok("kv.set", json!({"key": "child_stop", "value": r#"{"v":1,"state":"refused","id":"f-m0","reason":"x"}"#}));
 }
 
 // ------------------------------------------------------------------ old viewers (§4.2 查看协议)

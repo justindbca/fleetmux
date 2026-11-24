@@ -146,8 +146,9 @@ fn no_such_page(page: &str) -> Fail {
     bad_request(format!("no such page: {page}"))
 }
 
-/// kv keys that only the root page has (design m4 §4.2 `kv` row).
-const ROOT_ONLY_KEYS: [&str; 4] = ["sidebar", "stop_request", "restorable", "sidebar_width"];
+/// kv keys that only the root page has (design m4 §4.2 `kv` row; `child_stop`: design section 19, a child card's
+/// confirmed close request, which only the root daemon reads and answers).
+const ROOT_ONLY_KEYS: [&str; 5] = ["sidebar", "stop_request", "restorable", "sidebar_width", "child_stop"];
 
 /// Every command that completes without waiting, under one lock.
 fn immediate(st: &mut State, cmd: Command, ctx: &Ctx) -> Res {
@@ -208,6 +209,7 @@ fn immediate(st: &mut State, cmd: Command, ctx: &Ctx) -> Res {
             // S1d (plan §16.3-5): a pushed `sidebar_width` re-syncs the layout like the cards do.
             let width = key == "sidebar_width";
             let stop = key == "stop_request";
+            let child_stop = key == "child_stop";
             // S2b (plan §13.6-2): the closer registers the closed fleets' `start --resume` commands here.
             let restorable = key == "restorable";
             st.kv.insert(key, value);
@@ -216,6 +218,10 @@ fn immediate(st: &mut State, cmd: Command, ctx: &Ctx) -> Res {
                 // S1 (plan §4.3): the fleet daemon pushes the sidebar cards through kv; re-parse them now so the
                 // next frame shows them and the panes get their new width.
                 view::sync_sidebar(st);
+            }
+            if child_stop {
+                // Design section 19: the root daemon answers a child close request; the card and a notice follow.
+                view::sync_child_stop(st);
             }
             if stop {
                 // S1b (plan §11.3): the daemon answers a close request with `accepted` / `refused`; the status line

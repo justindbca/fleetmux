@@ -21,6 +21,8 @@ import math
 import re
 import time
 
+from fleetmux.i18n import t
+
 KIND_RESULT = 'result'
 KIND_ROUTING = 'routing'
 KIND_FOLLOWUP = 'followup'
@@ -42,9 +44,11 @@ MAX_RENDER_CHARS = 900
 MAX_CELL = 300
 MAX_INLINE_BODY = 400
 
-STOP_CONFIRMED = '已确认执行停止。'
-STOP_RUNNING = '原执行仍在进行：尚未确认停止，请先确认后再重派。'
-STOP_UNKNOWN = '原执行尚未确认停止（未确认，不代表已停）。'
+# Card texts: (key, English); the interface language picks the text (ui.language, docs/design.md §63).
+STOP_CONFIRMED = ('card.stop.confirmed', 'Execution stopped (confirmed).')
+STOP_RUNNING = ('card.stop.running', 'The original run is still going: not confirmed stopped. Confirm it before '
+                                     're-dispatching.')
+STOP_UNKNOWN = ('card.stop.unknown', 'The original run is not confirmed stopped (unconfirmed does not mean stopped).')
 
 OPERATOR_PREFIX_RE = re.compile(r'^\s*\[Operator result[^\]]*\]\s*', re.I)
 _CONTROLS_RE = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff]')
@@ -160,15 +164,17 @@ def _duration_short(seconds):
     if secs is None:
         return None
     if secs < 60:
-        return '不足 1 分钟'
+        return t('card.dur.under_minute', 'under 1 min')
     minutes = int(secs // 60)
     if minutes < 60:
-        return '约 %d 分钟' % minutes
+        return t('card.dur.m', 'about {m} min', m=minutes)
     hours, minutes = divmod(minutes, 60)
     if hours < 24:
-        return ('约 %d 小时 %d 分钟' % (hours, minutes)) if minutes else ('约 %d 小时' % hours)
+        return (t('card.dur.hm', 'about {h} h {m} min', h=hours, m=minutes) if minutes
+                else t('card.dur.h', 'about {h} h', h=hours))
     days, hours = divmod(hours, 24)
-    return ('约 %d 天 %d 小时' % (days, hours)) if hours else ('约 %d 天' % days)
+    return (t('card.dur.dh', 'about {d} d {h} h', d=days, h=hours) if hours
+            else t('card.dur.d', 'about {d} d', d=days))
 
 
 def _stable_id(seed, prefix='ui'):
@@ -236,10 +242,10 @@ def _stop_state(execution_stopped):
     if execution_stopped is not True and execution_stopped is not False and execution_stopped is not None:
         raise CardError('execution_stopped 只能是 True/False/None')
     if execution_stopped is True:
-        return ('confirmed', STOP_CONFIRMED)
+        return ('confirmed', t(*STOP_CONFIRMED))
     if execution_stopped is False:
-        return ('running', STOP_RUNNING)
-    return ('unknown', STOP_UNKNOWN)
+        return ('running', t(*STOP_RUNNING))
+    return ('unknown', t(*STOP_UNKNOWN))
 
 
 def _title_of(task_title):
@@ -270,7 +276,7 @@ def _card(sev, render, meta, now, has_detail=False, wake_model=False):
         identity or meta.get('title') or meta.get('slot', ''),
         None if identity else now, slot=meta.get('slot', ''), status=meta['status'])
     meta['has_detail'] = bool(has_detail)
-    detail_hint = '\n详情见 control。' if has_detail else ''
+    detail_hint = '\n' + t('card.see_control', 'Details in control.') if has_detail else ''
     render = _clamp_lines(render, MAX_RENDER_CHARS - len(detail_hint)) + detail_hint
     return {'kind': KIND_RESULT, 'severity': sev, 'render': render,
             'metadata': meta, 'wake_model': bool(wake_model)}
@@ -328,7 +334,7 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
             k: record[k] for k in display_fields if k in record and record[k] is not None}
         detail = False
         if 'result' not in record and not body:
-            lines.append('%s 已完成。' % slot)
+            lines.append(t('card.done', '{slot} done.', slot=slot))
         elif not isinstance(body, dict) or len(body) <= 1:
             only = (next(iter(body.values())) if isinstance(body, dict)
                     and len(body) == 1 and next(iter(body)) in display_fields else body)
@@ -338,7 +344,7 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
                 blob = only if isinstance(only, str) else json.dumps(only, ensure_ascii=False,
                                                                       sort_keys=True)
                 if len(blob) > MAX_INLINE_BODY:
-                    blob = blob[:MAX_INLINE_BODY] + ' …（完整内容见 control）'
+                    blob = blob[:MAX_INLINE_BODY] + t('card.more_in_control', ' ... (full text in control)')
                     detail = True
                 lines.append(blob)
         else:
@@ -347,24 +353,26 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
                 blob = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False,
                                                                        sort_keys=True)
                 if len(blob) > MAX_CELL:
-                    blob = blob[:MAX_CELL] + ' …（完整内容见 control）'
+                    blob = blob[:MAX_CELL] + t('card.more_in_control', ' ... (full text in control)')
                     detail = True
-                lines.append('%s：%s' % (key, blob))
+                lines.append(t('card.field', '{key}: {value}', key=key, value=blob))
             detail = True
         if dur is not None:
-            lines.append('用时 %s。' % dur)
+            lines.append(t('card.took', 'Took {dur}.', dur=dur))
         return _card(SEVERITY_INFO, '\n'.join(lines), meta, now, has_detail=detail)
 
     if status == 'timeout':
         if title:
-            lines.append('任务：%s' % title)
-        lines.append('%s 处理超时%s，未取得有效结果。' % (slot, '（%s）' % dur if dur else ''))
+            lines.append(t('card.task', 'Task: {title}', title=title))
+        lines.append(t('card.timeout', '{slot} timed out{dur}, no valid result.', slot=slot,
+                       dur=t('card.timeout.dur', ' ({dur})', dur=dur) if dur else ''))
         lines.append(stop_line)
         meta['detail_ref'] = 'timeout detail'
         return _card(SEVERITY_ERROR, '\n'.join(lines), meta, now, has_detail=True)
 
     if status in ('invalid', 'failed'):
-        head = '答复无效，未通过验收。' if status == 'invalid' else '执行失败。'
+        head = (t('card.invalid', 'reply invalid, not accepted.') if status == 'invalid'
+                else t('card.failed', 'execution failed.'))
         lines.append('%s %s' % (slot, head))
         meta['detail_ref'] = 'error detail'
         meta['reason'] = 'validation failed' if status == 'invalid' else 'execution failed'
@@ -375,7 +383,8 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
 
     if status == 'stalled':
         idle = _float(record.get('idle_s'), floor=0, ceiling=86400 * 365)
-        lines.append('%s 卡住：%s无新动作。' % (slot, _duration_short(idle) or '一段时间'))
+        lines.append(t('card.stalled', '{slot} stalled: no new action for {idle}.', slot=slot,
+                       idle=_duration_short(idle) or t('card.stalled.a_while', 'a while')))
         lines.append(stop_line)
         meta['idle'] = _duration_short(idle) or 'unknown'
         meta['detail_ref'] = 'stall detail'
@@ -388,10 +397,11 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
             if isinstance(value, str) and value.strip():
                 reason = value.strip()
                 break
-        shown = sanitize_text(mask_secrets(reason), MAX_CELL) if reason else '需要人工处理（原因未记录）'
+        shown = (sanitize_text(mask_secrets(reason), MAX_CELL) if reason
+                 else t('card.blocked.no_reason', 'needs a person (no reason recorded)'))
         if len(shown) >= MAX_CELL:
-            shown = shown + ' …（完整信息见 control）'
-        lines.append('%s 受阻：%s，等待人工处理。' % (slot, shown))
+            shown = shown + t('card.more_info_in_control', ' ... (full text in control)')
+        lines.append(t('card.blocked', '{slot} blocked: {why}. Waiting for a person.', slot=slot, why=shown))
         meta['needs_human'] = True
         meta['reason'] = shown
         if not reason:
@@ -400,19 +410,21 @@ def result_card(record, task_title=None, execution_stopped=None, now=None):
                      has_detail=not bool(reason))
 
     if status == 'cancelled':
-        lines.append('%s 已取消。' % slot)
+        lines.append(t('card.cancelled', '{slot} cancelled.', slot=slot))
         return _card(SEVERITY_INFO, '\n'.join(lines), meta, now)
 
     if status == 'skipped':
-        lines.append('%s 已跳过，本次未执行。' % slot)
+        lines.append(t('card.skipped', '{slot} skipped, not run this time.', slot=slot))
         return _card(SEVERITY_INFO, '\n'.join(lines), meta, now)
 
     if status == 'rejected':
         reason = record.get('reason') if isinstance(record.get('reason'), str) else ''
-        lines.append('%s 已拒绝%s。' % (slot, '：' + sanitize_text(mask_secrets(reason), MAX_CELL) if reason else ''))
+        lines.append(t('card.rejected', '{slot} rejected{why}.', slot=slot,
+                       why=t('card.rejected.why', ': {reason}', reason=sanitize_text(mask_secrets(reason), MAX_CELL))
+                       if reason else ''))
         return _card(SEVERITY_INFO, '\n'.join(lines), meta, now)
 
-    lines.append('%s %s（尚未完成）。' % (slot, status))
+    lines.append(t('card.pending', '{slot} {status} (not finished).', slot=slot, status=status))
     return _card(SEVERITY_INFO, '\n'.join(lines), meta, now)
 
 
@@ -433,32 +445,32 @@ def classify_routing(text, request_kind='', reply_spec=None, at=None, slot=''):
     def route(wake, reason):
         return _route(KIND_FOLLOWUP if wake else KIND_ROUTING, reason, at, slot, wake)
     if kind in MECHANICAL_KINDS:
-        return route(False, '状态通知 %s：仅显示' % kind)
+        return route(False, t('route.mechanical', 'status notice {kind}: display only', kind=kind))
     if not body:
-        return route(False, '空文本：仅显示')
+        return route(False, t('route.empty', 'empty text: display only'))
     if kind in _INPUT_KINDS:
-        return route(True, '用户指令：需要 supervisor 处理')
+        return route(True, t('route.user_input', 'user instruction: for the supervisor'))
     if kind in FOLLOWUP_KINDS:
-        return route(True, '业务后续：需要 supervisor 处理')
+        return route(True, t('route.followup', 'business follow-up: for the supervisor'))
     spec = reply_spec.get('required') if isinstance(reply_spec, dict) else None
     if isinstance(spec, (list, tuple)):
         required = [k.lower() for k in spec if isinstance(k, str)]
         if not required or all(k in ACK_KEYS for k in required):
-            return route(False, '简单结果：显示卡即可')
-        return route(True, '答复需要业务判断')
+            return route(False, t('route.simple', 'simple result: card only'))
+        return route(True, t('route.needs_judgement', 'reply needs a business decision'))
     if _ACK_RE.fullmatch(body) or _DONE_RE.fullmatch(body):
-        return route(False, '确认/完成状态：显示卡即可')
+        return route(False, t('route.ack', 'ack / done: card only'))
     if ((body.startswith('/') and not any(c.isspace() for c in body))
             or (not any(c.isspace() for c in body)
                 and body.endswith(('.md', '.json', '.csv', '.html', '.txt')))):
-        return route(False, '产物路径：显示卡即可')
+        return route(False, t('route.path', 'output path: card only'))
     if _NUMUNIT_RE.fullmatch(body):
-        return route(False, '计数/指标：显示卡即可')
+        return route(False, t('route.count', 'count / metric: card only'))
     if any(word.lower() in body for word in JUDGEMENT_WORDS + _EXTRA_HINTS):
-        return route(True, '业务内容需要判断')
+        return route(True, t('route.content', 'business content needs a decision'))
     if len(body) > 120:
-        return route(True, '较长业务正文：需要业务判断')
-    return route(False, '简短结果：显示卡即可')
+        return route(True, t('route.long', 'long business text: needs a decision'))
+    return route(False, t('route.short', 'short result: card only'))
 
 
 def _route(kind, reason, at, slot, wake, title='', severity=SEVERITY_INFO):
@@ -473,7 +485,7 @@ def _route(kind, reason, at, slot, wake, title='', severity=SEVERITY_INFO):
     head = meta.get('clock') or '?'
     body = meta['title'] if title else reason
     return {'kind': kind, 'severity': severity,
-            'render': _clamp_lines('%s %s：%s' % (head, kind, body)),
+            'render': _clamp_lines(t('card.routing', '{head} {kind}: {body}', head=head, kind=kind, body=body)),
             'metadata': meta, 'wake_model': bool(wake)}
 
 
@@ -498,9 +510,9 @@ def timeline_line(card):
     head = meta.get('clock') or _clock(meta.get('now') or meta.get('at')) or '?'
     marks = []
     if meta.get('has_detail') or meta.get('detail_ref'):
-        marks.append('详情')
+        marks.append(t('timeline.detail', 'detail'))
     if ' … [truncated]' in card.get('render', ''):
-        marks.append('截断')
+        marks.append(t('timeline.truncated', 'truncated'))
     if meta.get('event_id'):
         marks.append('id=%s' % meta['event_id'])
     body = card.get('render', '').replace('\n', ' / ')
@@ -523,7 +535,7 @@ def mask_secrets(value, depth=0):
     visible so real usage numbers are not swallowed.
     """
     if depth > 12:
-        return '<深度截断>'
+        return t('card.depth_cut', '<depth limit>')
     if isinstance(value, dict):
         out = {}
         for key, sub in value.items():

@@ -9,6 +9,10 @@ from fleetmux.presentation import (
     classify_routing, event_id, mask_secrets, result_card, routing_card, sanitize_text,
     timeline_line,
 )
+from fleetmux.i18n import tr
+
+# The suite runs in zh-Hans (conftest ui_language_zh): the stop lines as that language shows them.
+STOP_CONFIRMED, STOP_RUNNING, STOP_UNKNOWN = (tr('zh-Hans', *x) for x in (STOP_CONFIRMED, STOP_RUNNING, STOP_UNKNOWN))
 
 BUSINESS = '报告 /tmp/report.md，代码 print(1/2)；https://example.org/a'
 

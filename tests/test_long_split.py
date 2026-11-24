@@ -313,7 +313,8 @@ def fable_on_worker_2(f):
                                                             'max_concurrent 1'),
     ({'worker_profiles': ['claude-opus', 'nope']}, 'worker-2: unknown agent profile nope'),
 ])
-def test_invalid_models_refuse_the_approve_with_the_reason_and_keep_it_open(cf, ok_check, monkeypatch, extra, reason):
+def test_invalid_models_refuse_the_approve_with_the_reason_and_keep_it_open(cf, ok_check, monkeypatch, extra, reason,
+                                                                            fable_capped):  # Fable at 1 (stub)
     monkeypatch.setattr(fleet.Fleet, 'preflight_profile', lambda self, launch, cli_change_ok=False: None)
     plain_m0(cf)
     fable_on_worker_2(cf)
@@ -487,6 +488,7 @@ def test_approve_with_models_rotates_the_worker_then_adopts_it_and_restores_on_r
     assert subfleet.delegated_route(f.cfg, 'worker-1', 1)[1] == 'worker-1'  # hooks back on the parent slot
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # D27: the chain's pick is the slot's own model
 def test_approve_without_models_rotates_a_plain_pane_into_tmux_first_and_no_parent_profiles_leak(ttree, monkeypatch):
     t, f = ttree, ttree.f
     monkeypatch.setattr(subfleet, 'default_launch', no_launch)
@@ -511,6 +513,7 @@ def test_approve_without_models_rotates_a_plain_pane_into_tmux_first_and_no_pare
     assert ccfg['worker_profiles'] == {}
 
 
+@pytest.mark.usefixtures('job_chains_as_before')  # D27: the chain's pick is the slot's own model
 def test_approve_without_models_adopts_a_slot_already_in_tmux_in_place(ttree, monkeypatch):
     t, f = ttree, ttree.f
     monkeypatch.setattr(subfleet, 'default_launch', no_launch)

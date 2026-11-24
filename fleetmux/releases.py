@@ -48,6 +48,17 @@ def own():
     return _own[0]
 
 
+def python():
+    """This release's interpreter (docs/design.md section 60): the release's own ``.venv`` (the one the ``fleetmux``
+    command runs it with), else the interpreter of this process (a checkout without a venv). Symlinks are kept, so
+    the venv path stays the venv path."""
+    venv = ROOT / '.venv' / 'bin'
+    for name in (Path(sys.executable).name, 'python3', 'python'):
+        if (venv / name).exists():
+            return str(venv / name)
+    return sys.executable
+
+
 def installed(link=None):
     """The release ``link`` (default ``~/fleetmux-current``) points at; None when there is no such link."""
     path = Path(link or LINK).expanduser()

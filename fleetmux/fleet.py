@@ -14,6 +14,7 @@ Subcommands
   results   print / drain finished request results (service mode)
   pause     stop delivering and rotating (service mode; requests keep queuing)
   resume    undo pause
+  answer    answer a sub-fleet request that waits for you (report:<task>:<id>), without the supervisor
   status    task + per-agent state, context usage, inbox depth
   stop      cancel the task, shut the daemon and its Redis down (tabs stay open)
   chrome    run a vetted browser verb through the daemon (for sandboxed agents, optional)
@@ -54,12 +55,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # runnable as a script (actor/notify argv point at this file)
-from fleetmux import advisor, brake, claude_hook, cli_pairs, codex_queue, contracts, fleet_config, fleetmux_sidebar, handoff, history, kit as kitmod, lifecycle, lifecycle_close, lifecycle_deliver, lifecycle_hold, model_usage, named_subfleet, night, peer, pi_adapter, profile_runtime, profile_launch, roster, runtime_v2, redis_runtime, session_board, subfleet, tabs, terminal_theme, watchdog  # noqa: E402
+from fleetmux import advisor, brake, claude_hook, cli_pairs, codex_queue, contracts, decompose, discover, fleet_config, fleetmux_sidebar, handoff, history, job_chain, kit as kitmod, lifecycle, lifecycle_close, lifecycle_deliver, lifecycle_hold, model_usage, named_subfleet, night, peer, pi_adapter, profile_runtime, profile_launch, restart_state, roster, runtime_v2, redis_runtime, session_board, subfleet, tabs, terminal_theme, watchdog  # noqa: E402
 from fleetmux.platform import keep_awake_prefix  # noqa: E402
 from fleetmux import gui_keep  # noqa: E402
 from fleetmux import applet_host  # noqa: E402
 from fleetmux import applet_view  # noqa: E402
 from fleetmux import applet_lease  # noqa: E402
+from fleetmux import blocked_scope  # noqa: E402
+from fleetmux import notify_route  # noqa: E402
 from fleetmux import session_env  # noqa: E402
 from fleetmux import clear_after_result, discover, dsh_adapter, midturn, opencode_adapter  # noqa: E402
 from fleetmux import sandbox  # noqa: E402  (P8o)
@@ -88,6 +91,9 @@ def pin_paths(cfg):
     from fleetmux import cmux_manager
     if 'private_config' in cfg:
         fleet_config.pin(cfg['private_config'])
+    if cfg.get('ui_language'):  # §63: the language the run's start resolved
+        from fleetmux import i18n
+        i18n.pin(cfg['ui_language'])
     if cfg.get('fleet_home'):
         HOME = Path(cfg['fleet_home'])
         LATEST = HOME / 'latest.json'
@@ -146,12 +152,27 @@ SPLIT_STALE = 'fx:split:stale'  # P7: JSON {M<n>: request id} of service splits 
 JOBS = 'fx:jobs'  # service mode, §58: JSON {job id: open job} of `fleetmux task` jobs, each run by its own sub-fleet
 JOB_PREFIX = 'job-'  # job ids
 JOB_KEYS = ('goal', 'hours', 'budget', 'artifacts', 'lifecycle', 'workers', 'supervisor_profile', 'worker_profiles',
-            'name', 'roster', 'roles', 'deliver', 'review_file', 'overrides')
+            'name', 'roster', 'roles', 'deliver', 'review_file', 'overrides', 'supervisor', 'worker', 'tree', 'by')
 # carried to the child (subfleet.spawn_child job=); overrides: the attached start's own settings (join.py)
 JOB_SPAWN = ('name', 'roster', 'roles', 'deliver', 'review_file', 'overrides')
 JOB_ROSTER_REFUSED = ('subfleets', 'channels', 'applets')  # a job sub-fleet's roster reload would refuse these
 JOB_HOT_BASE = 'worker'  # a worker added for a job is <base>-<n> (an added roster row ends with -<number>)
 JOB_TRIES = 3  # a job whose sub-fleet could not start this many times fails
+MODEL_CHAIN_FILE = 'model_chain.json'  # §58: a job sub-fleet's model_chain once a wall switch was recorded
+# section 58 "Restart": a service root's open jobs survive a stop / restart of the root (docs/design.md section 58)
+JOBS_FILE = 'jobs.json'  # <run>/jobs.json mirrors fx:jobs, so `start` sees open jobs while the run's Redis is down
+JOBS_CARRIED = 'jobs.carried.json'  # <old run>/: the rows a new run took over (tombstone: never started here again)
+JOB_RESULTS = 'job-results'  # <run>/job-results/<job id>.json: each published job result (past RESULT_TTL too)
+JOB_CANCELS = 'job-cancels'  # <run>/job-cancels/<job id>.json: an operator stop written while the root was down
+JOB_INDEX = 'job-runs'  # <fleet home>/job-runs/<run dir name>.json while a root run holds open jobs
+JOB_NOTIFIED = 'fx:jobs:notified'  # hash: job ids whose failure went out on the outbound channel (once each)
+JOB_SUSPEND_REASON = 'root fleet stopped; the job resumes when the root starts again'
+# section 60: a continued run's supervisor is always a new generation, so its model settings apply on resume
+SUPERVISOR_CONTINUE = ('supervisor_model', 'supervisor_pi_model', 'supervisor_pi_thinking', 'supervisor_profile')
+SUPERVISOR_CONTINUE_BY_CLI = {'claude': ('supervisor_model',), 'codex': ('supervisor_profile',),
+                              'pi': ('supervisor_pi_model', 'supervisor_pi_thinking')}  # brake.SUPERVISOR_MODEL_KEY
+CONTINUE_APPLIED = SUPERVISOR_CONTINUE + ('no_restore',) + ('roster', 'max_attempts', 'lease_reclaim', 'security', 'no_security', 'advisor', 'extend_hours',
+                    'resume', 'no_join', 'fleet_home', 'attach', 'gui', 'no_view')  # what `resume` honours
 ESCALATION_DECISIONS = ('approve', 'revise', 'reject')
 # Plan F' 8.3 / 8.4: escalations the supervisor rules on instead of the user (keys in fx:escalations).
 DIALOG_KEY, BLOCKED_KEY = 'dialog:', 'blocked:'
@@ -1144,17 +1165,70 @@ def claude_stop_failure(cfg_path, name, generation, raw):
                 ev = dict(kind='stop_failure', agent=name, generation=int(generation), run_id=bus.run_id,
                           thread=data.get('session_id'), error=fields['error'],
                           text=str(data.get('last_assistant_message') or data.get('error_details') or '')[:1000],
-                          refusal=claude_refused(data.get('transcript_path', '')))
+                          refusal=claude_refused(data.get('transcript_path', '')),
+                          # CLI-owned error fields (the safeguards class reads these, design section 23)
+                          details=str(data.get('error_details') or '')[:1000], error_type=str(data.get('error') or ''),
+                          api_text='')
                 lease = r.hgetall(bus.lease_key(name))
                 # Only a delivery this session's hook handed over ended with this turn; one still in the
                 # mailbox belongs to a later turn (an operator turn failed meanwhile: the rewake hands it over).
                 if lease.get('message_id') and hook_delivered(r, k, data.get('session_id'), lease):
                     msg = bus.message(lease['message_id'])
                     ev['delivery'] = {x: msg[x] for x in runtime_v2.IDENTITY}
+                    ev['api_text'] = claude_api_error(data.get('transcript_path', ''), received_at(msg))[:1000]
                 runtime_v2.post_event(bus, ev)
     finally:
         r.close()
     return True
+
+
+def received_at(msg):
+    """When the delivery reached the session (epoch seconds; the bus stores ms), or 0 when unknown."""
+    try:
+        at = float(msg.get('received_at') or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+    return at / 1000.0 if at > 1e11 else at
+
+
+def claude_api_error(transcript, since=0):
+    """The text of this session's newest main-chain assistant row when the CLI wrote it as its own API error
+    (``isApiErrorMessage``: e.g. "API Error: <model>'s safeguards flagged this message ..."), else ''. Model output is
+    never returned: a reply quoting that sentence is not the CLI's error. ``since``: a row stamped before it belongs
+    to an earlier turn (this turn's row may not be written yet when the hook runs) and is not returned.
+    Unreadable means ''."""
+    try:
+        for line in reversed(_tail(Path(transcript or ''), 262144)):
+            row = json.loads(line)
+            if row.get('type') == 'assistant' and not row.get('isSidechain'):
+                when = claude_hook.stamp(row)
+                if not row.get('isApiErrorMessage') or (since and (when is None or when < since - 1)):
+                    return ''
+                content = (row.get('message') or {}).get('content')
+                if isinstance(content, str):
+                    return content
+                return '\n'.join(str(c.get('text') or '') for c in content or () if isinstance(c, dict))
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return ''
+
+
+def stop_failure_wall(ev):
+    """design section 23: the walls class safeguards on a StopFailure event, from its CLI-owned text (``api_text`` =
+    this turn's API-error row in the transcript, ``details`` = error_details). ``text`` (last_assistant_message) can be
+    model output: it counts only when no API-error row of this turn could be read (the CLI may write it after the
+    hook runs) AND the CLI's error type corroborates it (walls.safeguards_error_types, e.g. invalid_request). ``error``
+    may fall back to the message text (clear-after-result hook) and is never read. Any other wall wording arriving
+    through StopFailure keeps today's API-error handling (None)."""
+    def safeguards(text):
+        wall = brake.classify_wall(text, safeguards='cli')
+        return wall if wall and wall.get('kind') == brake.SAFEGUARDS else None
+    wall = safeguards('\n'.join(str(ev.get(k) or '') for k in ('api_text', 'details')))
+    if wall or ev.get('api_text'):
+        return wall
+    if str(ev.get('error_type') or '') in brake.wall_table().get('safeguards_error_types', ()):
+        return safeguards(str(ev.get('text') or ''))
+    return None
 
 
 def claude_refused(transcript):
@@ -1354,7 +1428,10 @@ def advisor_rosters(cfg):
     return paths
 
 
-def parse_decision(text, workers, others_active):
+def parse_decision(text, workers, others_active, tree_ctx=None):
+    """``tree_ctx`` (docs/design.md §62): None = the decomposition tree is off and nothing below changes; else
+    {tree, root, prefix, params, running}: the tree keys are checked (decompose.validate_keys) and a valid tree
+    change is the reply's progress, so it is not refused as "no worker is busy"."""
     decision = json.loads(text[text.index('{'):text.rindex('}') + 1])
     if not isinstance(decision, dict) or 'checks' in decision:
         raise ValueError('decision must be a JSON object and may not submit host commands (checks)')
@@ -1371,14 +1448,17 @@ def parse_decision(text, workers, others_active):
             raise ValueError('dispatch.to must be one of ' + ', '.join(workers))
         if not isinstance(item.get('instruction'), str) or len(item['instruction'].strip()) < 12:
             raise ValueError('instruction must state the action and the expected output (>= 12 chars)')
-        if 'id' in item and (not isinstance(item['id'], str) or not re.fullmatch(contracts.M_RE, item['id'])):
-            raise ValueError('every dispatch item needs an id (M<n>, e.g. M0)')
+        if tree_ctx is None and 'id' in item and (not isinstance(item['id'], str)
+                                                  or not re.fullmatch(contracts.M_RE, item['id'])):
+            raise ValueError('every dispatch item needs an id (M<n>, e.g. M0)')  # §62 on: the tree checks the id
         if 'advise_note' in item and not isinstance(item['advise_note'], str):
             raise ValueError('dispatch.advise_note must be text')
         if 'fresh' in item and type(item['fresh']) is not bool:
             raise ValueError('dispatch.fresh must be true or false')
         if 'review' in item and type(item['review']) is not bool:
             raise ValueError('dispatch.review must be true or false')
+        if 'leaf' in item and type(item['leaf']) is not bool:
+            raise ValueError('dispatch.leaf must be true or false')
     escalations = validate_escalations(decision)
     report_up = validate_report_up(decision, workers)
     if 'advisor' in decision and decision['advisor'] not in ('on', 'off'):
@@ -1394,8 +1474,12 @@ def parse_decision(text, workers, others_active):
         raise ValueError('withdraw is only for COMPLETED: it drops the unsettled work of the listed workers')
     if 'waiting' in decision:
         decision['waiting'] = validate_waiting(decision['waiting'], decision)
+    if decision.get('reconcile') is not None:  # section 60: rulings on the reconcile ledger
+        restart_state.validate_decision(decision['reconcile'])
+    if tree_ctx is not None and decompose.validate_keys(decision, tree_ctx):
+        return decision
     if (decision['status'] == 'RUNNING' and not dispatch and not escalations and not consult and not others_active
-            and not decision.get('waiting') and not report_up):
+            and not decision.get('waiting') and not report_up and not decision.get('reconcile')):
         raise ValueError('no worker is busy: RUNNING must dispatch at least one instruction')
     return decision
 
@@ -1712,6 +1796,8 @@ def parse_service_decision(text, workers):
         named_subfleet.validate_decision(decision['subfleet'])
     if decision.get('applet') is not None:  # applet-interface.md 3.5: lease / escalation / control answers
         applet_lease.validate_decision(decision['applet'])
+    if decision.get('reconcile') is not None:  # section 60: rulings on the reconcile ledger
+        restart_state.validate_decision(decision['reconcile'])
     return decision
 
 
@@ -2328,6 +2414,14 @@ def _claude_context_hook(cfg_path, name, generation, raw, kind):
         if kind == 'stop_failure':
             ev['error'] = str(data.get('error') or data.get('error_details')
                               or data.get('last_assistant_message') or 'Claude StopFailure')[:4000]
+            ev['details'] = str(data.get('error_details') or '')[:1000]
+            ev['error_type'] = str(data.get('error') or '')
+            ev['text'] = str(data.get('last_assistant_message') or '')[:1000]
+            ev['api_text'] = ''
+            lease = r.hgetall(bus.lease_key(name))
+            if lease.get('message_id'):
+                ev['api_text'] = claude_api_error(data.get('transcript_path', ''),
+                                                  received_at(bus.message(lease['message_id'])))[:1000]
             lease = r.hgetall(bus.lease_key(name))
             if lease.get('message_id'):
                 msg = bus.message(lease['message_id'])
@@ -2383,7 +2477,8 @@ SUPERVISOR_SPLIT_DOC = (
     '- `dispatch[].split`: optional, for a request too big for one worker (several parts that can run in parallel, '
     'or long work): `{"reason": "one sentence", "proposal": [{"instruction": "what this part does", "output": "what '
     'it delivers"}, ...], "workers": <n, optional>, "supervisor_profile": "<card, optional>", "worker_profiles": '
-    '["<card>", ...]}`. The worker in `to` (idle, nothing queued) becomes the supervisor of a new task sub-fleet that '
+    '["<card>", ...]}`. Without supervisor_profile the program picks the sub-fleet supervisor\'s model from the '
+    'supervisor chain. The worker in `to` (idle, nothing queued) becomes the supervisor of a new task sub-fleet that '
     'runs the parts; you do not answer an `[escalate]` question for it. The sender first gets `delegated: M<n>`, the '
     'sub-fleet\'s own result follows as `<id>.done`. If the program refuses the split (limits), that worker gets the '
     'request as a normal dispatch and you are told. Do not combine with `fresh`. A section 4, if present, says when '
@@ -2837,12 +2932,28 @@ class Fleet:
     def paused(self):
         return self.r.hget(SERVICE, 'paused') == '1'
 
-    def pause(self, reason):
-        self.r.hset(SERVICE, mapping={'paused': 1, 'reason': reason, 'at': time.time()})
-        self.log('service.paused', reason=reason)
+    PAUSE_REF = ('slot', 'message_id', 'generation', 'subfleet_run', 'brake_kind')
+
+    def pause(self, reason, kind=None, **ref):
+        """Pause the run. ``kind`` (§11 "Pause cause"): the structured cause the daemon's pause review reads
+        (``fx:service.cause`` = JSON {kind, **ref}, empty values left out); ``ref`` keys only from PAUSE_REF. No kind:
+        no cause, and an older cause is dropped (the review then falls back to the reason text). On a run that is
+        already paused, a kind the review may lift (``pause_review.LIFTABLE``: a worker hold, a dialog, ...) keeps the
+        cause there, even an empty one; a never-lifted kind or no kind replaces it (ruling 29, review P0-01)."""
+        from fleetmux.pause_review import LIFTABLE
+        bad = set(ref) - set(self.PAUSE_REF)
+        if bad:
+            raise TypeError('pause: unknown cause key(s) ' + ', '.join(sorted(bad)))
+        cause = json.dumps(dict({k: v for k, v in ref.items() if v not in (None, '')}, kind=kind),
+                           ensure_ascii=False) if kind else ''
+        kept = kind in LIFTABLE and self.paused()
+        self.r.hset(SERVICE, mapping=dict({'paused': 1, 'reason': reason, 'at': time.time()},
+                                          **({} if kept else {'cause': cause})))
+        self.log('service.paused', reason=reason, **({'cause': kind} if kind else {}),
+                 **({'cause_kept': self.r.hget(SERVICE, 'cause') or 'none'} if kept else {}))
 
     def resume(self):
-        self.r.hset(SERVICE, mapping={'paused': 0, 'reason': '', 'at': time.time()})
+        self.r.hset(SERVICE, mapping={'paused': 0, 'reason': '', 'at': time.time(), 'cause': '', 'review': ''})
         self.log('service.resumed')
 
     def log(self, kind, **data):
@@ -2876,6 +2987,9 @@ class Fleet:
             if self.r.llen(SPLIT_NOTES):  # §44, appended like the advisor notes
                 text += '\n' + '\n'.join(self.r.lrange(SPLIT_NOTES, 0, -1))
                 self.r.delete(SPLIT_NOTES)
+            if self.r.llen(decompose.TREE_NOTES):  # §62, appended like the advisor notes
+                text += '\n' + '\n'.join(self.r.lrange(decompose.TREE_NOTES, 0, -1))
+                self.r.delete(decompose.TREE_NOTES)
         if self.v2:
             return self.v2.queue(name, text, front=front, request_id=request_id, kind=kind)
         self.r.rpush(key('inbox', name), text)
@@ -3090,6 +3204,9 @@ class Fleet:
                     '{{TASK_DIR}}', task_dir)).replace("writing in the parent fleet's folders",
                                                        "writing in the parent fleet's other folders")
             scope += bounds
+        if not self.service and (self.decompose_on() if self.running() else decompose.enabled()):
+            # §62: the tree section instead of "Leaf blocks"; a worker's split request carries both accounts
+            scope = decompose.prompt_swap(scope) if role == 'supervisor' else decompose.worker_swap(scope)
         scope = scope.replace('{{SUPERVISOR_SPLIT}}\n', SUPERVISOR_SPLIT_DOC if self.cfg.get('supervisor_split') else '')
         scope = scope.replace('{{WORKSPACE}}', str(self.workspace())).replace('{{FLEET_CHROME}}', self.fleet_cmd())
         scope = scope.replace('{{ROSTER}}', roster_notice(self.cfg))
@@ -3112,6 +3229,8 @@ class Fleet:
     def spawn(self, name, prompt, *, launch_held=False, advice_hold=False, advised=None):
         """``advised``: only a slot's first generation (spawn_ready) passes it, from the advisor switch;
         every later generation replays the slot's launch record (advised_layout), whatever the switch says."""
+        if name == 'supervisor':  # section 60: a snapshot before each new supervisor generation (never raises)
+            restart_state.before_supervisor(self)
         prompt = applet_lease.start_prompt(self, name, prompt)  # a leased slot: the Lease block (applets.md 5)
         sandbox.preflight(self, name)  # P8o / M172: mode os without a wrapper -> audit + refuse (no policy: no-op)
         if name == ADVISOR:
@@ -3270,8 +3389,12 @@ class Fleet:
         # default generation that the first dispatch would have to replace).
         # A named sub-fleet's supervisor_slot never waits: up / autostart need it idle and READY, and a sheet only
         # comes with a delivery, which a supervisor slot never gets before its sub-fleet is up (10-14 Studio deadlock).
+        # D36 (Studio 2026-11-22): the same for a worker added for a queued job (job_hot_add, `hot_slot` of the job):
+        # job_start adopts it as the job sub-fleet's supervisor only once it is idle and READY, and no delivery
+        # (so no first sheet) ever comes to it before that; held, the job queued for good.
         sub_supervisor = (name in {e.get('supervisor_slot') for e in (self.cfg.get('subfleets') or [])}
-                          or bool(named_subfleet.reserved(self, name)))  # an attached child's slot too
+                          or bool(named_subfleet.reserved(self, name))  # an attached child's slot too
+                          or any(j.get('hot_slot') == name for j in self.job_state().values()))  # a job's added worker
         hold = (bool(self.v2) and self.advisor_online() and name != 'supervisor' and not sub_supervisor
                 and is_claude(self.runtime_cfg(name), name))
         # The first generation is the one place the switch picks the layout; later ones replay the record.
@@ -3298,11 +3421,8 @@ class Fleet:
                      reason='card max_concurrent counts slots; later profile switches into these models wait')
         history.write_page(self.run_dir, self.history_slots(), self.history_links())
         # One page: supervisor above history/control on the left, worker tabs on the right.
-        self.history_pane = self.mgr.arrange(self.agent('supervisor')['pane'],
-                                             [self.agent(w)['pane'] for w in self.workers],
-                                             history.page_url(self.run_dir))
+        self.arrange_page()
         self.announce_history_page()
-        self.r.hset(SERVICE, mapping={'history_pane': self.history_pane or ''})
         if self.advisor_resident() and self.advisor_enabled():
             self.advisor_start()  # its tab next to the supervisor's; the held first workers wait for it
 
@@ -3377,6 +3497,26 @@ class Fleet:
             except (ValueError, TypeError) as exc:
                 answer = {'status': 'rejected', 'reason': str(exc)}
             self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
+        elif kind == 'reconcile':  # section 60: `fleetmux reconcile rule` (the operator's rulings)
+            try:
+                rulings = restart_state.validate_decision(ev.get('rulings'))
+                answer = dict(restart_state.decide(self, rulings, by=str(ev.get('by') or 'operator'),
+                                                   ledger=ev.get('ledger') or None), status='accepted')
+            except (ValueError, TypeError) as exc:
+                answer = {'status': 'rejected', 'reason': str(exc)}
+            self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
+        elif kind == 'escalation_answer':  # §24: `fleetmux answer`, the user's own ruling on a report
+            try:
+                answer = blocked_scope.user_answer(self, ev)
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                answer = {'status': 'rejected', 'reason': str(exc)[:300]}
+            self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
+        elif kind == 'job_cancel':  # section 58 "Restart": `task --cancel <job id>` (a join stub's stop)
+            try:
+                answer = self.job_cancel(str(ev.get('job') or ''), by=str(ev.get('by') or 'operator'))
+            except (ValueError, TypeError) as exc:
+                answer = {'status': 'rejected', 'reason': str(exc)}
+            self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
         elif kind == 'recheck':  # `task --recheck`: the gate was recomputed by the CLI (lifecycle_recheck)
             from fleetmux import lifecycle_recheck
             try:
@@ -3387,13 +3527,24 @@ class Fleet:
         elif kind in ('pause', 'resume'):
             answer = {'status': 'accepted'}
             if kind == 'pause':
-                self.pause(ev.get('reason') or 'paused by operator')
+                self.pause(ev.get('reason') or 'paused by operator', kind='operator')
             else:
+                was_paused = self.paused()
                 try:
                     self.brake_resume(ev.get('raise'))
                     self.resume()
                 except (ValueError, TypeError) as exc:
                     answer = {'status': 'rejected', 'reason': str(exc)}
+                if answer['status'] == 'accepted' and self.v2:
+                    # §24: held slots get an explicit answer (released / regenerating / held with reason and next
+                    # step); 'rejected' only when this call changed nothing at all and a slot stays held.
+                    held = self.v2.resume_held()
+                    answer.update(held)
+                    if held['held'] and not (was_paused or ev.get('raise') or held['released']
+                                             or held['regenerating']):
+                        answer['status'] = 'rejected'
+                        answer['reason'] = (', '.join(x['label'] for x in held['held'])
+                                            + ' held and cannot be released now; see held[].next')
             self.r.set('fx:reply:' + ev['request_id'], json.dumps(answer, ensure_ascii=False), ex=86400)
         elif kind == 'stop':
             if not self.service and self.running():
@@ -3478,6 +3629,496 @@ class Fleet:
             out.write(json.dumps(dict(time=time.time(), action=action, **data), ensure_ascii=False) + '\n')
         self.log('contract.' + action, **data)
 
+    # -- decomposition tree (docs/design.md §62): fx:tree beside fx:items, only while the task's switch is on
+    def decompose_on(self):
+        """The task was submitted with the tree switch on (read once at submit; a task mode fleet only)."""
+        return not self.service and self.task().get('decompose') == '1'
+
+    def tree_root(self):
+        """(root id, id prefix of this level): ('root', 'M') in a top fleet, (M1, 'M1.') in sub-fleet M1."""
+        task_id = self.cfg.get('task_id')
+        return (task_id, task_id + '.') if task_id else ('root', 'M')
+
+    def tree_state(self):
+        raw = self.r.get(decompose.TREE)
+        try:
+            tree = json.loads(raw) if raw else None
+        except ValueError:
+            tree = None
+        return tree if isinstance(tree, dict) and isinstance(tree.get('nodes'), list) else None
+
+    def tree_params(self):
+        """The decompose parameters as this fleet runs them: Redis (loaded at start), else the configuration."""
+        try:
+            return decompose.params_get(self.r)
+        except (OSError, ValueError, KeyError):
+            return decompose.merged({})
+
+    def decompose_load(self):
+        """Daemon start / resume: the decompose block into this fleet's Redis (task and service fleets alike)."""
+        decompose.params_load(self.r)
+
+    def decompose_flush(self, force=False):
+        """Tick (and exit with ``force``): a changed decompose block back to the private fleet.yaml. Only a root
+        fleet writes back, a service root too; a sub-fleet's copy is never written (its tune goes to the root)."""
+        if getattr(self, 'r', None) is None or self.cfg.get('parent_config'):
+            return False
+        written = decompose.params_flush(self.r, force=force)
+        if written:
+            self.log('decompose.flushed')
+        return written
+
+    def tree_context(self):
+        """parse_decision's ``tree_ctx``: None while the switch is off for this task."""
+        if not self.decompose_on():
+            return None
+        root, prefix = self.tree_root()
+        tree = self.tree_state() or decompose.new_tree(root, self.task().get('goal', ''))
+        return {'tree': tree, 'root': root, 'prefix': prefix, 'params': self.tree_params(),
+                'running': [n['id'] for n in tree['nodes'] if n.get('state') == 'running']}
+
+    def save_tree(self, tree):
+        tree['review'] = decompose.review(tree)  # §62: the review table is recomputed on every save
+        self.r.set(decompose.TREE, json.dumps(tree, ensure_ascii=False, separators=(',', ':')))
+        self.sync_tree_files(tree)
+
+    def sync_tree_files(self, tree=None):
+        """Copy fx:tree to <run>/tree.json and <workspace>/tree.json (Redis is the truth; the tick re-syncs)."""
+        tree = tree or self.tree_state()
+        if tree is None:
+            return
+        text = json.dumps(tree, ensure_ascii=False, indent=2)
+        if text == getattr(self, 'tree_text', None):
+            return
+        for path in (self.run_dir / 'tree.json', self.workspace() / 'tree.json'):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix('.tmp')
+            tmp.write_text(text + '\n')
+            os.replace(tmp, path)
+        self.tree_text = text
+
+    def tree_restore(self):
+        """Daemon start: a running task's tree missing from Redis (no AOF) comes back from <run>/tree.json."""
+        if not self.decompose_on() or not self.running() or self.tree_state() is not None:
+            return
+        try:
+            tree = json.loads((self.run_dir / 'tree.json').read_text())
+        except (OSError, ValueError):
+            return
+        if isinstance(tree, dict) and isinstance(tree.get('nodes'), list):
+            self.r.set(decompose.TREE, json.dumps(tree, ensure_ascii=False, separators=(',', ':')))
+            self.log('tree.restored', rev=tree.get('rev'))
+
+    def tree_decision(self, decision):
+        """Save the tree change of a valid decision (parse_decision left it in ``_tree``). Returns the new tree, or
+        None when the reply changed nothing. The first tree the program accepts sets ``accepted`` and queues the
+        opening summary for the tick."""
+        new = decision.pop('_tree', None)
+        if new is None or not self.decompose_on():
+            return None
+        first = not new.get('accepted')
+        new['rev'] = int(new.get('rev') or 0) + 1
+        if first:
+            new['accepted'] = new['rev']
+        decompose.judge(new, self.tree_params(), time.time())
+        old = {n['id'] for n in (self.tree_state() or {'nodes': []})['nodes']}
+        self.save_tree(new)
+        ids = {n['id'] for n in new['nodes']}
+        with open(self.run_dir / 'tree.log.jsonl', 'a', encoding='utf-8') as out:
+            out.write(json.dumps({'time': time.time(), 'rev': new['rev'], 'by': 'supervisor', 'added': sorted(ids - old),
+                                  'dropped': sorted(old - ids), 'tree': decision.get('tree') or [],
+                                  'tree_drop': decision.get('tree_drop') or []}, ensure_ascii=False) + '\n')
+        self.log('tree.accepted', rev=new['rev'], nodes=len(new['nodes']) - 1, chain=new['chain']['ids'],
+                 chain_minutes=new['chain']['minutes'], width=new['width'], first=first)
+        if first:
+            self.r.set(decompose.TREE_SUMMARY, json.dumps({'text': decompose.summary_text(new), 'rev': new['rev'],
+                                                           'sent_at': 0}, ensure_ascii=False))
+        return new
+
+    def tree_dispatched(self, dispatch):
+        """The blocks just dispatched are out: state running, who has it, first start, dispatch count."""
+        tree = self.tree_state()
+        if tree is None:
+            return
+        nodes, now = decompose.by_id(tree), time.time()
+        for item in dispatch:
+            node = nodes.get(item.get('id'))
+            if node is None:
+                continue
+            actual = node.setdefault('actual', decompose.blank_actual())
+            node.update(state='running', to=self.resolve(item['to']))
+            actual['dispatches'] = int(actual.get('dispatches') or 0) + 1
+            actual['started'] = actual.get('started') or now
+            actual['out_since'] = now  # session minutes: each dispatch until its report
+            actual['dispatched_at'] = now  # which block a report answers (tree_report_node)
+        decompose.judge(tree, self.tree_params(), now)
+        self.save_tree(tree)
+
+    @staticmethod
+    def tree_report_node(tree, name):
+        """The block a report of worker ``name`` answers, by the tree (never by the order of fx:items keys): of
+        the blocks running with ``name``, the oldest dispatch whose clock runs (deliveries reach a worker in
+        order); a block whose earlier report stopped its clock (Blocked / escalate, waiting for a ruling) only
+        when no other is out. None when the worker runs no block."""
+        mine = [n for n in decompose.level_nodes(tree) if n.get('state') == 'running' and n.get('to') == name]
+        out = [n for n in mine if (n.get('actual') or {}).get('out_since')] or mine
+
+        def order(n):
+            actual = n.get('actual') or {}
+            return float(actual.get('dispatched_at') or actual.get('started') or 0), n['id']
+        return min(out, key=order) if out else None
+
+    def tree_reported(self, name, item, text=''):
+        """A worker's report settles the block it was running (its wall-clock minutes so far), found in the tree
+        (``tree_report_node``; ``item`` from fx:items is not used: a correction re-dispatch keeps its old key
+        position). A report that asks to split it or says it is blocked does not settle it: the block stays
+        running, its session minutes so far are counted."""
+        tree = self.tree_state() if self.decompose_on() else None
+        node = self.tree_report_node(tree, name) if tree else None
+        if node is None:
+            return
+        now = time.time()
+        actual = node.setdefault('actual', decompose.blank_actual())
+        if actual.get('out_since'):
+            actual['session_minutes'] = round(float(actual.get('session_minutes') or 0)
+                                              + (now - float(actual['out_since'])) / 60, 1)
+            actual['out_since'] = 0
+        if not (report_blocked(text) or contracts.report_fields(text).get('escalate') is not None):
+            actual['ended'] = now
+            actual['minutes'] = round((now - float(actual.get('started') or now)) / 60, 1)
+            node['state'] = 'reported'
+        decompose.judge(tree, self.tree_params(), now)
+        self.save_tree(tree)
+
+    def tree_seed(self, task_id, rec):
+        """§62: the seed file of sub-fleet ``task_id`` (its path), or None while the switch is off. A job with a
+        tree file: that file renumbered into the child's level. A split: this tree's node (or the request's
+        instruction) as the child's root, the approved pieces as its first-level blocks."""
+        if not decompose.enabled():
+            return None
+        path = str(self.run_dir / 'tree-seeds' / (task_id + '-' + uuid.uuid4().hex[:8] + '.json'))
+        root = {'id': task_id, 'goal': rec.get('instruction') or ''}
+        job = (self.job_state().get(rec['job']) or {}) if rec.get('job') else {}
+        if job.get('tree'):
+            try:
+                data = json.loads(Path(job['tree']).read_text())
+            except (OSError, ValueError) as exc:
+                self.log('tree.seed_unreadable', task=task_id, job=rec['job'], error=str(exc)[:300])
+                data = None
+            if isinstance(data, dict):
+                data = decompose.renumber(data, task_id + '.')
+                parents = {n.get('parent') for n in data['nodes'] if n.get('parent')}
+                return decompose.write_seed(path, root, [n for n in data['nodes'] if n['id'] not in parents],
+                                            data['decisions'], by=job.get('by') or data.get('by'))
+        node = decompose.by_id(self.tree_state() or {'nodes': []}).get(task_id) if self.decompose_on() else None
+        if node:
+            root.update({k: node[k] for k in ('goal', 'accept', 'est', 'owns') if node.get(k)})
+        pieces = [{'id': p['id'], 'goal': p.get('instruction') or ''} for p in rec.get('proposal') or []
+                  if isinstance(p, dict) and p.get('id')]
+        return decompose.write_seed(path, root, pieces, by=rec.get('slot') or None)
+
+    def tree_summary_tick(self):
+        """Tick: send the opening summary of the first accepted tree once (outside any v2 transaction). A sub-fleet
+        writes it as a notice its parents pass up (relay_notices); the top sends it like a held slot's notice."""
+        raw = self.r.get(decompose.TREE_SUMMARY)
+        try:
+            pending = json.loads(raw) if raw else None
+        except ValueError:
+            pending = None
+        if not isinstance(pending, dict) or pending.get('sent_at') or not pending.get('text'):
+            return
+        if self.cfg.get('parent_config'):
+            folder = Path(load(self.cfg['parent_config'])['run']) / 'subfleet-notices'
+            folder.mkdir(parents=True, exist_ok=True)
+            save(folder / ('tree-' + uuid.uuid4().hex[:12] + '.json'),
+                 {'kind': 'tree', 'task': self.cfg.get('task_id'), 'origin_run': str(self.run_dir),
+                  'text': pending['text']})
+            status = 'parent'
+        else:
+            status = self.tree_notify(pending['text'])
+        pending['sent_at'] = time.time()
+        self.r.set(decompose.TREE_SUMMARY, json.dumps(pending, ensure_ascii=False))
+        self.log('tree.summary', rev=pending.get('rev'), status=status)
+
+    def tree_notify(self, text):
+        """A decomposition summary for the user: a managed root's lifecycle channels, else a root's own channels."""
+        if lifecycle_close.managed(self):
+            try:
+                policy = lifecycle.get_mode(self.cfg['lifecycle'])
+            except ValueError:
+                policy = {}
+            out = lifecycle_close.notify(self, 'decompose_summary', '[fleet ' + lifecycle_close.fleet_name(self) + '] '
+                                         + text, policy)
+            return ','.join(str(x.get('status')) for x in out)
+        if not self.cfg.get('parent_config'):
+            return str(notify_route.unmanaged_send(self, 'decompose_summary', text))
+        return 'none'
+
+    def tree_overrun_tick(self):
+        """Tick (§62): a running block on the longest chain (as planned) whose time out passed est x overrun_ratio is
+        reported to the supervisor once; blocks off the chain are not. The worker is never nudged."""
+        tree = self.tree_state() if self.decompose_on() and self.running() else None
+        if tree is None:
+            return
+        params, now = self.tree_params(), time.time()
+        ratio = float(params.get('overrun_ratio') or 0)
+        planned = decompose.schedule(tree)  # remaining = estimate: an overrun block stays on its planned chain
+        changed = False
+        for n in decompose.level_nodes(tree):
+            actual = n.get('actual') or {}
+            est = float((n.get('est') or {}).get('minutes') or 0)
+            if n.get('state') != 'running' or not est or actual.get('overrun_noted') or not actual.get('started'):
+                continue
+            minutes = (now - float(actual['started'])) / 60
+            if minutes / est <= ratio or n['id'] not in planned['critical']:
+                continue
+            actual['overrun_noted'] = True
+            changed = True
+            self.log('tree.overrun', task=n['id'], minutes=round(minutes, 1), est=est, ratio=ratio)
+            self.queue('supervisor', '[overrun] ' + n['id'] + ' is on the longest chain and has run '
+                       + decompose._fmt(minutes) + ' min against est ' + decompose._fmt(est) + ' (x'
+                       + decompose._fmt(minutes / est) + ' > ' + decompose._fmt(ratio) + '), with ' + (self.label(n['to']) if n.get('to') else 'its worker')
+                       + '. Re-estimate it, merge it with a block it waits on, extract a decision several blocks ask '
+                       'about, or split it in the tree (a split needs dT >= k x dC). The worker was not asked to '
+                       'split. Reply with the JSON format from AGENTS.md.')
+        if changed:
+            self.save_tree(tree)
+
+    def tree_return(self, task_id, rec, answer):
+        """§62: any ruling on a running block (a [blocked] request, or a split request not approved) restarts its
+        session-minute clock. One with a ``cause`` also counts one return of the block; at returns_alert returns the
+        supervisor's next message gets one line with the block's causes (once per block, never a refusal)."""
+        cause = answer.get('cause')
+        tree = self.tree_state() if self.decompose_on() else None
+        nid = rec.get('item') if rec.get('kind') == 'blocked' else task_id if not rec.get('kind') else None
+        node = decompose.by_id(tree).get(nid) if tree and nid else None
+        if node is None:
+            return
+        actual = node.setdefault('actual', decompose.blank_actual())
+        if node.get('state') == 'running' and (answer.get('decision') != 'approve' or rec.get('kind') == 'blocked'):
+            actual['out_since'] = time.time()  # any ruling: the worker goes on with the block, its clock runs again
+        if not cause:
+            self.save_tree(tree)
+            return
+        actual['returns'] = int(actual.get('returns') or 0) + 1
+        causes = actual.setdefault('causes', {})
+        causes[cause] = int(causes.get(cause) or 0) + 1
+        self.save_tree(tree)
+        if actual['returns'] == int(self.tree_params().get('returns_alert') or 0):
+            shown = ', '.join(k + ' ' + str(v) for k, v in sorted(causes.items(), key=lambda kv: (-kv[1], kv[0])))
+            self.r.rpush(decompose.TREE_NOTES, '[tree] ' + nid + ' came back ' + str(actual['returns']) + ' times: '
+                         + shown + '. Consider merging it with the block it waits on, extracting the decision it keeps '
+                         'asking about, or splitting it in the tree.')
+            self.log('tree.returns_alert', task=nid, causes=causes)
+
+    def tree_split_account(self, task_id, rec):
+        """§62: the program's account of a worker's split of block ``task_id`` into a sub-fleet, or None (no tree,
+        not a block of this level). Pieces with an ``est`` are taken as written, else the block's remaining time is
+        cut evenly. dT used = the worker's delta_t capped by the program's bound."""
+        tree = self.tree_state() if self.decompose_on() else None
+        node = decompose.by_id(tree).get(task_id) if tree else None
+        if node is None or node.get('parent') != tree['root']:
+            return None
+        params, now = self.tree_params(), time.time()
+        proposal = rec.get('proposal') or []
+        if proposal and all(decompose._number(p.get('est'), above=True) for p in proposal):
+            pieces = [{'id': p['id'], 'est': float(p['est'])} for p in proposal]
+        else:
+            n = max(len(proposal), 1)
+            pieces = [{'id': 'p' + str(i), 'est': decompose.weight(node, now) / n} for i in range(n)]
+        acc = decompose.split_account(tree, task_id, pieces, params, subfleet=True, now=now)
+        k, margin = decompose.split_param(params, 'k'), decompose.split_param(params, 'margin')
+        used = min(float(rec['delta_t']), acc['dT']) if rec.get('delta_t') is not None else acc['dT']
+        a, c = round(used, 6), round(k * acc['dC'], 6)
+        if acc['reason'].startswith('off the longest chain'):
+            split, reason = False, acc['reason']
+        elif a <= 0 or a < c:
+            split, reason = False, 'dT ' + decompose._fmt(used) + ' < k x dC = ' + decompose._fmt(k) + ' x ' \
+                + decompose._fmt(acc['dC'])
+        elif a < round(margin, 6):
+            split, reason = False, 'dT ' + decompose._fmt(used) + ' < margin ' + decompose._fmt(margin)
+        else:
+            split, reason = True, 'dT ' + decompose._fmt(used) + ' >= k x dC = ' + decompose._fmt(k) + ' x ' \
+                + decompose._fmt(acc['dC'])
+        return {'bound': acc['dT'], 'dT': decompose._num(used), 'dC': acc['dC'], 'k': k, 'split': split,
+                'reason': reason}
+
+    def tree_split_approved(self, task_id, rec, account):
+        """§62: an approved split in this tree: the block is delegated (leaf=false, its pieces as its children,
+        delegated too) and the split is recorded with both accounts."""
+        tree = self.tree_state() if self.decompose_on() else None
+        node = decompose.by_id(tree).get(task_id) if tree else None
+        if node is None:
+            return
+        now, ids = time.time(), []
+        nodes = decompose.by_id(tree)
+        for p in rec.get('proposal') or []:
+            if not isinstance(p, dict) or not p.get('id') or p['id'] in nodes:
+                continue
+            ids.append(p['id'])
+            tree['nodes'].append(dict({k: [] for k in decompose.LIST_FIELDS}, id=p['id'], parent=task_id,
+                                      goal=p.get('instruction') or '', cut=None, state='delegated',
+                                      actual=decompose.blank_actual()))
+        prior = {'state': node.get('state'), 'to': node.get('to')}
+        node['state'], node['delegated_at'] = 'delegated', now
+        tree.setdefault('splits', []).append({'of': task_id, 'pieces': ids, 'dT': (account or {}).get('dT'),
+                                              'dC': (account or {}).get('dC'), 'claimed': {
+                                                  'dT': rec.get('delta_t'), 'dC': rec.get('delta_c')},
+                                              'by': 'worker', 'at': now, 'prior': prior})
+        decompose.judge(tree, self.tree_params(), now)
+        self.save_tree(tree)
+        self.log('tree.split', of=task_id, pieces=ids, dT=(account or {}).get('dT'), dC=(account or {}).get('dC'))
+
+    def tree_split_rollback(self, task_id, why, tree=None, planned=False):
+        """§62: an approved split that did not happen (its sub-fleet could not start) or failed: the pieces the
+        program wrote under block ``task_id`` go and the block is dispatchable again: back to the state it had
+        before the approve (the worker still holds it), or ``planned`` after a failed sub-fleet. The split stays in
+        ``splits`` with ``rolled_back`` (the review counts what it cost). Saves the tree unless ``tree`` is given."""
+        own = tree is None
+        tree = self.tree_state() if own and self.decompose_on() else tree
+        node = decompose.by_id(tree).get(task_id) if tree else None
+        if node is None or node.get('state') not in ('delegated', 'reported') and not decompose.children(tree, task_id):
+            return None
+        kids = set(decompose.children(tree, task_id))
+        tree['nodes'] = [n for n in tree['nodes'] if n['id'] not in kids]
+        split = next((s for s in reversed(tree.get('splits') or []) if s.get('of') == task_id
+                      and not s.get('rolled_back')), None)
+        prior = (split or {}).get('prior') or {}
+        node.pop('delegated_at', None)
+        if planned or prior.get('state') not in ('running', 'planned'):
+            node['state'] = 'planned'
+            node.pop('to', None)
+        else:
+            node['state'] = prior['state']
+            if prior.get('to'):
+                node['to'] = prior['to']
+        if split is not None:
+            split['rolled_back'] = why
+        self.log('tree.split_rolled_back', of=task_id, pieces=sorted(kids), reason=why[:300])
+        if own:
+            decompose.judge(tree, self.tree_params(), time.time())
+            self.save_tree(tree)
+        return split
+
+    def tree_collected(self, rec, child_run, ok):
+        """§62: a sub-fleet returned: its blocks' states and actuals fill in the delegated block and its pieces."""
+        tree = self.tree_state() if self.decompose_on() else None
+        node = decompose.by_id(tree).get(rec.get('task_id')) if tree else None
+        if node is None:
+            return
+        try:
+            child = json.loads((Path(child_run) / 'tree.json').read_text())
+        except (OSError, ValueError):
+            child = None
+        nodes, total, now = decompose.by_id(tree), 0.0, time.time()
+        for c in decompose.level_nodes(child) if isinstance(child, dict) and child.get('nodes') else []:
+            mine = nodes.get(c['id'])
+            if mine is None:
+                mine = dict({k: [] for k in decompose.LIST_FIELDS}, id=c['id'], parent=node['id'],
+                            goal=c.get('goal') or '', cut=c.get('cut'))
+                tree['nodes'].append(mine)
+            mine['state'], mine['actual'] = c.get('state'), c.get('actual') or decompose.blank_actual()
+            total += float((c.get('actual') or {}).get('session_minutes') or 0)
+        actual = node.setdefault('actual', decompose.blank_actual())
+        if actual.get('out_since'):
+            total += (now - float(actual['out_since'])) / 60
+            actual['out_since'] = 0
+        actual['session_minutes'] = round(float(actual.get('session_minutes') or 0) + total, 1)
+        actual['outcome'] = 'completed' if ok else 'failed'
+        split = next((s for s in reversed(tree.get('splits') or []) if s.get('of') == node['id']
+                      and not s.get('rolled_back')), None)
+        if split is not None:
+            split['session_minutes'] = round(total, 1)
+        if ok:
+            actual['ended'] = now
+            actual['minutes'] = round((now - float(actual.get('started') or node.get('delegated_at') or now)) / 60, 1)
+            node['state'] = 'reported'
+        else:  # the block is not done: its pieces go, it can be dispatched again (its cost stays counted)
+            self.tree_split_rollback(node['id'], 'sub-fleet failed', tree=tree, planned=True)
+        decompose.judge(tree, self.tree_params(), now)
+        self.save_tree(tree)
+
+    def tree_contract_fill(self, decision):
+        """§62 with contracts on: a contract dispatch item without edits / depends_on / serial_reason takes them
+        from its tree block (owns / depends_on / serial_reason); written and different from the tree: ValueError.
+        The contract gates (P0, P1, readiness) are not touched."""
+        tree = decision.get('_tree') or self.tree_state()
+        nodes = decompose.by_id(tree) if tree else {}
+        for item in decision.get('dispatch') or []:
+            node = nodes.get(item.get('id'))
+            if node is None:
+                continue
+            for key, field in (('edits', 'owns'), ('depends_on', 'depends_on'), ('serial_reason', 'serial_reason')):
+                want = node.get(field) or (None if key == 'serial_reason' else [])
+                if key not in item:
+                    if want:
+                        item[key] = copy.deepcopy(want)
+                    continue
+                have = item[key]
+                same = (sorted(have) == sorted(want)) if isinstance(have, list) else have == want
+                if not same:
+                    raise ValueError(item['id'] + ' ' + key + ' differ' + ('s' if key == 'serial_reason' else '')
+                                     + ' from the tree (' + field + '): change the tree, not the dispatch')
+
+    def tree_tune(self, decision):
+        """§62: the closing COMPLETED's ``decompose_tune`` (it passed verification) into this fleet's parameters in
+        Redis, marked for write-back (a root writes back on its tick; a sub-fleet forwards it at collect)."""
+        tune = decision.get('decompose_tune')
+        if not tune or not self.decompose_on():
+            return
+        try:
+            rows = decompose.tune_apply(self.r, tune, self.cfg.get('task_id') or 'root')
+        except ValueError as exc:
+            self.log('decompose.tune_failed', error=str(exc)[:300])
+            return
+        self.log('decompose.tune', items=json.dumps(rows, ensure_ascii=False))
+
+    def decompose_collect(self, child_run):
+        """§62: a returned sub-fleet's applied tune (its result.json ``decompose.tune``) goes into this fleet's
+        parameters, task or service fleet alike; a sub-fleet passes it on in its own result.json, only the root
+        writes back."""
+        try:
+            result = load(Path(child_run) / 'result.json')
+        except (OSError, ValueError):
+            return
+        tune = (result.get('decompose') or {}).get('tune') if isinstance(result, dict) else None
+        if not tune:
+            return
+        try:
+            rows = decompose.tune_apply(self.r, tune, '')
+        except ValueError as exc:
+            self.log('decompose.tune_failed', error=str(exc)[:300], run=str(child_run))
+            return
+        self.log('decompose.tune_forwarded', items=json.dumps(rows, ensure_ascii=False), run=str(child_run))
+
+    def tree_final(self):
+        """§62: result.json's ``decompose``: the final review table, the tree's chain and the tune applied here
+        (own and forwarded). None while the switch is off and nothing was tuned."""
+        tree = self.tree_state() if self.decompose_on() else None
+        tune = decompose.tuned(self.r)
+        if tree is None and not tune:
+            return None
+        out = {'tune': tune}
+        if tree is not None:
+            self.save_tree(tree)
+            out.update(rev=tree.get('rev'), chain=tree.get('chain'), width=tree.get('width'), review=tree['review'])
+        return out
+
+    def tree_audit(self, decision):
+        """The dispatch audit's per-block fields (switch on): id, owner, parent, estimate, chain, leaf."""
+        tree = self.tree_state() if self.decompose_on() else None
+        if tree is None:
+            return {}
+        nodes = decompose.by_id(tree)
+        rows = []
+        for item in decision['dispatch']:
+            n = nodes.get(item.get('id')) or {}
+            est = n.get('est') or {}
+            rows.append({'id': item.get('id'), 'to': n.get('to') or self.resolve(item['to']), 'parent': n.get('parent'),
+                         'est_minutes': est.get('minutes'), 'est_sessions': est.get('sessions', 1),
+                         'critical': n.get('critical'), 'leaf': n.get('leaf')})
+        return {'items': rows}
+
     def contract_queue(self, state, slot, text, owner=None):
         """Queue to a worker and record what its report will answer (a task id, or None for a notice)."""
         state['owners'].setdefault(slot, []).append(owner)
@@ -3493,6 +4134,8 @@ class Fleet:
 
     def contract_doc(self, role, name=None):
         text = (HERE / 'agents' / ('contracts_' + role + '.md')).read_text()
+        if self.decompose_on():  # §62: leaf comes from the tree; a split request carries both accounts
+            text = decompose.contracts_swap(text) if role == 'supervisor' else decompose.worker_swap(text)
         text += peer.doc(self, role, name)  # §21: 5-A (Claude) or 5-B (Pi / Codex) by this agent's CLI
         return text.replace('{{WORKSPACE}}', str(self.workspace()))
 
@@ -3729,11 +4372,18 @@ class Fleet:
         workers = fields.get('workers', len(proposal))
         if isinstance(workers, bool) or not isinstance(workers, int):
             raise ValueError('workers must be a positive integer')
+        numbers = {}
+        if self.decompose_on():  # §62: a split request writes both accounts
+            numbers = {k: fields.get(k) for k in ('delta_t', 'delta_c')}
+            if not all(decompose._number(v) for v in numbers.values()):
+                raise ValueError('decompose is on: an escalate needs delta_t (minutes the whole task finishes earlier) '
+                                 'and delta_c (extra session minutes: cold starts, agreeing, merging, the sub-fleet '
+                                 'supervisor), both numbers >= 0')
         refused = subfleet.check(self, name, task_id, workers, ready=False)
         if refused:
             raise ValueError(refused)
-        return task_id, {'slot': name, 'reason': reason.strip(), 'proposal': proposal, 'workers': workers,
-                         'instruction': instruction or '', 'status': 'escalated'}
+        return task_id, dict({'slot': name, 'reason': reason.strip(), 'proposal': proposal, 'workers': workers,
+                              'instruction': instruction or '', 'status': 'escalated'}, **numbers)
 
     def escalate_intake(self, name, fields, state):
         """A worker report carrying ``escalate``. Returns (task id, accepted?, note for the supervisor,
@@ -3766,9 +4416,17 @@ class Fleet:
                 + '", "decision": "approve" | "revise" | "reject", "workers": <n, optional>, "note": "<optional>", '
                 '"supervisor_profile": "<card, optional>", "worker_profiles": ["<card per sub-worker>", ...]}]. '
                 'approve: the program starts sub-fleet ' + task_id + ' with ' + who + ' as its supervisor (possibly a '
-                'new session of ' + who + ' after a handoff note: on supervisor_profile, or the same model); '
+                'new session of ' + who + ' after a handoff note: on supervisor_profile; without it, on the model the '
+                'program picks from the supervisor chain); '
                 'revise: your note goes back to ' + who + '; reject: ' + who + ' does ' + task_id + ' itself. '
                 'Do not dispatch to ' + who + ' in the reply that approves.' + self.split_cards())
+        account = self.tree_split_account(task_id, rec) if 'delta_t' in rec else None
+        if account:  # §62: the worker's two numbers beside the program's, from the tree
+            note += ('\nAccounts: worker dT ' + decompose._fmt(rec['delta_t']) + ' / dC ' + decompose._fmt(rec['delta_c'])
+                     + '; program dT <= ' + decompose._fmt(account['bound']) + ', dC ' + decompose._fmt(account['dC'])
+                     + ' (sub-fleet, k=' + decompose._fmt(account['k']) + '): '
+                     + ('pays' if account['split'] else 'does not pay') + '. An approve the program finds not worth '
+                     'it is refused.')
         return task_id, True, note, None
 
     def split_cards(self):
@@ -3873,7 +4531,9 @@ class Fleet:
         for item in decision['escalations']:
             rec = open_.get(item['task'])
             kind = (rec or {}).get('kind', 'split')
-            if item['task'].startswith((DIALOG_KEY, BLOCKED_KEY, REPORT_KEY)) and (not rec or rec.get('status') != 'escalated'):
+            awaiting = kind == 'report' and (rec or {}).get('status') == blocked_scope.AWAITING  # §24: the user's, or yours
+            if (item['task'].startswith((DIALOG_KEY, BLOCKED_KEY, REPORT_KEY)) and (not rec or rec.get('status') != 'escalated')
+                    and not awaiting):
                 # The dialog went away / was answered in the pane / went to the user meanwhile: not a bad reply.
                 self.log('escalate.stale_answer', task=item['task'], decision=item['decision'])
                 continue
@@ -3883,7 +4543,7 @@ class Fleet:
                 self.log('escalate.stale_answer', task=item['task'], decision=item['decision'],
                          request_id=stale[item['task']])
                 continue
-            if not rec or rec.get('status') != 'escalated':
+            if not rec or (rec.get('status') != 'escalated' and not awaiting):
                 raise ValueError('escalations: ' + item['task'] + ' has no open escalate request')
             if kind != 'split' and ('supervisor_profile' in item or 'worker_profiles' in item):
                 raise ValueError('escalations: ' + item['task'] + ': supervisor_profile / worker_profiles only answer a split')
@@ -3944,9 +4604,31 @@ class Fleet:
                     self.r.hgetall(REQ + req_id + '.done') or self.r.get(RESULT + req_id + '.done')) else
                 subfleet.check(self, slot, task_id, workers, ready=False, profiles=profiles,
                                job=self.job_spawn_args(rec['job'])['job'] if rec.get('job') else None))
-            launch = None
-            if not refused and answer.get('supervisor_profile'):
-                launch, refused = self.split_supervisor_launch(slot, answer['supervisor_profile'])
+            account = None
+            if not refused and not rec.get('job') and not req_id:  # §62: a task split passes the program's account
+                account = self.tree_split_account(task_id, rec)
+                if account and not account['split']:
+                    refused = ('the split does not pay: ' + account['reason'] + ' (program; worker: dT '
+                               + decompose._fmt(rec.get('delta_t') or 0) + ', dC ' + decompose._fmt(rec.get('delta_c') or 0)
+                               + ')')
+            launch, sup_trace = None, None
+            if not refused and not rec.get('job'):  # §44 split (D27): a card, else the supervisor chain's pick
+                if answer.get('supervisor_profile'):
+                    card = answer['supervisor_profile']
+                    try:
+                        model = AgentRegistry(self.cfg.get('agent_registry') or None).get(card).model
+                    except (AgentRegistryError, KeyError, OSError):
+                        model = None
+                    sup_trace = job_chain.trace({'entry': {'cli': 'claude', 'model': model}, 'profile': card,
+                                                 'skipped': []}, 'card')
+                else:
+                    fields, sup_trace, refused = self.supervisor_chain_pick(slot)
+                    answer = dict(answer, **fields)
+                    refused = refused or None
+            if not refused and (answer.get('supervisor_profile') or answer.get('supervisor_model')):
+                # supervisor_model: a job's chain picked a Claude model that has no card (§58 model chains)
+                launch, refused = self.split_supervisor_launch(slot, answer.get('supervisor_profile'),
+                                                               answer.get('supervisor_model'))
             if refused:  # a limit, not a malformed reply: no strike, the request stays open
                 self.log('escalate.approve_refused', task=task_id, reason=refused)
                 if req_id:
@@ -3975,6 +4657,12 @@ class Fleet:
                 spec.update(hours=subfleet.limits(self.cfg)['split_budget_h'], split=req_id, lifecycle=None)
             if rec.get('job'):  # §58: the job's own hours, lifecycle, artifacts and budget card
                 spec.update(self.job_spawn_args(rec['job']))
+            elif sup_trace:  # §44 (D27): the supervisor's model and why the entries before it were skipped
+                spec['model_chain'] = {'supervisor': sup_trace, 'workers': {}}
+            seed = self.tree_seed(task_id, rec)  # §62: the sub-fleet's tree starts from this node
+            if seed:
+                spec['tree'] = seed
+            self.tree_split_approved(task_id, rec, account)  # §62: the approved pieces go into this tree
             # The sub-fleet supervisor keeps a live tab in this fleet's worker area (tmux dual display, user
             # 2026-11-09): the slot's generations run in the fleet's tmux from now on, also after the return.
             # A slot still in a plain pane hands off to such a generation first, on the same model.
@@ -3993,9 +4681,10 @@ class Fleet:
                     self.setf(slot, split_restore=json.dumps({'launch': self.agent(slot).get('runtime_launch') or ''})
                               if restore else '')
                 rec.update(status='rotating', spec=spec, launch=profile_launch.encode_launch(launch),
-                           supervisor_profile=answer['supervisor_profile'], workers=workers, note=note,
+                           supervisor_profile=answer.get('supervisor_profile') or '', workers=workers, note=note,
                            from_generation=int(self.agent(slot).get('generation') or 0))
-                self.log('escalate.approved', task=task_id, workers=workers, rotate=answer['supervisor_profile'],
+                self.log('escalate.approved', task=task_id, workers=workers,
+                         rotate=answer.get('supervisor_profile') or answer.get('supervisor_model'),
                          worker_profiles=wps or [])
             else:
                 rid = subfleet.request(self.run_dir, **spec)
@@ -4050,9 +4739,25 @@ class Fleet:
                   split_g=str(info.get('generation') or 0), split_message=info['msg_id'], split_send_pending=1)
         self.log('split.held', agent=slot, task=task_id, split_id=sid)
 
-    def split_supervisor_launch(self, slot, profile):
+    def split_supervisor_launch(self, slot, profile, model=None):
         """(launch, None) for the next generation of ``slot`` on card ``profile`` (§44), or (None, why not):
-        the same card resolver, CLI pair check, host / max_concurrent gate and CLI preflight as a roster swap."""
+        the same card resolver, CLI pair check, host / max_concurrent gate and CLI preflight as a roster swap.
+        ``profile`` None + ``model`` (§58 model chains, a Claude model with no card): the overrides a card would give
+        (worker_cli claude, worker_model), capped by that model's card like any launch."""
+        if not profile:
+            where = 'supervisor model ' + str(model) + ': '
+            try:
+                registry = AgentRegistry(self.cfg.get('agent_registry') or None)
+                launch = {'profile_id': '', 'role_text': '',
+                          'overrides': {'worker_cli': 'claude', 'worker_model': model}}
+                card = self.job_model_card('claude', model, registry)
+                gate = self.card_gate(slot, card, registry) if card else None
+                if gate:
+                    return None, where + gate[1]
+                self.preflight_profile(launch)
+                return launch, None
+            except (AgentRegistryError, OSError, ValueError, subprocess.SubprocessError) as exc:
+                return None, where + str(exc)
         where = 'supervisor_profile ' + profile + ': '
         try:
             registry = AgentRegistry(self.cfg.get('agent_registry') or None)
@@ -4302,8 +5007,8 @@ class Fleet:
             return
         esc, changed = self.escalation_state(), False
         for task_id, rec in list(esc.items()):
-            if task_id.startswith(REPORT_KEY):
-                changed = self.report_reask(task_id, rec) or changed
+            if task_id.startswith(REPORT_KEY):  # §24: an awaiting report whose sub-fleet ended is dropped
+                changed = blocked_scope.awaiting_tick(self, esc, task_id, rec) or self.report_reask(task_id, rec) or changed
                 continue
             rid = rec.get('request')
             if rid and rec.get('status') in ('escalated', 'rotating') and not self.r.hgetall(REQ + rid):
@@ -4341,13 +5046,14 @@ class Fleet:
                 state['tasks'][task_id].update(status='escalated', reason='sub-fleet refused')
                 self.save_contract(state)
             self.log('escalate.spawn_refused', task=task_id, reason=answer.get('reason'))
+            self.tree_split_rollback(task_id, 'sub-fleet could not start: ' + str(answer.get('reason')))
             self.queue('supervisor', '[escalate] sub-fleet ' + task_id + ' could not start: ' + str(answer.get('reason'))
                        + '\n' + task_id + ' waits for your answer again (escalations: approve with fewer workers / '
                        'revise / reject). Reply with the JSON format from AGENTS.md.')
         if changed:
             self.save_escalations(esc)
 
-    def split_drop(self, esc, task_id, rec, why):
+    def split_drop(self, esc, task_id, rec, why, count=True):
         """P7: a service split whose request is gone (timed out, settled, not replayed): the record and its M<n>
         row go, a late answer to it is only logged (SPLIT_STALE), and a slot rotated for it gets its own model
         back next generation. ``esc`` is changed in place; the caller saves it."""
@@ -4362,8 +5068,9 @@ class Fleet:
         if (rec.get('status') == 'rotating' or rec.get('job')) and self.agent(slot).get('split_restore'):
             self.setf(slot, split_launch=self.agent(slot)['split_restore'], split_restore='')
         self.log('split.stale', task=task_id, request_id=rec.get('request', ''), status=rec.get('status', ''), reason=why)
+        self.tree_split_rollback(task_id, why)
         if rec.get('job'):
-            self.job_release(rec['job'], why)
+            self.job_release(rec['job'], why, count=count and not self.stopping)
 
     def split_delegated(self, task_id, rec, answer):
         """P7: the task sub-fleet of a service split was accepted: the original request is answered now
@@ -4423,7 +5130,7 @@ class Fleet:
                    'request ' + rid + ' is now ' + req['worker'] + "'s" if (req.get('worker') or slot) != slot else '')
             if why:
                 changed = True
-                self.split_drop(esc, task_id, rec, why + ' (resume)')
+                self.split_drop(esc, task_id, rec, why + ' (resume)', count=False)
                 if rec.get('job'):
                     continue  # §58: back in the job queue (split_drop), nothing for the supervisor to route
                 self.queue('supervisor', '[escalate] ' + task_id + ' approval lapsed on resume: ' + why
@@ -4474,6 +5181,286 @@ class Fleet:
 
     def save_jobs(self, jobs):
         self.r.set(JOBS, json.dumps(jobs, ensure_ascii=False, separators=(',', ':')))
+        self.job_mirror(jobs)
+
+    def job_mirror(self, jobs=None):
+        """section 58 "Restart": <run>/jobs.json follows fx:jobs (a service root only), and <fleet home>/job-runs/ names
+        this run while it holds open jobs, so a later `start` finds them while this run's Redis is down."""
+        if not self.service or self.cfg.get('parent_config'):
+            return
+        jobs = self.job_state() if jobs is None else jobs
+        try:
+            save(self.run_dir / JOBS_FILE, jobs)
+            job_index(self.cfg, self.run_dir, bool(jobs))
+        except OSError as exc:
+            self.log('job.mirror_failed', error=str(exc)[:200])
+
+    def job_stopped(self):
+        """The explicit-stop tail: the last mirror write before the run's Redis goes down."""
+        self.job_mirror()
+
+    def job_publish(self, jid, status, **fields):
+        """Publish job ``jid``'s one result and keep a copy in <run>/job-results/<job id>.json, which a join stub's
+        `result` reads when the root is down or the Redis copy expired (RESULT_TTL)."""
+        self.publish(jid, status, **fields)
+        raw = self.r.get(RESULT + jid)
+        try:
+            save(self.run_dir / JOB_RESULTS / (jid + '.json'), json.loads(raw) if raw else dict(
+                id=jid, status=status, at=time.time(), **{k: v for k, v in fields.items() if k != 'replace'}))
+        except OSError as exc:
+            self.log('job.result_mirror_failed', job=jid, error=str(exc)[:200])
+
+    def job_has_result(self, jid):
+        return bool(self.r.exists(RESULT + jid)) or (self.run_dir / JOB_RESULTS / (jid + '.json')).exists()
+
+    def job_notify_failed(self, jid, reason):
+        """A job that could not be carried over: one line on the root's outbound channel (lifecycle_close.notify:
+        tg / channels / parent mailbox, notifications.jsonl), once per job id."""
+        if not self.r.hsetnx(JOB_NOTIFIED, jid, str(time.time())):
+            return
+        policy = {}
+        if self.cfg.get('lifecycle'):
+            try:
+                policy = lifecycle.get_mode(self.cfg['lifecycle'])
+            except ValueError:
+                policy = {}
+        text = '[fleet ' + lifecycle_close.fleet_name(self) + '] job ' + jid + ' failed: ' + str(reason)[:400]
+        try:
+            lifecycle_close.notify(self, 'job_failed', text, policy)
+        except Exception as exc:  # the outbound channel never stops the daemon
+            self.log('job.notify_failed', job=jid, error=str(exc)[:200])
+
+    def job_fail(self, jid, outcome, why, notify=False):
+        """Pop job ``jid`` and publish it failed with ``why`` (outcome ``cancelled`` / ``not_carried``)."""
+        jobs = self.job_state()
+        job = jobs.pop(jid, None)
+        if job is not None:
+            esc = self.escalation_state()
+            if job.get('task') and (esc.get(job['task']) or {}).get('job') == jid:
+                rec = esc.pop(job['task'])
+                if self.agent(rec['slot']).get('split_restore'):
+                    self.setf(rec['slot'], split_launch=self.agent(rec['slot'])['split_restore'], split_restore='')
+                self.save_escalations(esc)
+            self.job_hot_drop(job)
+            self.save_jobs(jobs)
+        if not self.r.hgetall(REQ + jid):  # a carried row (job_carry_in) or an expired hash: one is made for it
+            self.r.hset(REQ + jid, mapping={'status': 'job_queued', 'created': awake.now(), 'worker': '', 'job': 1})
+        self.job_publish(jid, 'failed', worker='fleet', error=why, result={'job': jid, 'outcome': outcome,
+                                                                          'reason': why})
+        self.log('job.failed', job=jid, outcome=outcome, reason=why[:300])
+        if notify:
+            self.job_notify_failed(jid, why)
+
+    def job_carry_problem(self, job):
+        """Why job row ``job`` cannot be carried over / resumed (its roster, roles or repo is gone), else ''."""
+        spawn = job.get('spawn') or {}
+        for key in ('roster', 'roles'):
+            if spawn.get(key) and not Path(spawn[key]).exists():
+                return 'its ' + key + ' ' + spawn[key] + ' no longer exists'
+        repo = (spawn.get('deliver') or {}).get('repo')
+        if repo and not Path(repo).exists():
+            return 'its repository ' + str(repo) + ' no longer exists'
+        return ''
+
+    def job_cancel(self, jid, by='operator'):
+        """section 58 "Restart" / stop on a join stub: cancel job ``jid``. Without a running sub-fleet it is cancelled at
+        once (no requeue) and published failed (outcome cancelled); with one the cancel is recorded on the row and
+        the sub-fleet gets a plain stop (a cancel, never a suspend): its collect publishes the result."""
+        jobs = self.job_state()
+        job = jobs.get(jid)
+        if job is None:
+            return {'status': 'ended', 'job': jid}
+        live = [d for d in subfleet.job_children(self.run_dir, jid)
+                if subfleet.record(d).get('state') in subfleet.ACTIVE or daemon_running(d)]
+        if live:
+            job['cancel'] = {'by': by, 'at': time.time()}
+            self.save_jobs(jobs)
+            for d in live:
+                rec = subfleet.record(d)
+                if rec.get('state') != 'stopping' or rec.get('outcome') == 'suspended':
+                    rec.update(state='stopping', outcome='cancelled', reason='cancelled by ' + by)
+                    subfleet.save_record(d, rec)
+                try:
+                    subfleet.post_stop(load(d / 'config.json'))
+                except (OSError, ValueError):
+                    pass
+            self.log('job.cancelling', job=jid, by=by)
+            return {'status': 'stopping', 'job': jid}
+        folder = self.run_dir / 'subfleet-requests'
+        for path in (folder.glob('sf-*.json') if folder.is_dir() else []):  # an approved spawn never runs
+            try:
+                if not path.name.endswith('.answer.json') and (load(path).get('job') or {}).get('id') == jid:
+                    path.unlink()
+            except (OSError, ValueError):
+                pass
+        state = job.get('state') or 'queued'
+        self.job_fail(jid, 'cancelled', 'cancelled by ' + by + ' while ' + state + (
+            '' if state == 'suspended' else ', before its sub-fleet started'))
+        return {'status': 'cancelled', 'job': jid}
+
+    def job_suspended(self, jid, task_id, child_run, reason=''):
+        """section 58 "Restart": the sub-fleet of job ``jid`` was suspended (root stop, or a root restart that found its
+        delegated session gone). Nothing is published: the row waits as ``suspended`` and job_start hands the same
+        sub-fleet to a fresh slot of this root (subfleet.readopt_child)."""
+        jobs = self.job_state()
+        job = jobs.get(jid)
+        esc = self.escalation_state()
+        rec = esc.pop(task_id, None)
+        if rec is not None:
+            if self.agent(rec['slot']).get('split_restore'):
+                self.setf(rec['slot'], split_launch=self.agent(rec['slot'])['split_restore'], split_restore='')
+            self.save_escalations(esc)
+        if job is None:
+            return
+        if job.get('cancel'):
+            self.job_fail(jid, 'cancelled', 'cancelled by ' + job['cancel'].get('by', 'operator'))
+            return
+        job.update(state='suspended', slot='', task=task_id, run=str(child_run), resume_run='', waiting='',
+                   suspended_at=time.time())
+        self.save_jobs(jobs)
+        self.r.hset(REQ + jid, mapping={'status': 'job_queued', 'worker': ''})
+        self.log('job.suspended', job=jid, task=task_id, reason=str(reason or '')[:200])
+
+    def job_carry_in(self):
+        """section 58 "Restart", first boot of a new run whose `start` could not continue an earlier run of this fleet home
+        (``carry_from``): that run's never-started rows (queued, or starting with no sub-fleet) are taken over with
+        their ids and ``created`` (order kept); a started one, or one whose roster / roles / repo is gone, is
+        published failed with the reason. The old jobs.json becomes jobs.carried.json (the tombstone)."""
+        for src in self.cfg.get('carry_from') or []:
+            old = Path(src['run'])
+            why = str(src.get('reason') or 'the run could not be continued')
+            path = old / JOBS_FILE
+            try:
+                rows = load(path)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rows, dict):
+                continue
+            jobs = self.job_state()
+            for jid, row in sorted(rows.items(), key=lambda x: x[1].get('created') or 0):
+                if jid in jobs or self.job_has_result(jid):
+                    continue
+                children = subfleet.job_children(old, jid)
+                started = row.get('state') in ('running', 'suspended') or bool(children)
+                problem = ('its sub-fleet ' + str(row.get('task') or '?') + ' runs under ' + str(old) + ', which could '
+                           'not be continued: ' + why) if started else self.job_carry_problem(row)
+                goal = row.get('goal') or ''
+                spec = {'id': jid, 'payload': {'goal': goal}, 'instruction': 'Job: ' + goal.splitlines()[0][:200] if goal
+                        else 'Job', 'reply': {'required': ['reply']}}
+                self.r.hset(REQ + jid, mapping={'spec': json.dumps(spec, ensure_ascii=False), 'status': 'job_queued',
+                                                'created': awake.now(), 'attempts': 0, 'worker': '', 'job': 1})
+                if problem:
+                    self.job_fail(jid, 'not_carried', 'not carried over from ' + str(old) + ': ' + problem, notify=True)
+                    continue
+                jobs = self.job_state()
+                jobs[jid] = dict(row, state='queued', slot='', task='', run='', resume_run='', waiting='', hot_slot='',
+                                 carried_from=str(old))
+                self.save_jobs(jobs)
+                self.log('job.carried', job=jid, source=str(old))
+                if self.service:
+                    self.queue('supervisor', '[job ' + jid + '] carried over from ' + str(old) + ' (' + why + '); the '
+                               'program runs it in its own sub-fleet. This is not a request for you: do not dispatch, '
+                               'answer or skip it. Reply with the usual service decision JSON: status RUNNING, dispatch '
+                               '[], skip [].', request_id=jid, kind='followup')
+            try:
+                save(old / JOBS_CARRIED, {'carried_to': str(self.run_dir), 'reason': why, 'jobs': rows})
+                path.unlink(missing_ok=True)
+                try:
+                    job_index(load(old / 'config.json'), old, False)
+                except (OSError, ValueError):
+                    pass
+            except OSError as exc:
+                self.log('job.carry_tombstone_failed', source=str(old), error=str(exc)[:200])
+
+    def job_resume_reconcile(self):
+        """section 58 "Restart", in `start --resume` / a continued run, before respawn and the sub-fleet relaunch: drop rows
+        a newer run took over (jobs.carried.json), put back mirror rows the reloaded Redis lost (never one with a
+        result, in Redis or in job-results/), apply cancels written while the root was down, and suspend the job
+        sub-fleets whose delegated session is gone (service root)."""
+        if self.cfg.get('parent_config') or not self.v2:
+            return
+        jobs, changed = self.job_state(), False
+        for job in jobs.values():  # rows that live through this restart: job_start checks their files again
+            if not job.get('restarted'):
+                job['restarted'] = True
+                changed = True
+        try:
+            carried = (load(self.run_dir / JOBS_CARRIED).get('jobs') or {})
+        except (OSError, ValueError, AttributeError):
+            carried = {}
+        for jid in carried:
+            if jid in jobs:
+                jobs.pop(jid)
+                self.r.delete(REQ + jid)
+                self.log('job.carried_away', job=jid)
+                changed = True
+        try:
+            mirror = load(self.run_dir / JOBS_FILE) if self.service else {}
+        except (OSError, ValueError):
+            mirror = {}
+        for jid, row in (mirror.items() if isinstance(mirror, dict) else []):
+            if jid in jobs or jid in carried or self.job_has_result(jid):
+                continue
+            kids = subfleet.job_children(self.run_dir, jid)
+            suspended = [d for d in kids if subfleet.record(d).get('state') == 'suspended']
+            row = dict(row, slot='', waiting='', resume_run='')
+            if suspended:
+                row.update(state='suspended', run=str(suspended[-1]))
+            elif not kids:
+                row.update(state='queued', task='', run='')
+            else:
+                continue  # an active sub-fleet: its collect decides
+            goal = row.get('goal') or ''
+            spec = {'id': jid, 'payload': {'goal': goal}, 'instruction': 'Job: ' + goal.splitlines()[0][:200] if goal
+                    else 'Job', 'reply': {'required': ['reply']}}
+            self.r.hset(REQ + jid, mapping={'spec': json.dumps(spec, ensure_ascii=False), 'status': 'job_queued',
+                                            'created': awake.now(), 'attempts': 0, 'worker': '', 'job': 1})
+            jobs[jid] = row
+            self.log('job.restored', job=jid, state=row['state'])
+            changed = True
+        if changed:
+            self.save_jobs(jobs)
+        folder = self.run_dir / JOB_CANCELS
+        for path in sorted(folder.glob('*.json')) if folder.is_dir() else []:
+            try:
+                by = (load(path) or {}).get('by') or 'operator'
+            except (OSError, ValueError):
+                by = 'operator'
+            if path.stem in self.job_state():
+                self.job_cancel(path.stem, by=by)
+            path.unlink(missing_ok=True)
+        if self.service:
+            self.job_suspend_lost()
+
+    def job_suspend_lost(self):
+        """section 58 "Restart": a root restart found the delegated session of a running job sub-fleet gone (a reboot or a
+        stop ended the fleet's tmux). Its daemon gone: suspended now. Its daemon alive: it gets a suspend stop and the
+        normal collect suspends it once it exits; nothing is relaunched or re-delegated while it lives."""
+        probe = getattr(self.mgr, 'tmux_session_alive', None)
+        if probe is None:
+            return
+        jobs = self.job_state()
+        for d in subfleet.active_children(self.run_dir):
+            rec = subfleet.record(d)
+            jid = rec.get('job')
+            if not jid or jid not in jobs or jobs[jid].get('cancel') or rec.get('state') != 'running':
+                continue
+            pane = self.agent(rec['slot']).get('delegated_pane') or rec.get('pane')
+            if not pane or probe(pane) is not False:
+                continue
+            if (subfleet.child_result(d) or {}).get('status') not in (None, 'suspended'):
+                continue  # it ended by itself: the normal collect publishes it
+            why = 'root restarted; the delegated session of ' + self.label(rec['slot']) + ' is gone'
+            if daemon_running(d):
+                rec.update(state='stopping', outcome='suspended', reason=why)
+                subfleet.save_record(d, rec)
+                try:
+                    subfleet.post_stop(load(d / 'config.json'), suspend=True)
+                except (OSError, ValueError):
+                    pass
+                self.log('job.suspending', job=jid, task=rec['task_id'], reason=why)
+                continue
+            subfleet.suspend_dead(self, d, rec, why)
 
     def job_update(self, jid, **fields):
         jobs = self.job_state()
@@ -4538,7 +5525,12 @@ class Fleet:
         """The sub-fleet of a job: fleet.yaml#job_subfleet, then the job spec's own keys. ValueError when bad.
         ``fields`` (job_spawn_fields): a roster sets the workers and their cards."""
         base = fleet_config.job_subfleet()
-        out = {k: spec.get(k, base[k]) for k in base}
+        out = {k: spec.get(k, base[k]) for k in base if k not in ('supervisor', 'worker')}
+        # §58 model chains: which layer's chain or card each role runs (job_chain.effective; a chain voids a lower
+        # layer's card and the other way round). The picks happen in job_start.
+        eff = job_chain.effective(spec, base)
+        out.update(supervisor_profile=eff['supervisor_profile'], worker_profiles=eff['worker_profiles'],
+                   chains={'supervisor': eff['supervisor'], 'worker': eff['worker']}, chain_source=eff['source'])
         cards = []
         if (fields or {}).get('roster'):
             names, _, profiles = roster.load_entries(fields['roster'])
@@ -4579,6 +5571,11 @@ class Fleet:
                                      'Code session can become a sub-fleet supervisor')
         return out
 
+    def job_pi_gate(self, cli, model):
+        """§51 / §58 model chains: why this fleet cannot run a pi sub-fleet worker (pi binary, --allow-unsandboxed-pi),
+        else None. Passed to job_chain as ``refused`` at submit and at start."""
+        return subfleet.named_pi_problem(self.cfg, {'worker_cli': 'pi'}) if cli == 'pi' else None
+
     def job_root_busy(self):
         """§19 "Task root": a root task fleet (v2) whose own task runs takes a `task` as a job."""
         return (not self.service and self.v2 is not None and not self.cfg.get('parent_config')
@@ -4609,14 +5606,27 @@ class Fleet:
             raise ValueError('no worker of this fleet runs the official Claude Code CLI: only such a worker can '
                              'become the supervisor of a job sub-fleet')
         fields = self.job_spawn_fields(spec)
+        rows = None
+        if fields.get('roster'):  # the raw rows: job_chain refuses pi_model / pi_thinking rows (§58 model chains)
+            import yaml
+            rows = (yaml.safe_load(Path(fields['roster']).read_bytes()) or {}).get('workers') or []
+        problem = job_chain.submit_problem(spec, rows, refused=self.job_pi_gate)
+        if problem:
+            raise ValueError(problem)
         settings = self.job_settings(spec, fields)
         if 'artifacts' in spec:
             validate_artifacts(spec['artifacts'])
+        if spec.get('tree') is not None and not (isinstance(spec['tree'], str) and os.path.isabs(spec['tree'])
+                                                 and os.path.isfile(spec['tree'])):
+            raise ValueError('tree must be the absolute path of a tree JSON file (docs/design.md §62)')
+        by = decompose.seed_by(spec['by']) if spec.get('by') is not None else None  # §62: who wrote the tree
         budget = brake.validate_budget(spec.get('budget'))
         life = spec.get('lifecycle')
         if life is not None and (life not in lifecycle.MODE_NAMES or lifecycle.base_mode(life) != 'task'):
             raise ValueError('lifecycle must be a task lifecycle (' + ', '.join(
                 m for m in lifecycle.MODE_NAMES if lifecycle.base_mode(m) == 'task') + ') or null')
+        if life == 'dev_task' and spec.get('tree') is None and decompose.enabled():  # §62: a dev job brings its tree
+            raise ValueError(decompose.tree_required('job'))
         jid = JOB_PREFIX + uuid.uuid4().hex[:10]
         goal, now = spec['goal'].strip(), time.time()
         req_spec = {'id': jid, 'payload': {'goal': goal}, 'instruction': 'Job: ' + goal.splitlines()[0][:200],
@@ -4626,7 +5636,8 @@ class Fleet:
         jobs = self.job_state()
         jobs[jid] = {'goal': goal, 'settings': settings, 'artifacts': spec.get('artifacts'), 'budget': budget,
                      'lifecycle': life, 'state': 'queued', 'slot': '', 'task': '', 'run': '', 'waiting': '',
-                     'tries': 0, 'created': now, 'spawn': fields, 'hot_slot': ''}
+                     'tries': 0, 'created': now, 'spawn': fields, 'hot_slot': '', 'tree': spec.get('tree'),
+                     'by': by}
         self.save_jobs(jobs)
         head = ('[job ' + jid + '] accepted: the program runs it in its own task-mode sub-fleet on a free worker ('
                 + str(settings['workers']) + ' sub-fleet workers, ' + str(settings['hours']) + ' h). Goal: '
@@ -4652,7 +5663,9 @@ class Fleet:
         job = self.job_state().get(jid) or {}
         out = {'hours': (job.get('settings') or {}).get('hours') or subfleet.limits(self.cfg)['split_budget_h'],
                'lifecycle': job.get('lifecycle'),
-               'job': dict(job.get('spawn') or {}, id=jid, submitted=job.get('created'))}
+               'job': dict(job.get('spawn') or {}, id=jid, submitted=job.get('created'), **(job.get('chain') or {}))}
+        if job.get('resume_run'):  # section 58 "Restart": the same sub-fleet, handed to a fresh slot (readopt_child)
+            out['job'].update(resume_run=job['resume_run'], suspended_at=job.get('suspended_at'))
         if job.get('artifacts') is not None:
             out['artifacts'] = job['artifacts']
         if job.get('budget'):
@@ -4686,10 +5699,11 @@ class Fleet:
             return
         if not self.service and not self.job_task_root_tick():
             return
-        if self.paused():
+        if self.paused() or self.stopping:  # section 58 "Restart": nothing starts while the root stops
             return
         jobs = self.job_state()
-        for jid in sorted((j for j, x in jobs.items() if x.get('state') == 'queued'), key=lambda j: jobs[j]['created']):
+        for jid in sorted((j for j, x in jobs.items() if x.get('state') in ('queued', 'suspended')),
+                          key=lambda j: jobs[j]['created']):
             self.job_start(jid)
 
     def job_task_root_tick(self):
@@ -4710,8 +5724,8 @@ class Fleet:
                 self.save_jobs(jobs)
                 why = 'the task of this fleet ended (' + str(task.get('status') or 'none') + ') before the job started'
                 if self.r.hgetall(REQ + jid):
-                    self.publish(jid, 'failed', worker='fleet', error=why,
-                                 result={'job': jid, 'outcome': 'not_started', 'reason': why})
+                    self.job_publish(jid, 'failed', worker='fleet', error=why,
+                                     result={'job': jid, 'outcome': 'not_started', 'reason': why})
                 self.log('job.failed', job=jid, reason=why)
             return False
         if task.get('jobs_hold') and not jobs and not self.unsettled_workers():  # own work out again: wait for it
@@ -4726,32 +5740,83 @@ class Fleet:
         slot: the job stays queued and the reason shows in status. True when a slot was taken."""
         jobs = self.job_state()
         job = jobs.get(jid)
-        if not job or job.get('state') != 'queued':
+        if not job or job.get('state') not in ('queued', 'suspended'):
             return False
         if not self.r.hgetall(REQ + jid):  # published meanwhile: nothing left to run
             self.job_hot_drop(jobs.pop(jid, None))
             self.save_jobs(jobs)
             return False
+        # section 58 "Restart": never two sub-fleets for one job: one still running (or its daemon alive) is waited for, a
+        # suspended one is the only one handed on, anything else fails closed
+        kids = subfleet.job_children(self.run_dir, jid)
+        busy = [d for d in kids if subfleet.record(d).get('state') in subfleet.ACTIVE or daemon_running(d)]
+        if busy:
+            why = 'its sub-fleet ' + busy[0].name + ' is still running; waiting for it to end'
+            if job.get('waiting') != why:
+                self.job_update(jid, waiting=why)
+            return False
+        resume_run = ''
+        if job['state'] == 'suspended':
+            sus = [d for d in kids if subfleet.record(d).get('state') == 'suspended']
+            problem = ('' if len(sus) == 1 and str(sus[0]) == str(job.get('run')) else
+                       'not safe to continue: ' + str(len(sus)) + ' suspended sub-fleets for this job')
+            if not problem:
+                try:
+                    ccfg = load(sus[0] / 'config.json')
+                    if not Path(ccfg['redis_runtime_dir']).is_dir():
+                        problem = 'its sub-fleet ' + sus[0].name + ' lost its Redis directory'
+                except (OSError, ValueError, KeyError):
+                    problem = 'its sub-fleet ' + sus[0].name + ' has no readable config.json'
+            if problem:
+                self.job_fail(jid, 'not_carried', 'cannot resume after the restart: ' + problem, notify=True)
+                return False
+            resume_run = str(sus[0])
+        restarted = bool(job.get('restarted') or job.get('carried_from') or resume_run)
+        problem = self.job_carry_problem(job) if restarted else ''  # brief goal 5: only across a root restart
+        if problem:
+            self.job_fail(jid, 'not_carried', 'cannot ' + ('resume' if resume_run else 'start') + ' after the root '
+                          'restarted: ' + problem, notify=True)
+            return False
         st = job['settings']
         profiles = {'worker-' + str(i + 1): p for i, p in enumerate(st['worker_profiles'])}
-        taken = []  # a number with a sub-fleet directory (a failed spawn too) is never given to a job again
-        key_ = self.next_item_id(taken)
-        while subfleet.attempts_used(self.run_dir, key_):
-            taken.append({'id': key_})
+        if resume_run:
+            key_ = job['task']
+        else:
+            taken = []  # a number with a sub-fleet directory (a failed spawn too) is never given to a job again
             key_ = self.next_item_id(taken)
+            while subfleet.attempts_used(self.run_dir, key_):
+                taken.append({'id': key_})
+                key_ = self.next_item_id(taken)
         spawn = dict(job.get('spawn') or {}, id=jid, submitted=job.get('created'))
+        if resume_run:
+            spawn.update(resume_run=resume_run, suspended_at=job.get('suspended_at'))
         full = self.job_tree_full(job)
         if full:
             if job.get('waiting') != full:
                 self.job_update(jid, waiting=full)
                 self.log('job.waiting', job=jid, reason=full)
             return False
+        # §58 model chains: the sub-fleet workers run the worker chain's pick, written into the child config; no
+        # usable entry now (walls, quota) = the job waits with the reason, never a default model
+        over, traces, nope = self.job_worker_pick(job, spawn)
+        if over is None:
+            if job.get('waiting') != nope:
+                self.job_update(jid, waiting=nope)
+                self.log('job.waiting', job=jid, reason=nope[:500])
+            return False
+        chain = {}
+        if st.get('chains') is not None:
+            chain = {'job_chain': st['chains'], 'model_chain': {'supervisor': None, 'workers': traces}}
+            if over:
+                chain['worker_overrides'] = over
+        spawn.update(chain)
         why, slot = [], None
         hot = job.get('hot_slot') or ''
         for w in sorted(self.active_workers(), key=lambda w: w != hot):  # its own added worker first
             reason = (self.job_slot_busy(w, jid)
-                      or subfleet.check(self, w, key_, st['workers'], ready=True, profiles=profiles, job=spawn)
-                      or (st['supervisor_profile'] and self.split_supervisor_launch(w, st['supervisor_profile'])[1]))
+                      or subfleet.check(self, w, key_, st['workers'], ready=True, profiles=profiles, job=spawn))
+            if not reason:  # §58 model chains: the supervisor card, or the supervisor chain's pick for this slot
+                sup_fields, sup_trace, reason = self.job_supervisor_pick(w, st)
             if reason:
                 why.append(self.label(w) + ': ' + reason)
                 continue
@@ -4766,6 +5831,8 @@ class Fleet:
                 self.job_update(jid, waiting=waiting)
                 self.log('job.waiting', job=jid, reason=waiting[:500])
             return False
+        if chain:
+            chain['model_chain']['supervisor'] = sup_trace
         if hot and slot != hot:  # another worker came free first: the one added for this job goes again
             self.job_hot_drop(job)
             self.job_update(jid, hot_slot='')
@@ -4782,10 +5849,8 @@ class Fleet:
                      'instruction': goal, 'status': 'escalated', 'request': jid, 'job': jid, 'message_id': '',
                      'asked_at': time.time()}
         self.save_escalations(esc)
-        self.job_update(jid, state='starting', slot=slot, task=key_, waiting='')
-        answer = {'task': key_, 'decision': 'approve', 'note': '', 'workers': st['workers']}
-        if st['supervisor_profile']:
-            answer['supervisor_profile'] = st['supervisor_profile']
+        self.job_update(jid, state='starting', slot=slot, task=key_, waiting='', chain=chain, resume_run=resume_run)
+        answer = dict({'task': key_, 'decision': 'approve', 'note': '', 'workers': st['workers']}, **sup_fields)
         if st['worker_profiles']:
             answer['worker_profiles'] = list(st['worker_profiles'])
         self.escalation_apply({}, None, key_, esc[key_], answer)
@@ -4797,6 +5862,97 @@ class Fleet:
             return False
         self.log('job.started', job=jid, slot=slot, task=key_, status=esc[key_]['status'])
         return True
+
+    def job_worker_pick(self, job, spawn):
+        """§58 model chains: (overrides, {slot: trace}, reason) of the sub-fleet workers of ``job``. Slots with a card
+        (a roster row's profile, worker_profiles) keep it; the others run job_chain.pick_worker over the job's worker
+        chain, with this run's walls, the section 51 pi gate and the model quota of those slots. overrides None = no
+        usable entry now (``reason``). A job queued before model chains (no ``chains``) runs as before: ({}, {}, '')."""
+        st = job['settings']
+        chains = st.get('chains')
+        if chains is None:
+            return {}, {}, ''
+        names, cards = subfleet.job_roster(spawn)
+        if not names:
+            names = ['worker-' + str(i + 1) for i in range(st['workers'])]
+            cards = {'worker-' + str(i + 1): p for i, p in enumerate(st.get('worker_profiles') or [])}
+        cards = {n: c for n, c in (cards or {}).items() if c}
+        registry = AgentRegistry(self.cfg.get('agent_registry') or None)
+        traces = {}
+        for name, card_id in cards.items():
+            card = registry.get(card_id)
+            traces[name] = job_chain.trace({'entry': {'cli': card.cli, 'model': card.model}, 'profile': card_id,
+                                            'skipped': []}, 'card')
+        free = [n for n in names if n not in cards]
+        if not free:
+            return {}, traces, ''
+        if not chains.get('worker'):
+            return None, traces, 'no worker chain for ' + ', '.join(free)
+
+        def refused(cli, model):
+            over = {'worker_cli': cli, ('pi_model' if cli == 'pi' else 'worker_model'): model}
+            return self.job_pi_gate(cli, model) or model_usage.default_problem(
+                subfleet.job_worker_cfg(self.cfg, {'worker_overrides': over}), free, registry)
+        pick = job_chain.pick_worker(chains['worker'], 'claude', self.walled(), refused=refused,
+                                     card_slots=bool(cards))
+        if pick['entry'] is None:
+            return None, traces, pick['reason']
+        source = (st.get('chain_source') or {}).get('worker') or 'discovery'
+        traces.update({n: job_chain.trace(pick, source) for n in free})
+        return pick['overrides'], traces, ''
+
+    def job_model_card(self, cli, model, registry):
+        """The model card of (cli, model) (its max_concurrent caps the model), or None."""
+        return next((m for m in registry.models if m.cli == cli and m.model == model), None)
+
+    def job_supervisor_pick(self, slot, st):
+        """§58 model chains: (approve fields, trace, reason) for ``slot`` as the supervisor of a job's sub-fleet.
+        A supervisor card (spec or job_subfleet): that card, as before. Else job_chain.pick_supervisor over the job's
+        supervisor chain, with this run's walls and the quota of each model for this slot (Fleet.card_gate): its
+        card, or {supervisor_model} for a model with no card. The slot already runs the pick: no fields, adopted in
+        place (D15). ``reason`` non-empty: this slot cannot supervise the job now."""
+        registry = AgentRegistry(self.cfg.get('agent_registry') or None)
+        card_id = st.get('supervisor_profile')
+        if card_id:
+            why = self.split_supervisor_launch(slot, card_id)[1] or ''
+            try:
+                model = registry.get(card_id).model
+            except KeyError:
+                model = None
+            return ({'supervisor_profile': card_id}, job_chain.trace(
+                {'entry': {'cli': 'claude', 'model': model}, 'profile': card_id, 'skipped': []}, 'card'), why)
+        chain = (st.get('chains') or {}).get('supervisor')
+        if not chain:  # a job queued before model chains: the slot keeps its own model, as before
+            return {}, None, ''
+        return self.supervisor_chain_pick(slot, chain, (st.get('chain_source') or {}).get('supervisor'), registry)
+
+    def supervisor_chain_pick(self, slot, chain=None, source=None, registry=None):
+        """(approve fields, trace, reason) for ``slot`` as the supervisor of a sub-fleet whose model nobody named:
+        the first usable Claude entry of ``chain`` (a job's supervisor chain) or, with ``chain`` None, of
+        discovery.supervisor (job_chain.subfleet_supervisor: a §44 split, user 2026-11-22 D27). Skips walls
+        (Fleet.walled) and models at their quota for this slot (Fleet.card_gate). Fields: {} when the slot already runs
+        the pick (adopted in place, no rotation), else the pick's card (supervisor_profile) or, without a card,
+        {supervisor_model}. ``reason`` non-empty: no usable entry, or the pick's launch is refused (D28)."""
+        registry = registry or AgentRegistry(self.cfg.get('agent_registry') or None)
+
+        def refused(cli, model):
+            card = self.job_model_card(cli, model, registry)
+            gate = self.card_gate(slot, card, registry) if card else None
+            return gate[1] if gate else None
+        if chain is None:
+            pick = job_chain.subfleet_supervisor(self.walled(), registry=registry, refused=refused)
+            chain, source = pick['chain'], pick['source']
+        else:
+            pick = job_chain.pick_supervisor(chain, self.walled(), registry=registry, refused=refused)
+        if pick['entry'] is None:
+            return {}, None, pick['reason']
+        trace = job_chain.trace(pick, source or 'discovery')
+        cfg, model = self.runtime_cfg(slot), pick['entry']['model']
+        if job_chain.runs_pick(pick, chain, agent_cli(cfg, slot), claude_model(cfg, slot)):
+            return {}, trace, ''
+        fields = {'supervisor_profile': pick['profile']} if pick['profile'] else {'supervisor_model': model}
+        why = self.split_supervisor_launch(slot, pick['profile'], None if pick['profile'] else model)[1]
+        return fields, trace, why or ''
 
     def job_hot_add(self, jid, job, task_id='', profiles=None, spawn=None):
         """§58: no worker can take queued job ``jid``: add one worker row to the root roster (the applet supply
@@ -4836,7 +5992,7 @@ class Fleet:
         if like and task_id:  # limits and cards only (ready=False): what a new Claude worker would meet as well
             same = (subfleet.check(self, like, task_id, st.get('workers', 1), ready=False, profiles=profiles,
                                    job=spawn)
-                    or (st.get('supervisor_profile') and self.split_supervisor_launch(like, st['supervisor_profile'])[1]))
+                    or self.job_supervisor_pick(like, st)[2])
             if same:
                 return 'no worker added: ' + str(same)
         cap = lim.get('job_hot_add_max')
@@ -4892,9 +6048,11 @@ class Fleet:
                 self.log('job.worker_remove_failed', slot=hot, path=str(path), error=str(exc)[:200])
         self.log('job.worker_removed', slot=hot)
 
-    def job_release(self, jid, why):
+    def job_release(self, jid, why, count=True):
         """A job whose sub-fleet did not start goes back to the queue (its split record and M<n> row are already
-        gone: split_drop). After JOB_TRIES such returns it fails with the last reason."""
+        gone: split_drop). After JOB_TRIES such returns it fails with the last reason. ``count`` False: a return
+        caused by a root stop or resume (section 58 "Restart"), which is no failed start. A suspended job's sub-fleet that
+        could not be handed on goes back to ``suspended``."""
         jobs = self.job_state()
         job = jobs.get(jid)
         if job is None:
@@ -4903,16 +6061,21 @@ class Fleet:
             self.job_hot_drop(jobs.pop(jid))
             self.save_jobs(jobs)
             return
-        tries = int(job.get('tries') or 0) + 1
-        if tries >= JOB_TRIES:
+        tries = int(job.get('tries') or 0) + (1 if count else 0)
+        final = subfleet.ROSTER_REJECTED in why  # §58 D18: the child would refuse its roster: fail now, no retry
+        if tries >= JOB_TRIES or final:
             self.job_hot_drop(jobs.pop(jid))
             self.save_jobs(jobs)
-            self.publish(jid, 'failed', worker='fleet', error='job sub-fleet could not start ' + str(tries)
-                         + ' times; last: ' + why, result={'job': jid, 'outcome': 'not_started', 'reason': why})
+            error = why if final else 'job sub-fleet could not start ' + str(tries) + ' times; last: ' + why
+            self.job_publish(jid, 'failed', worker='fleet', error=error,
+                             result={'job': jid, 'outcome': 'not_started', 'reason': why})
             self.log('job.failed', job=jid, reason=why)
             return
         self.r.hset(REQ + jid, mapping={'status': 'job_queued', 'worker': ''})
-        job.update(state='queued', slot='', task='', run='', waiting=why, tries=tries)
+        if job.get('resume_run'):  # its suspended sub-fleet stays: handed on at the next try
+            job.update(state='suspended', slot='', run=job['resume_run'], resume_run='', waiting=why, tries=tries)
+        else:
+            job.update(state='queued', slot='', task='', run='', waiting=why, tries=tries)
         self.save_jobs(jobs)
         self.log('job.requeued', job=jid, tries=tries, reason=why)
 
@@ -4921,7 +6084,8 @@ class Fleet:
         blocked / failed, with the child's reason, run and workspace paths and artifacts). Returns the line the
         collect notice to the supervisor carries. ``replace``: a gate recheck publishes the job again."""
         jobs = self.job_state()
-        self.job_hot_drop(jobs.pop(jid, None))
+        job = jobs.pop(jid, None)
+        self.job_hot_drop(job)
         self.save_jobs(jobs)
         child = subfleet.child_result(child_run) or {}
         status = 'ok' if outcome == 'completed' else 'blocked' if outcome == 'blocked' else 'failed'
@@ -4930,9 +6094,15 @@ class Fleet:
                   'artifacts': child.get('artifacts') or []}
         if child.get('delivery'):  # §58: the child's lifecycle gate record (dev_task: sha, queue entry, tests)
             fields['delivery'] = child['delivery']
+        if isinstance(child.get('decompose'), dict):  # §62: the submitter gets the review (seed incl.) and the tune
+            fields['decompose'] = child['decompose']
+        chain = child.get('model_chain') or run_model_chain(child_run) or ((job or {}).get('chain') or {}).get(
+            'model_chain')
+        if chain:  # §58 (D17): each slot's cli:model, the entries skipped before it and the switches
+            fields['model_chain'] = chain
         extra = {} if status == 'ok' else {'error': 'job sub-fleet ' + task_id + ' ended ' + outcome
                                            + (': ' + reason if reason else '')}
-        self.publish(jid, status, worker=self.label(slot), result=fields, replace=replace, **extra)
+        self.job_publish(jid, status, worker=self.label(slot), result=fields, replace=replace, **extra)
         self.log('job.done', job=jid, task=task_id, outcome=outcome, status=status)
         return (' Job ' + jid + ' ended ' + status + '; its result is published under ' + jid
                 + '. Do not dispatch, answer or skip it.')
@@ -5047,6 +6217,11 @@ class Fleet:
                 lifecycle_close.notify(self, 'slot_held', '[fleet ' + lifecycle_close.fleet_name(self) + '] ' + text, policy)
             except Exception as exc:  # a notice never takes the daemon down
                 self.log('subfleet.held_notify_failed', level='error', error=str(exc)[:300])
+        elif not self.cfg.get('parent_config'):  # §24: a root without a lifecycle: its channels, else counted
+            try:
+                notify_route.unmanaged_send(self, 'slot_held', text)
+            except OSError as exc:
+                self.log('notify.count_failed', level='error', error=str(exc)[:300])
 
     def relay_notices(self):
         """Parent tick: pass a sub-fleet notice up the tree; the top fleet tells its supervisor."""
@@ -5065,6 +6240,10 @@ class Fleet:
             except (OSError, ValueError):
                 note = None
             path.unlink(missing_ok=True)
+            if note and note.get('kind') == 'tree':  # §62: a sub-fleet's opening summary, for the user
+                self.log('tree.summary_relayed', task=note.get('task'), status=self.tree_notify(
+                    '[sub-fleet ' + str(note.get('task')) + '] ' + str(note.get('text') or '')))
+                continue
             if not note or not self.running():
                 continue
             if note.get('kind') == 'report':
@@ -5092,6 +6271,9 @@ class Fleet:
             path.unlink(missing_ok=True)
             if veto and veto.get('kind') == 'report':
                 self.report_ruled(veto)
+                continue
+            if veto and veto.get('kind') == blocked_scope.PENDING_KIND:
+                self.report_pending(veto)
                 continue
             state = self.contract_state() if veto and self.running() else None
             e = state['interfaces'].get(veto['ref']) if state else None
@@ -5151,12 +6333,14 @@ class Fleet:
         """Top fleet: a sub-fleet report becomes an open escalation its supervisor must rule on (never auto-approved)."""
         key_ = note['id']
         paths = note.get('paths') or []
+        if blocked_scope.resend_held(self, note):  # §24: the same request already waits for the user
+            return
         mid = self.queue('supervisor', self.report_notice(key_, note))
         esc = self.escalation_state()
         esc[key_] = {'kind': 'report', 'origin_run': note['origin_run'], 'task': note.get('task'),
                      'supervisor': note.get('supervisor'), 'what': note['what'], 'why': note['why'],
                      'who': note.get('who', ''), 'paths': paths, 'status': 'escalated', 'asked_at': time.time(),
-                     'message_id': mid or ''}
+                     'message_id': mid or '', 'fingerprint': blocked_scope.fingerprint(note)}
         self.save_escalations(esc)
         self.log('report.asked', report=key_, task=note.get('task'), what=note['what'][:300])
 
@@ -5194,12 +6378,17 @@ class Fleet:
         self.save_escalations(esc)
         folder = Path(rec['origin_run']) / 'subfleet-vetoes'
         folder.mkdir(parents=True, exist_ok=True)
-        ruling = {'kind': 'report', 'ref': task_id, 'decision': answer['decision'], 'note': answer.get('note', '').strip(),
-                  'what': rec['what']}
-        if answer['decision'] == 'approve' and rec.get('paths'):  # narrowed by the answer, or all that was asked
-            ruling.update(who=rec['who'], paths=answer.get('paths') or rec['paths'])
-        save(folder / (uuid.uuid4().hex[:12] + '.json'), ruling)
-        self.log('report.ruled', report=task_id, decision=answer['decision'], note=answer.get('note', '')[:300])
+        by = answer.get('by') or 'supervisor'  # §24: 'user' for `fleetmux answer`
+        for ref in [task_id] + list(rec.get('aliases') or []):  # a re-sent copy waits in the sub-fleet too
+            ruling = {'kind': 'report', 'ref': ref, 'decision': answer['decision'],
+                      'note': answer.get('note', '').strip(), 'what': rec['what']}
+            if by != 'supervisor':  # the ledger keeps who ruled; a supervisor ruling file stays as it was
+                ruling['by'] = by
+            if answer['decision'] == 'approve' and rec.get('paths'):  # narrowed by the answer, or all that was asked
+                ruling.update(who=rec['who'], paths=answer.get('paths') or rec['paths'])
+            save(folder / (uuid.uuid4().hex[:12] + '.json'), ruling)
+        blocked_scope.closed(self, task_id, rec, answer['decision'], by)
+        self.log('report.ruled', report=task_id, decision=answer['decision'], by=by, note=answer.get('note', '')[:300])
 
     def report_ruled(self, ruling):
         """Origin sub-fleet: the top supervisor's ruling reaches this fleet's supervisor."""
@@ -5216,12 +6405,23 @@ class Fleet:
             paths = [os.path.normpath(x) for x in ruling.get('paths') or asked['paths'] if isinstance(x, str) and os.path.isabs(x)]
             granted = self.grant(asked.get('who') or '', str(ruling['ref']), [x for x in paths if path_within(x, asked['paths'])])
         self.queue('supervisor', '[top ruling] ' + str(ruling.get('ref')) + ' ' + str(ruling.get('decision'))
-                   + ': ' + (ruling.get('note') or '-') + '\n(on what you reported up: ' + str(ruling.get('what')) + ')'
+                   + (' (by the user)' if ruling.get('by') == 'user' else '') + ': ' + (ruling.get('note') or '-') + '\n(on what you reported up: ' + str(ruling.get('what')) + ')'
                    + (granted or '\napprove: go exactly as far as the note says, no further, and tell the worker '
                       'concerned by dispatch. The program granted nothing: a worker still voids an exception from you '
                       'to write outside this sub-fleet\'s workspace (that takes a report_up with paths).')
                    + ' reject: do not do it; drop that piece or do it another way inside this sub-fleet\'s '
                    'workspace. Reply with the JSON format from AGENTS.md.')
+
+    def report_pending(self, note):
+        """Origin sub-fleet (§24): the top supervisor handed what it reported up to the user. One line for its
+        supervisor; the report stays pending (fx:reports_up) and the task clock stays stopped until the ruling."""
+        if not self.running():
+            return
+        self.log('report.pending', report=note.get('ref'))
+        self.queue('supervisor', '[top ruling] ' + str(note.get('ref')) + ' pending: the top supervisor handed what you '
+                   'reported up to the user (' + (str(note.get('note') or '-')[:500]) + '). Keep holding that piece and '
+                   'go on with the rest; do not report it up again. The ruling comes as a [top ruling] line. Reply with '
+                   'the JSON format from AGENTS.md.')
 
     def grants(self, slot):
         """§46: the grants the program issued to this sub-fleet worker from top rulings ([{report, paths}])."""
@@ -5379,12 +6579,12 @@ class Fleet:
             return
         if self.service:
             if name == 'supervisor':
-                self.on_service_supervisor(text)
+                self.on_service_supervisor(text, about=info.get('last_msg'))
             else:
                 self.on_service_worker(name, info, text)
             return
         if name == 'supervisor':
-            self.on_supervisor(text)
+            self.on_supervisor(text, about=info.get('last_msg'))
         else:
             prev = info.get('prev_label')
             self.report(name, text[-8000:], prev)
@@ -5394,6 +6594,7 @@ class Fleet:
     def report(self, name, text, prev=None):
         tag = '[' + self.label(name) + ' report' + (' (took over from ' + prev + ')' if prev else '') + ']'
         item = self.report_item(name)  # before contract_report consumes the owner of this report
+        self.tree_reported(name, item, text)  # §62: no-op while the switch is off
         extra = self.contract_report(name, text)
         if extra is None:  # the contract gate ended the task
             return
@@ -5446,16 +6647,19 @@ class Fleet:
     def unsettled_workers(self):
         return [w for w in self.workers if self.unsettled_reason(w)]
 
-    def on_supervisor(self, text, invalid=None):
-        """`invalid`: the v2 validator's own rejection; the correction must name it, not a parse error."""
+    def on_supervisor(self, text, invalid=None, about=None, about_id=None):
+        """`invalid`: the v2 validator's own rejection; the correction must name it, not a parse error.
+        `about`: the text of the message this reply answers (§24: a root's BLOCKED on a sub-fleet notice)."""
         t = self.task()
         try:
             if invalid:
                 raise ValueError(invalid)
-            decision = parse_decision(text, self.dispatch_targets(), self.others_active())
+            decision = parse_decision(text, self.dispatch_targets(), self.others_active(), self.tree_context())
             self.report_up_guard(decision)
             self.job_guard(decision)  # §19 "Task root": a job is the program's, as in a service fleet (§58)
             state = self.contract_state()
+            if state is not None and self.decompose_on():
+                self.tree_contract_fill(decision)  # §62: the task table's parts come from the tree
             if state is not None:
                 state, rows, held, changes, skeleton = self.contract_decision(state, decision)
                 rows = {r['id']: r for r in rows + held}
@@ -5504,8 +6708,11 @@ class Fleet:
             self.r.hset(TASK, mapping={'jobs_hold': ''})  # §19 "Task root": new own work, the held COMPLETED lapses
         self.apply_waiting(decision)  # explicit dependency wait (M15): persisted here, cleared by any later reply
         self.advisor_decision(decision)  # before the dispatches below: `advisor: "on"` advises them already
+        tree_new = self.tree_decision(decision)  # §62: the tree this reply handed in (None: unchanged / switch off)
         if decision['status'] == 'BLOCKED':
-            self.finish('blocked', decision.get('reason', 'needs a human'))
+            # §24: a root's BLOCKED on a notice about one of its own sub-fleets / jobs stops only that one
+            if not blocked_scope.absorb(self, about, decision.get('reason', ''), about_id=about_id):
+                self.finish('blocked', decision.get('reason', 'needs a human'))
             return
         if decision['status'] == 'COMPLETED':
             withdrawn = {self.resolve(w) for w in decision['withdraw']}
@@ -5533,6 +6740,10 @@ class Fleet:
             failures = (check_artifacts(artifacts, self.workspace(), extended, extended, caller_commands(t))
                         if artifacts else ['no artifacts were declared, nothing to verify'])
             failures += self.contract_gate(state) if state is not None else []
+            if not failures:  # brief launch-demo §1.2: bookkeeping only, after the judgement
+                lifecycle_close.acceptance_verdict(self, 'task_artifacts', t.get('id', ''), True,
+                                                   bounce=int(t.get('bounces') or 0))
+                self.tree_tune(decision)  # §62: a closing tune applies only once the COMPLETED passed verification
             if not failures and self.job_state():
                 # §19 "Task root": own work done, jobs still open: held, not bounced (no strike). The task stays
                 # running (its job sub-fleets run on) and completes when the last job ends (job_task_root_tick).
@@ -5551,6 +6762,8 @@ class Fleet:
                 self.finish('completed', decision.get('reason', 'artifacts verified'))
                 return
             bounces = self.r.hincrby(TASK, 'bounces', 1)
+            lifecycle_close.acceptance_verdict(self, 'task_artifacts', t.get('id', ''), False, '; '.join(failures),
+                                               bounce=bounces)
             if bounces >= 3:
                 self.finish('blocked', 'supervisor claimed completion three times without passing verification: '
                             + '; '.join(failures))
@@ -5560,6 +6773,7 @@ class Fleet:
             return
         if state is not None:
             self.contract_apply(t, state, changes, skeleton)
+        tree = self.tree_state() if self.decompose_on() else None  # §62
         for item, (slot, instruction, application) in zip(decision['dispatch'], prepared):
             if state is None and not item.get('id'):  # §44: every plain dispatch gets an id, so any task can split
                 item['id'] = self.next_item_id(decision['dispatch'])
@@ -5587,9 +6801,12 @@ class Fleet:
             if state is not None:
                 self.contract_queue(state, slot, row['message'], row['id'])
                 continue
+            if tree is not None:  # §62: what the block owns, uses and how it is accepted, from the tree
+                instruction += decompose.brief(tree, item['id'])
             if item.get('id'):  # plain task: an id makes the item escalatable (§20)
                 items = json.loads(self.r.get(ITEMS) or '{}')
-                items[item['id']] = {'to': slot, 'instruction': instruction}
+                items[item['id']] = dict({'to': slot, 'instruction': instruction},
+                                         **({'leaf': True} if item.get('leaf') else {}))
                 self.r.set(ITEMS, json.dumps(items, ensure_ascii=False))
             self.queue(slot, advisory + '[Supervisor instruction ' + t.get('id', '') + '] '
                        + ('[' + item['id'] + '] ' if item.get('id') else '') + instruction
@@ -5605,12 +6822,24 @@ class Fleet:
             self.save_escalations({k: v for k, v in esc.items() if k not in redispatched})
         # Split answers first: an approved split supersedes a [blocked] ruling on its task in the same reply.
         for task_id, rec, answer in sorted(escalations, key=lambda e: e[1].get('kind', 'split') != 'split'):
+            self.tree_return(task_id, rec, answer)  # §62: a cause-tagged answer is a return of its block
             self.escalation_apply(t, state, task_id, rec, answer)
         self.report_up(decision['report_up'])
+        if decision.get('reconcile'):  # section 60
+            restart_state.decide(self, decision['reconcile'])
         self.consult_apply(consults)
         if state is not None:
             self.save_contract(state)
-        self.log('dispatch', count=len(decision['dispatch']), completion=decision['completion'])
+        if tree is not None and decision['dispatch']:
+            self.tree_dispatched(decision['dispatch'])
+        self.log('dispatch', count=len(decision['dispatch']), completion=decision['completion'],
+                 **self.tree_audit(decision))
+        if tree_new is not None:  # §62: what can go now; a reply that dispatched nothing gets it as its next turn
+            note = decompose.accepted_message(self.tree_state())
+            if self.others_active():
+                self.r.rpush(decompose.TREE_NOTES, note)
+            else:
+                self.queue('supervisor', note + '\nReply with the JSON format from AGENTS.md.')
 
     # ---- declared dependency waiting (M15): metadata + one gate + one bounded reminder, no fourth status ----
     def apply_waiting(self, decision):
@@ -5707,6 +6936,15 @@ class Fleet:
         hours = spec.get('hours', 16)
         if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours < 1000:
             raise ValueError('hours must be a positive number')
+        tree_on, seed = decompose.enabled(), None  # §62: the switch is read once per task
+        if (tree_on and spec.get('tree') is None and self.cfg.get('lifecycle') == 'dev_task'
+                and not self.cfg.get('parent_config')):  # §62: a new dev task brings its tree; sub-fleets get a seed
+            raise ValueError(decompose.tree_required('task'))
+        if tree_on:
+            root, prefix = self.tree_root()
+            seed = (decompose.seed_from(spec['tree'], root, spec['goal'], prefix, by=spec.get('by'))
+                    if spec.get('tree') is not None
+                    else decompose.new_tree(root, spec['goal']))
         life_spec = {}
         # A sub-fleet's deliverable is checked by its parent; a job's sub-fleet (§58) runs its own lifecycle gate.
         if not self.cfg.get('parent_config') or self.cfg.get('job'):
@@ -5744,6 +6982,8 @@ class Fleet:
             fields['contracts'] = 1
         if frozen:
             fields['artifacts_frozen'] = 1
+        if tree_on:
+            fields['decompose'] = 1
         if dispatch_plan is not None:
             fields.update(
                 auto_agents=1,
@@ -5768,6 +7008,13 @@ class Fleet:
                        'the exact path (its REVIEWER.md, section R6). Without a review dispatch the gate searches every '
                        'worker directory and accepts exactly one match. It checks only the verdict (PASS, zero open '
                        'P0/P1), never who reviewed.')
+        if tree_on:
+            seeded = [n['id'] for n in decompose.level_nodes(seed)]
+            prompt += ('\nDecomposition is on for this task: your first reply hands in the tree only ("tree": [...], '
+                       '"dispatch": []); see "Decomposition tree" in AGENTS.md. The program keeps it in '
+                       + str(self.workspace() / 'tree.json') + '.'
+                       + (' The task came with a tree: ' + ', '.join(seeded) + ' are in it already; complete or change '
+                          'them in your first reply.' if seeded else ''))
         if frozen:
             prompt += ('\nThese artifacts are frozen by the caller: they are the acceptance contract. Artifacts you '
                        'add in a decision are ignored and audited; to change them, reply BLOCKED and say why.')
@@ -5801,6 +7048,15 @@ class Fleet:
         for stale in (ESCALATIONS, ITEMS):
             if self.r.get(stale) is not None:
                 self.r.delete(stale)
+        for stale in (decompose.TREE, decompose.TREE_SUMMARY):  # §62: a new task, a new tree
+            if self.r.get(stale) is not None:
+                self.r.delete(stale)
+        for stale in (decompose.TREE_NOTES, decompose.TUNED_KEY):
+            if self.r.llen(stale):
+                self.r.delete(stale)
+        self.tree_text = None
+        if tree_on:
+            self.save_tree(seed)
         for w in self.workers:  # an earlier task's unadvised dispatches never match this one
             if self.r.llen(ADVICE_PENDING + w):
                 self.r.delete(ADVICE_PENDING + w)
@@ -5828,7 +7084,7 @@ class Fleet:
         if self.v2:
             return self.v2.finish(status, reason)
         if self.service:  # a resident fleet never ends: hold everything for a human instead
-            self.pause(status + ': ' + reason)
+            self.pause(status + ': ' + reason)  # v1 only: no cause (the §24 pause review is v2-only)
             return
         self.r.hset(TASK, mapping={'status': status, 'reason': reason})
         self.log('task.' + status, reason=reason)
@@ -6080,7 +7336,7 @@ class Fleet:
             return
         self.publish(rid, 'ok', worker=self.label(name), result=result)
 
-    def on_service_supervisor(self, text, invalid=None):
+    def on_service_supervisor(self, text, invalid=None, about=None, about_id=None):
         try:
             if invalid:
                 raise ValueError(invalid)
@@ -6103,7 +7359,9 @@ class Fleet:
                    else self.r.hincrby(SERVICE, 'bad_replies', 1))
             if bad >= 3:
                 self.r.hset(SERVICE, mapping={'bad_replies': 0})
-                self.pause('supervisor gave no valid decision JSON three times in a row: ' + str(exc))
+                self.pause('supervisor gave no valid decision JSON three times in a row: ' + str(exc),
+                           kind='supervisor_fault', slot='supervisor',
+                           generation=int(self.agent('supervisor').get('generation') or 0))
             else:
                 self.queue('supervisor', 'Your reply is not a valid service decision JSON (' + str(exc)
                            + '). Resend one JSON object in the AGENTS.md format, nothing else.', front=True)
@@ -6132,8 +7390,15 @@ class Fleet:
             named_subfleet.decide(self, decision['subfleet'])
         if decision.get('applet'):
             applet_lease.decide(self, decision['applet'])
-        if decision['status'] == 'BLOCKED':
-            self.pause(decision.get('reason') or 'supervisor needs a human')
+        if decision.get('reconcile'):  # section 60
+            restart_state.decide(self, decision['reconcile'])
+        if decision['status'] == 'BLOCKED' and not blocked_scope.absorb(self, about, decision.get('reason') or '',
+                                                                         about_id=about_id):
+            # §24: a root's BLOCKED on a notice about one of its own sub-fleets / jobs stops only that one;
+            # otherwise a BLOCKED on a stuck / held notice (switch off, or a fleet with a parent) pauses as kind subfleet
+            child = blocked_scope.notice_run(self, about)
+            self.pause(decision.get('reason') or 'supervisor needs a human',
+                       **({'kind': 'subfleet', 'subfleet_run': child} if child else {'kind': 'supervisor_blocked'}))
 
     def supervisor_split(self, rid, slot, item):
         """§44「监工直接开子 fleet」(user 2026-11-10, switch ``supervisor_split``): the supervisor judged request ``rid``
@@ -6313,6 +7578,8 @@ class Fleet:
         """Start of the look-back window when this busy worker's split check is due, else None."""
         if self.service or name not in self.workers or self.task().get('status') != 'running':
             return None
+        if self.decompose_on():  # §62: a block is never asked to split; an overrun goes to the supervisor instead
+            return None
         settings = self.split_settings(name)
         now = time.time()
         if (not settings['check_minutes'] or now - float(info.get('busy_since') or now) < settings['check_minutes'] * 60
@@ -6321,6 +7588,15 @@ class Fleet:
                 or self.midturn_guard(name, info)):
             return None
         return now - settings['window_minutes'] * 60
+
+    def item_leaf(self, task_id):
+        """§44 leaf: the supervisor dispatched this task with "leaf": true, a block one worker does whole.
+        §62: while the task's tree switch is on, the program's judgement on the tree decides instead."""
+        if self.decompose_on():
+            return (decompose.by_id(self.tree_state() or {'nodes': []}).get(task_id) or {}).get('leaf') is True
+        state = self.contract_state()
+        rows = state['tasks'] if state is not None else json.loads(self.r.get(ITEMS) or '{}')
+        return (rows.get(task_id) or {}).get('leaf') is True
 
     def split_apply(self, name, target, result):
         """Main loop: the probe's look at a due worker. Flowing + splittable + not nudged for this task yet
@@ -6345,6 +7621,7 @@ class Fleet:
         key_ = task or result['message_id']
         refused = ('already nudged for ' + key_ if info.get('split_nudged') == key_ else
                    'no task id' if not task else
+                   task + ' is a leaf (the supervisor marked it not worth splitting)' if self.item_leaf(task) else
                    'a split of ' + task + ' is already open' if task in self.escalation_state() else
                    subfleet.check(self, name, task, 1, ready=False))
         if not refused and not is_claude(self.runtime_cfg(name), name):
@@ -6361,7 +7638,8 @@ class Fleet:
                    + str(settings['window_minutes']) + ' 分钟 ' + str(got['calls']) + ' 次工具调用、改了 '
                    + str(got['files']) + ' 个文件\nThe fleet asked it to stop at a safe point and send a split '
                    'proposal for ' + task + ' ([escalate] follows). Nothing to do until then; when it comes, an '
-                   'approve may pick the models (supervisor_profile / worker_profiles). '
+                   'approve may pick the models (supervisor_profile / worker_profiles); without supervisor_profile '
+                   'the program picks the supervisor model from the supervisor chain. '
                    'Reply with the JSON format from AGENTS.md.')
 
     def midturn_apply(self):
@@ -7914,6 +9192,70 @@ class Fleet:
         if pane and getattr(self.mgr, 'supports_browser', True):
             self.mgr.reload_browser(pane)
 
+    def live_pane(self, pane):
+        return bool(pane) and self.mgr.get_pane_status(pane) is not None
+
+    def arrange_page(self):
+        """Lay the page out (supervisor, workers, history pane) and record the history pane in Redis.
+
+        Only live workers take part (docs/design.md section 17 "Windows"): a worker that is delegated, retired or
+        dead, or whose pane is no longer on the server, is left out, so one stale pane id never makes the
+        backend's ``arrange`` fail as a whole. Without a live supervisor pane nothing is arranged (None)."""
+        sup = self.agent('supervisor').get('pane')
+        if not self.live_pane(sup):
+            self.history_pane = None
+            self.r.hset(SERVICE, mapping={'history_pane': ''})
+            return None
+        workers = []
+        for w in self.workers:
+            info = self.agent(w)
+            if info.get('state') not in ('delegated', 'retired', 'dead') and self.live_pane(info.get('pane')):
+                workers.append(info['pane'])
+        self.history_pane = self.mgr.arrange(sup, workers, history.page_url(self.run_dir))
+        self.r.hset(SERVICE, mapping={'history_pane': self.history_pane or ''})
+        return self.history_pane
+
+    def history_lost(self):
+        """True when this backend shows a history pane and the recorded one is empty or gone."""
+        return (getattr(self.mgr, 'supports_browser', True)
+                and not self.live_pane(self.r.hget(SERVICE, 'history_pane')))
+
+    HISTORY_POLL = 30  # seconds between two checks of the history pane (as the liveness check)
+
+    def history_tick(self, now=None):
+        """Daemon fallback (docs/design.md section 2): a lost history pane is rebuilt once with the same rule as
+        ``arrange_page`` and the control tab docked behind it. "Once" is per loss and per daemon process: a
+        failed rebuild writes one audit record and is not tried again until a live history pane was seen
+        (or the daemon starts again); a success re-arms it. Only two consecutive checks (one HISTORY_POLL apart)
+        that both see the pane lost count as a loss, so a single failed backend read never lays the page out."""
+        now = time.time() if now is None else now
+        if now < getattr(self, 'history_next', 0):
+            return
+        self.history_next = now + self.HISTORY_POLL
+        if not self.history_lost():
+            self.history_tried = self.history_suspect = False
+            return
+        if not getattr(self, 'history_suspect', False):
+            self.history_suspect = True  # one lost reading may be a failed backend read: confirm it next check
+            return
+        if getattr(self, 'history_tried', False) or getattr(self, 'stopping', False):
+            return
+        if not self.service and self.task().get('status', 'running') != 'running':
+            return  # a finished run: its page is closed on purpose (lifecycle_close)
+        if not self.live_pane(self.agent('supervisor').get('pane')):
+            return  # nothing to lay the page out around yet; not an attempt
+        lost = self.r.hget(SERVICE, 'history_pane') or ''
+        self.history_tried = True
+        pane = self.arrange_page()
+        if pane and self.live_pane(pane):
+            self.mgr.dock_control(pane)
+            self.refresh_history()
+            self.history_tried = False
+            self.log('history.rebuilt', lost=lost, pane=pane)
+        else:
+            self.log('history.rebuild_failed', level='error', lost=lost,
+                     error=getattr(self.mgr, 'last_error', '') or 'arrange returned no history pane')
+
     def announce_history_page(self):
         """A backend with no browser surface (``supports_browser`` false, design §4.3) does not show
         ``<run>/history.html``: print its path in the control pane and open it once with the system opener
@@ -7942,6 +9284,8 @@ class Fleet:
         if not self.cfg.get('roster') and not path.exists():
             return
         self.night_tick(path)
+        if self.cfg.get('job'):
+            self.job_roster_refused()  # §58 D18: the task arrived after the refused first read
         if path != self.roster_followed:  # night on/off: follow the other file from now on
             self.roster_followed = path
             self.roster_stamp = self.roster_digest = None
@@ -7960,6 +9304,15 @@ class Fleet:
                     and not (self.v2 and self.r.hget(self.v2.bus.lease_key(name), 'current_delivery'))):
                 self.retire_worker(name)
         self.profile_swap_tick()
+
+    def job_roster_refused(self):
+        """§58 D18: a job sub-fleet's first roster read was refused: its task fails (now, or once it arrives)."""
+        if not self.cfg.get('job'):
+            return
+        why = self.r.hget(ROSTER, 'job_refused')
+        if why and self.task().get('status') == 'running':
+            self.r.hset(ROSTER, mapping={'job_refused': ''})
+            self.finish('failed', why)
 
     def reload_roster(self, path):
         try:
@@ -8023,9 +9376,15 @@ class Fleet:
         except ValueError as exc:
             self.log('roster.rejected', level='error', path=str(path), errors=str(exc).split('\n'),
                      kept=self.desired)
+            if self.cfg.get('job') and not self.r.hget(ROSTER, 'accepted'):
+                # §58 D18: a job sub-fleet whose first roster read is refused ends failed; its supervisor gets no
+                # [Roster rejected] line and nothing runs on a default model (later hot edits: as below)
+                self.r.hset(ROSTER, mapping={'job_refused': subfleet.ROSTER_REJECTED + str(exc).replace('\n', '; ')})
+                self.job_roster_refused()
+                return
             self.r.hset(ROSTER, mapping={'rejected': str(exc)})  # once per rejected content (digest above)
             return
-        self.r.hset(ROSTER, mapping={'rejected': ''})  # fixed before the supervisor heard of it: say nothing
+        self.r.hset(ROSTER, mapping={'rejected': '', 'accepted': 1})  # fixed before the supervisor heard: say nothing
         before, old_roles = list(self.desired), dict(self.cfg.get('worker_roles') or {})
         adds = [n for n in workers if n not in self.workers]
         results = {n: 'retire cancelled' for n in workers if n in self.workers and n not in self.desired}
@@ -8490,7 +9849,8 @@ class Fleet:
         record = dict(kind=kind, reason=reason, at=time.time(), task=self.task().get('id', ''), **detail)
         self.r.hset(BRAKE, mapping={'tripped': json.dumps(record, ensure_ascii=False)})
         if not self.paused():
-            self.pause('brake: ' + reason)
+            self.pause('brake: ' + reason, kind='budget' if kind == 'budget' else 'wall', brake_kind=kind,
+                       slot=detail.get('agent'))
             # The pause this brake owns (the first trip's reason and agent): later trips overwrite `tripped`.
             self.r.hset(BRAKE, mapping={'paused_by': json.dumps({'reason': 'brake: ' + reason, 'kind': kind,
                                                                  'agent': detail.get('agent', '')})})
@@ -8536,9 +9896,11 @@ class Fleet:
             self.r.hset(BRAKE, mapping={'tripped': ''})
         self.r.hset(BRAKE, mapping={'paused_by': ''})
 
-    def on_wall(self, name, text, source):
-        """A wall on a turn text or a stalled screen: decide (next model on the role's chain / stop), record, pause."""
-        wall = brake.classify_wall(text)
+    def on_wall(self, name, text, source, wall=None):
+        """A wall on a turn text or a stalled screen: decide (next model on the role's chain / stop), record, pause.
+        ``wall``: already classified by the caller (the screen gate, a StopFailure's CLI-owned fields: the only
+        sources of the safeguards class, design section 23); else ``text`` is classified as a turn text."""
+        wall = wall or brake.classify_wall(text)
         if not wall:
             return None
         action = self.wall_decide(name, self.runtime_cfg(name), wall)
@@ -8550,23 +9912,59 @@ class Fleet:
             if not pending or (pending.get('to_cli'), pending.get('to')) != (action['to_cli'], action['to']):
                 self.setf(name, wall_downgrade=json.dumps(dict(action, key=self.wall_key(name, action['to_cli']),
                                                                from_key=self.wall_key(name, action['cli']),
-                                                               source=source, at=uuid.uuid4().hex[:12]),
+                                                               source=source, at=uuid.uuid4().hex[:12],
+                                                               kind=wall.get('kind') or wall['scope']),
                                                           ensure_ascii=False))
+        if name == 'supervisor' and action['action'] == 'stop' and self.cfg.get('model_chain'):
+            self.chain_switched(name, action['cli'] + ':' + (action.get('from') or ''), None,
+                                job_chain.SUPERVISOR_WALL)  # §58 D8: a job's adopted supervisor only stops
         what = ('next on the chain: ' + action['cli'] + ':' + action['from'] + ' -> ' + action['to_cli'] + ':'
                 + action['to'] if action['action'] == 'switch' else action['advice'])
         if action.get('skipped'):
             what += ' (skipped ' + ', '.join(action['skipped']) + ')'
-        return self.brake_trip('wall', self.label(name) + ' hit a ' + wall['scope'] + ' wall ("' + wall['line'][:120]
+        return self.brake_trip('wall', self.label(name) + ' hit a ' + (wall.get('kind') or wall['scope']) + ' wall ("'
+                               + wall['line'][:120]
                                + '"); ' + what, agent=name, source=source, wall=wall, decision=action)
 
     # -- wall chain (user 2026-11-11): 「所以对于supervisor，撞墙前优先级依次是Astra, fable, opus sol deepseek flash,
     #    对于worker 撞墙前依次是opus, sol,sonnet,terra,deepseek flash」 -- fleet.yaml#discovery, docs/design.md §23
-    def wall_chained(self, name):
+    def model_chain(self):
+        """§58: this job sub-fleet's model_chain (config.json at start, <run>/model_chain.json once a switch was
+        recorded), or {}."""
+        try:
+            return load(self.run_dir / MODEL_CHAIN_FILE)
+        except (OSError, ValueError):
+            return copy.deepcopy(self.cfg.get('model_chain') or {})
+
+    def chain_switched(self, slot, frm, to, reason):
+        """§58 (brief 2.7, D8): add one switch (or a supervisor stop, ``to`` None) to the slot's trace, once per
+        change, and keep the whole record in <run>/model_chain.json."""
+        chain = self.model_chain()
+        entry = chain.get('supervisor') if slot == 'supervisor' else (chain.get('workers') or {}).get(slot)
+        if entry is None:
+            return
+        last = (entry.get('switched') or [{}])[-1]
+        if (last.get('from'), last.get('to'), last.get('reason')) == (frm, to, reason):
+            return
+        entry.setdefault('switched', []).append({'from': frm, 'to': to, 'reason': reason, 'at': time.time()})
+        save(self.run_dir / MODEL_CHAIN_FILE, chain)
+        self.log('job.model_switched', agent=slot, frm=frm, to=to, reason=reason)
+
+    def wall_chained(self, name, kind=None):
         """Walls of workers and of a main fleet's own supervisor walk the role's chain; a sub-fleet's supervisor
-        (an adopted pane of the parent) and the advisor (§27) keep their old handling."""
+        (an adopted pane of the parent) and the advisor (§27) keep their old handling. A safeguards wall (design
+        section 23) also moves a sub-fleet supervisor this fleet owns; an adopted pane (generation 0) never gets a
+        successor from the child (see the context handoff in deliver: window = 0 for an adopted pane), so it stops."""
         if name in self.workers:
             return True
-        return name == 'supervisor' and not self.cfg.get('adopt') and not self.cfg.get('parent_config')
+        if name != 'supervisor':
+            return False
+        if not self.cfg.get('adopt') and not self.cfg.get('parent_config'):
+            return True
+        return kind == brake.SAFEGUARDS and not subfleet.adopted(self.cfg, name, self.agent(name).get('generation'))
+
+    def subfleet_supervisor(self, name):
+        return name == 'supervisor' and bool(self.cfg.get('adopt') or self.cfg.get('parent_config'))
 
     def wall_key(self, name, cli):
         """The launch override key that names this slot's model on ``cli``."""
@@ -8589,13 +9987,16 @@ class Fleet:
         mode = self.cfg.get('mode') or 'task'
         try:
             disc = fleet_config.block('discovery') or {}
+            own = self.cfg.get('job_chain') or {}  # §58 (D9): a job sub-fleet walks its own chains, not discovery's
+            disc = dict(disc, **{role: own[role] for role in ('supervisor', 'worker') if own.get(role)})
             sup, sup_patterns = discover.chain('supervisor', extra, disc)
             wrk, wrk_patterns = discover.chain('worker', extra, disc)
             pairs = {k[0] + '|' + k[1]: ('adapter missing' if row['adapter_missing'] else row['status'])
                      for k, row in cli_pairs.load_pairs().rows.items() if k[2] == mode}
             data = {'supervisor': sup, 'worker': wrk, 'patterns': {'supervisor': sup_patterns, 'worker': wrk_patterns},
                     'supervisor_pi_thinking': disc.get('supervisor_pi_thinking') or 'high',
-                    'worker_thinking': disc.get('worker_thinking') or 'high', 'mode': mode, 'pairs': pairs}
+                    'worker_thinking': disc.get('worker_thinking') or 'high', 'mode': mode, 'pairs': pairs,
+                    'safeguards_prefer': brake.wall_table()['safeguards_prefer']}
         except Exception as exc:  # may run inside the wall's v2 transaction (lazy load): never lose the pause
             self.log('brake.chain_unreadable', error=repr(exc)[:300])
             data = {'supervisor': [], 'worker': [], 'patterns': {}, 'mode': mode, 'pairs': {}, 'error': repr(exc)[:300]}
@@ -8621,6 +10022,8 @@ class Fleet:
         """Why the pair table refuses ``cli`` for this slot now, or None (its rows for this mode, loaded with the
         chains). Only a verified row without missing adapters passes: a worker pairs with the supervisor's current
         CLI, the supervisor with every active worker's current CLI."""
+        if cli != 'claude' and self.subfleet_supervisor(name):
+            return job_chain.NOT_CLAUDE.format(cli=cli)  # design section 23: pass one then falls through to pass two
         data = self.wall_chains()
         mode = data.get('mode') or 'task'
         if name == 'supervisor':
@@ -8633,30 +10036,57 @@ class Fleet:
                 return sup + ' supervisor + ' + wrk + ' workers (' + mode + ') is ' + (status or 'not in the pair table')
         return None
 
-    def wall_decide(self, name, cfg, wall=None):
+    def wall_decide(self, name, cfg, wall=None, kind=None):
         """brake.wall_action for this slot: the role's chain below its running (cli, model) -- from the chain head
         when that model is not on the chain -- with this run's wall records and the pair table. ``wall``: record
-        the running model as walled first (an account wall marks its whole account)."""
+        the running model as walled first (an account wall marks its whole account). ``kind`` (or wall['kind'])
+        safeguards (design section 23): the WHOLE chain except the flagged entry, walls.safeguards_prefer entries
+        first (chain order), then the others (chain order)."""
+        kind = kind or (wall or {}).get('kind')
+        safeguards = kind == brake.SAFEGUARDS
         cli, model = agent_cli(cfg, name), self.slot_model(name, cfg)
-        if not self.wall_chained(name):
+        if not self.wall_chained(name, kind):
+            if wall and safeguards:  # recorded on its chain entry like any safeguards wall (this run's later picks)
+                entries, patterns = self.wall_chain(name)
+                at = discover.place(entries, patterns, cli, model or (claude_model(cfg, name) if cli == 'claude' else ''))
+                self.wall_mark(name, entries[at] if at is not None else (cli, model), wall['scope'], kind)
+            why = ('adopted sub-fleet supervisor (the parent owns its pane): no automatic switch'
+                   if subfleet.adopted(self.cfg, name, self.agent(name).get('generation'))
+                   else 'sub-fleet supervisor: no automatic switch')
             return {'action': 'stop', 'cli': cli, 'from': model,
-                    'advice': 'sub-fleet supervisor: no automatic switch; resume after the reset or restart it'}
+                    'advice': (('safeguards refusal on ' + cli + ':' + str(model) + ': ' + why + '; the parent fleet '
+                                'decides; the flagged message stays queued') if safeguards
+                               else why + '; resume after the reset or restart it')}
         entries, patterns = self.wall_chain(name)
         at = discover.place(entries, patterns, cli, model or (claude_model(cfg, name) if cli == 'claude' else ''))
+        here = entries[at] if at is not None else (cli, model)
         if wall:
-            here = entries[at] if at is not None else (cli, model)
-            self.wall_mark(name, here, wall['scope'])
-        below = entries[at + 1:] if at is not None else entries
-        return brake.wall_action(cli, model, below, self.walled(), lambda c, m: self.wall_refused(name, c))
+            self.wall_mark(name, here, wall['scope'], kind)
+        prefer = None
+        if safeguards:
+            below = [e for e in entries if e != here]
+            patterns_ = self.wall_chains().get('safeguards_prefer')
+            patterns_ = brake.wall_table()['safeguards_prefer'] if patterns_ is None else patterns_
+            prefer = lambda c, m: brake.preferred(m, patterns_)  # noqa: E731
+        else:
+            below = entries[at + 1:] if at is not None else entries
+        action = brake.wall_action(cli, model, below, self.walled(), lambda c, m: self.wall_refused(name, c), prefer)
+        if safeguards and action['action'] == 'stop':
+            action['advice'] = ('safeguards refusal on ' + cli + ':' + str(model) + ': no usable model left on the whole '
+                                'chain (fleet.yaml#discovery); the flagged message stays queued; restart the slot by '
+                                'hand on another model')
+        return action
 
-    def wall_mark(self, name, here, scope):
-        field = here[0] + ':' + here[1]
+    def wall_mark(self, name, here, scope, reason=None):
+        field = here[0] + ':' + (here[1] or '')
         old = json.loads(self.r.hget(WALLS, field) or '{}')
         if old.get('scope') == 'account':
             scope = 'account'  # a later pool wall never narrows an account wall
-        self.r.hset(WALLS, mapping={field: json.dumps({'cli': here[0], 'model': here[1], 'scope': scope,
-                                                       'account': brake.account(*here), 'at': time.time(),
-                                                       'agent': name}, ensure_ascii=False)})
+        rec = {'cli': here[0], 'model': here[1], 'scope': scope, 'account': brake.account(*here), 'at': time.time(),
+               'agent': name}
+        if reason == brake.SAFEGUARDS or old.get('reason'):
+            rec['reason'] = reason if reason == brake.SAFEGUARDS else old['reason']  # audit: why it is skipped
+        self.r.hset(WALLS, mapping={field: json.dumps(rec, ensure_ascii=False)})
 
     def notify_later(self, record):
         """A trip recorded inside a v2 event transaction: brake.json / notify argv run on the next tick."""
@@ -8678,9 +10108,11 @@ class Fleet:
         """Wall side effects (spawn / kill), outside any v2 transaction. At an idle boundary run the pending chain
         switch as the slot's next generation (wall_target); once that generation is READY lift the wall's own
         pause; retry a startup-walled slot after the operator resumed."""
-        for name in self.active_workers() + (['supervisor'] if self.wall_chained('supervisor') else []):
+        for name in self.active_workers() + ['supervisor']:
             info = self.agent(name)
             req = json.loads(info.get('wall_downgrade') or 'null')
+            if name == 'supervisor' and not self.wall_chained(name, (req or {}).get('kind')):
+                continue
             if req and info.get('wall_switch') == req['at']:
                 if info.get('state') == 'idle' and info.get('runtime_ready') == '1':
                     self.wall_switched(name, req)
@@ -8778,7 +10210,7 @@ class Fleet:
                 problem = str(exc)
             self.wall_mark(name, (req['to_cli'], req['to']), 'refused')
             self.log('brake.switch_refused', agent=name, to=req['to_cli'] + ':' + req['to'], reason=problem[:300])
-            action = self.wall_decide(name, current)
+            action = self.wall_decide(name, current, kind=req.get('kind'))
             if action['action'] != 'switch':
                 wall = json.loads(self.agent(name).get('wall') or '{}')
                 self.setf(name, wall_downgrade='', wall_switch='', wall=json.dumps(
@@ -8786,13 +10218,17 @@ class Fleet:
                 self.log('brake.switch_exhausted', agent=name, skipped=action['skipped'])
                 return None, None
             req = dict(action, key=self.wall_key(name, action['to_cli']), from_key=req['from_key'],
-                       source=req.get('source'), at=uuid.uuid4().hex[:12])
+                       source=req.get('source'), at=uuid.uuid4().hex[:12], kind=req.get('kind'))
             wall = json.loads(self.agent(name).get('wall') or '{}')  # the slot shows the target it now takes
             self.setf(name, wall_downgrade=json.dumps(req, ensure_ascii=False),
                       wall=json.dumps(dict(wall, **action), ensure_ascii=False))
 
     def wall_switched(self, name, req):
         self.setf(name, wall_downgrade='', wall_switch='')
+        if self.cfg.get('model_chain'):  # §58: a job sub-fleet records every switch down its chain
+            wall = json.loads(self.agent(name).get('wall') or '{}')
+            self.chain_switched(name, req['cli'] + ':' + (req.get('from') or ''), req['to_cli'] + ':' + req['to'],
+                                (wall.get('kind') or wall.get('scope') or 'usage') + ' wall')
         owner = json.loads(self.r.hget(BRAKE, 'paused_by') or 'null') or {}
         ours = (owner.get('kind') == 'wall' and owner.get('agent') == name
                 and self.r.hget(SERVICE, 'reason') == owner.get('reason'))
@@ -8854,7 +10290,8 @@ class Fleet:
         the unknown-dialog hold and the stall ladder. A wall on the bottom of the screen trips the brake
         (pause, record, notify) and returns the trip record: the caller then presses no key, holds nothing
         and leaves the slot alone this tick (a wall menu is never a dialog to answer). None: no wall."""
-        if not brake.screen_wall(screen):
+        wall = brake.screen_wall(screen)
+        if not wall:
             return None
         if name == ADVISOR:
             # §27: the advisor's wall never pauses the fleet. Its consultation falls back to the default
@@ -8868,9 +10305,10 @@ class Fleet:
             return tripped  # already braked on this agent's wall: hands off, no second notify
         tail = '\n'.join((screen or '').rstrip().splitlines()[-brake.GATE_TAIL:])
         if self.v2:
-            record = self.v2.transaction('brake-wall-' + uuid.uuid4().hex, lambda: self.on_wall(name, tail, source))
+            record = self.v2.transaction('brake-wall-' + uuid.uuid4().hex,
+                                         lambda: self.on_wall(name, tail, source, wall=wall))
         else:
-            record = self.on_wall(name, tail, source)
+            record = self.on_wall(name, tail, source, wall=wall)
         if record:
             self.brake_notify(record)
         return record
@@ -8912,7 +10350,7 @@ class Fleet:
             'tasks': {m: x['status'] for m, x in sorted(state['tasks'].items())},
             'pending_user_decisions': [dict(d, interface=k) for k, e in sorted(state['interfaces'].items())
                                        for d in e.get('decisions') or [] if d.get('status') == 'pending_user']}
-        save_result(self.run_dir, t, contract_summary=summary)
+        save_result(self.run_dir, t, contract_summary=summary, decompose_summary=self.tree_final())
 
     def channel_tick(self):
         """The fleet's one channel actor process (P1f, contracts §8): started for a main service fleet on v2 with
@@ -8986,7 +10424,12 @@ class Fleet:
                           ('advisor', self.advisor_tick),  # resident advisor tab: start / retire / restart (§27)
                           ('lifecycle', lambda: lifecycle_close.tick(self)),  # mode policy (done gate, hold, timeouts, idle); before result.json
                           ('result', self.write_result), ('contracts', self.sync_contract_files),
+                          ('tree', self.sync_tree_files),  # §62: tree.json follows fx:tree
+                          ('tree_summary', self.tree_summary_tick),  # §62: the opening summary, once
+                          ('decompose_params', self.decompose_flush),  # §62: write-back, root fleets only
+                          ('tree_overrun', self.tree_overrun_tick),  # §62: overrun on the chain -> supervisor
                           ('subfleet', lambda: subfleet.tick(self)),  # side effects, outside any v2 transaction
+                          ('history', self.history_tick),  # a lost history pane is rebuilt once (design section 2)
                           ('tabs', lambda: tabs.open_all(self)),  # companion tabs (§31): once per daemon start
                           ('tab_watch', lambda: tabs.watch(self)),  # §31 restart: on-exit + `tab restart`
                           ('fleetmux', lambda: fleetmux_sidebar.tick(self)),  # fleetmux sidebar cards (kv sidebar)
@@ -9000,7 +10443,8 @@ class Fleet:
                           ('applet_views', lambda: applet_view.tick(self)),  # one tab per applet in the daemon area
                           ('applet_leases', lambda: applet_lease.tick(self)),  # leases (applets.md section 3)
                           ('superpowers', self.superpowers_flush),  # quota.json in, hot inventory blocks back to the file
-                          ('superpowers_refresh', self.superpowers_refresh)):  # root only: machines.<self>
+                          ('superpowers_refresh', self.superpowers_refresh),  # root only: machines.<self>
+                          ('restart', lambda: restart_state.tick(self))):  # section 60: boot reconcile, ledger, timer snapshot
             try:
                 run()
             except BusError:
@@ -9079,6 +10523,14 @@ class Fleet:
         sandbox.startup_audits(self)  # P8o / M172: one security.sandbox_off per degraded slot (no policy: no-op)
         self.wall_chains_load()  # start and resume alike: walls read the chains from Redis only
         self.builtin_applets()  # relay.enabled: the built-in relay applet, also without a roster file
+        try:  # §62: a running task's tree lost with a Redis that keeps no AOF comes back from tree.json
+            self.tree_restore()
+        except Exception as exc:
+            self.log('tick.error', part='tree_restore', error=repr(exc))
+        try:  # §62: the decompose parameters into this fleet's Redis; never fatal
+            self.decompose_load()
+        except Exception as exc:
+            self.log('tick.error', part='decompose_load', error=repr(exc))
         try:  # fleet-superpowers hot blocks (models, quota) into this fleet's Redis; never fatal
             from fleetmux import fleet_superpowers_hot
             fleet_superpowers_hot.load(self.r)
@@ -9101,7 +10553,7 @@ class Fleet:
 
 
 # ------------------------------------------------------------ operator CLI
-def save_result(run, task, status=None, reason=None, contract_summary=None):
+def save_result(run, task, status=None, reason=None, contract_summary=None, decompose_summary=None):
     """<run>/result.json (atomic): the run is finished. Artifacts are re-checked on disk here."""
     workspace = Path(run) / 'workspace'
     artifacts = json.loads(task.get('artifacts') or '[]')
@@ -9112,12 +10564,30 @@ def save_result(run, task, status=None, reason=None, contract_summary=None):
         'artifacts': [dict(a, problems=check_artifacts([a], workspace, extended)) for a in artifacts]}
     if contract_summary:
         result['contracts'] = contract_summary
+    if decompose_summary:  # §62: the final review table and the tune applied in this fleet
+        result['decompose'] = decompose_summary
     try:
         cfg = load(Path(run) / 'config.json')
     except (OSError, ValueError):
         cfg = {}
     result.update(mode=cfg.get('lifecycle'), base_mode=cfg.get('mode', 'task'))  # mode = lifecycle (None: legacy run)
+    chain = run_model_chain(run, cfg)
+    if chain:  # §58 (D17): a job sub-fleet's models, skipped entries and wall switches
+        result['model_chain'] = chain
     save(Path(run) / 'result.json', result)
+
+
+def run_model_chain(run, cfg=None):
+    """§58: the model_chain of a job sub-fleet run (<run>/model_chain.json, else its config.json), or None."""
+    for path in (Path(run) / MODEL_CHAIN_FILE, Path(run) / 'config.json'):
+        try:
+            data = load(path) if path.name == MODEL_CHAIN_FILE or cfg is None else cfg
+        except (OSError, ValueError):
+            continue
+        chain = data if path.name == MODEL_CHAIN_FILE else data.get('model_chain')
+        if chain:
+            return chain
+    return None
 
 
 def start_redis(cfg, tries=30):
@@ -9204,8 +10674,9 @@ def reap_orphan_redis(keep=None, grace=ORPHAN_REDIS_GRACE, root=None):
 
 def sweep_orphan_redis(keep=None):
     """reap_orphan_redis for start / start --resume: housekeeping never blocks a start."""
+    root = os.environ.get('FLEETMUX_ORPHAN_SWEEP_ROOT') or None  # `fleetmux demo`: its own Redis root only
     try:
-        reap_orphan_redis(keep=keep)
+        reap_orphan_redis(keep=keep, root=root)
     except Exception as exc:
         print('orphan Redis sweep skipped:', str(exc)[:200])
 
@@ -9346,6 +10817,164 @@ def daemon_down_section(cfg, watched):
             'human. This section is the only exception to "do not call the fleet CLI".\n')
 
 
+class NotContinuable(SystemExit):
+    """`start --resume`: a run with open jobs that can never run again here (this release refuses its config, its
+    Redis directory is gone or its Redis does not load). `start` takes its open jobs over into a new run
+    (section 58 "Restart"); a plain SystemExit (a bad flag, the backend not answering, ...) is fixed and retried instead."""
+
+
+def refused(run, text):
+    """NotContinuable when ``run`` holds open jobs (they go to a new run), else the plain SystemExit as before."""
+    return NotContinuable(text) if open_job_rows(run) else SystemExit(text)
+
+
+def open_job_rows(run):
+    """section 58 "Restart": the open jobs <run>/jobs.json records ({} when none, or unreadable)."""
+    try:
+        rows = load(Path(run) / JOBS_FILE)
+    except (OSError, ValueError):
+        return {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def job_index(cfg, run, open_):
+    """<fleet home>/job-runs/<run dir name>.json while ``run`` holds open jobs: `start` finds the run through it even
+    when latest.json names another run or a stub, or the run lives under --runs-dir / --project-dir."""
+    home = (cfg or {}).get('fleet_home')
+    if not home:
+        return
+    path = Path(home) / JOB_INDEX / (Path(run).name + '.json')
+    if open_:
+        if not path.exists():
+            save(path, {'run': str(run), 'config': str(Path(run) / 'config.json')})
+    else:
+        path.unlink(missing_ok=True)
+
+
+def continue_supervisor(cfg, args):
+    """section 60: the supervisor settings a continued run takes (its root supervisor is never reattached: resume_run
+    starts its next generation from this config) and the typed start options it does not apply, as text. A different
+    supervisor CLI is not applied (its delivery channel is fixed for the run): stop --final, then start."""
+    from fleetmux import join
+    try:
+        typed = join.given(args)
+    except Exception:  # noqa: BLE001 - an args object without the start parser's fields
+        return []
+    skipped = []
+    cli = typed.get('supervisor_cli')
+    now_cli = cfg.get('supervisor_cli') or 'codex'
+    if cli and cli != now_cli:
+        skipped.append('--supervisor-cli ' + str(cli) + ' (this run\'s supervisor runs ' + now_cli + '; a CLI change '
+                       'needs a new run: stop --final, then start; stop --final cancels the open jobs, so to keep '
+                       'them wait until they are done, then change the CLI)')
+    else:
+        uses = SUPERVISOR_CONTINUE_BY_CLI.get(now_cli, ())
+        applied = []
+        for k in SUPERVISOR_CONTINUE:
+            if k not in typed or typed[k] == cfg.get(k):
+                continue
+            if k not in uses:  # this run's supervisor CLI does not read it: never printed as applied
+                skipped.append('--' + k.replace('_', '-') + ' ' + str(typed[k]) + ' (this run\'s supervisor runs '
+                               + now_cli + ', which does not use it)')
+                continue
+            print('start: the continued run\'s next supervisor generation runs --' + k.replace('_', '-') + ' '
+                  + str(typed[k]) + ' (was ' + str(cfg.get(k)) + ')')
+            cfg[k] = typed[k]
+            if k in ('supervisor_pi_model', 'supervisor_pi_thinking'):  # what a pi supervisor's launch reads
+                table = 'pi_models' if k == 'supervisor_pi_model' else 'pi_thinkings'
+                cfg[table] = dict(cfg.get(table) or {}, supervisor=typed[k])
+            applied.append(k)
+        if applied:  # the daemon drops the supervisor's old launch record once (a wall / fallback card would win)
+            cfg['supervisor_continue'] = {'id': uuid.uuid4().hex[:12], 'keys': applied}
+    skipped += sorted('--' + k.replace('_', '-') for k in typed
+                      if k not in CONTINUE_APPLIED and k not in ('supervisor_cli', 'resume', 'config'))
+    if skipped and not getattr(args, 'not_applied_printed', False):
+        print('start: not applied to the continued run (listed in its reconcile ledger): ' + ', '.join(skipped))
+    elif skipped and skipped[0].startswith('--supervisor-cli'):  # the short list above names it without the why
+        print('start: not applied to the continued run (listed in its reconcile ledger): ' + skipped[0])
+    return skipped
+
+
+def continue_problem(run):
+    """'' when ``run`` is a root service run of transport v2 (continued by `start`); why it cannot be continued
+    (its open jobs go to a new run); None when it is no root service run (a task root's jobs follow design section 19)."""
+    try:
+        cfg = load(Path(run) / 'config.json')
+    except (OSError, ValueError):
+        return 'no readable config.json'
+    if not isinstance(cfg, dict) or cfg.get('parent_config') or (cfg.get('mode') or 'task') != 'service':
+        return None
+    if cfg.get('transport_version') != 2:
+        return 'only Redis v2 runs can be resumed'
+    return ''
+
+
+def carry_candidates(home):
+    """Runs of fleet home ``home`` with open jobs and no live daemon, newest first: the run latest.json names, the
+    home index (job-runs/), then <home>/runs/* (runs from before the index)."""
+    home = Path(home)
+    found = []
+    try:
+        latest = load(home / 'latest.json')
+        if isinstance(latest, dict) and latest.get('run') and 'join' not in latest:
+            found.append(Path(latest['run']))
+    except (OSError, ValueError):
+        pass
+    index = home / JOB_INDEX
+    for p in sorted(index.glob('*.json')) if index.is_dir() else []:
+        try:
+            found.append(Path(load(p)['run']))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    runs = home / 'runs'
+    if runs.is_dir():
+        found += sorted(p for p in runs.iterdir() if p.is_dir())
+    out, seen = [], set()
+    for run in found:
+        key = str(run.expanduser().resolve())
+        if key in seen or not run.is_dir() or not open_job_rows(run):
+            continue
+        seen.add(key)
+        if (run / 'daemon.lock').is_file() and daemon_running(run):
+            continue
+        out.append(run)
+    return sorted(out, key=lambda r: r.name, reverse=True)
+
+
+def continue_home(args):
+    """section 58 "Restart", `start` / `start --resume auto`: continue the newest run of this fleet home that was stopped (or
+    died) with open jobs. Runs that cannot be continued go to ``args.carry_from`` (the new run takes their open jobs
+    over). A retryable refusal exits non-zero with the jobs left in place. True when a run was continued."""
+    tried = {c['run'] for c in args.carry_from}
+    for run in carry_candidates(HOME):
+        if str(run) in tried:
+            continue
+        problem = continue_problem(run)
+        if problem is None:
+            continue
+        if problem:
+            args.carry_from.append({'run': str(run), 'reason': 'cannot resume ' + str(run) + ': ' + problem})
+            continue
+        from fleetmux import join
+        count = len(open_job_rows(run))
+        skipped = sorted('--' + k.replace('_', '-') for k in join.given(args) if k not in CONTINUE_APPLIED)
+        print('start: continuing ' + str(run) + ' (stopped with ' + str(count) + ' open job(s)); not applied: '
+              + (', '.join(skipped) if skipped else 'none') + ' (listed in its reconcile ledger)')
+        args.not_applied_printed = True
+        try:
+            if resume(run, args):
+                return True
+        except NotContinuable as exc:
+            print('start: ' + str(exc.code) + '; its open jobs go to a new run')
+            args.carry_from.append({'run': str(run), 'reason': str(exc.code)})
+            continue
+        except SystemExit:
+            sys.stderr.write('start: ' + str(count) + ' open job(s) of ' + str(run) + ' stay queued there; fix this '
+                             'and run start again\n')
+            raise
+    return False
+
+
 def resume_target(value):
     """The run to reattach for start --resume, or None: 'auto' with nothing unfinished starts a new run."""
     auto = value == 'auto'
@@ -9357,7 +10986,8 @@ def resume_target(value):
     if run.name == 'config.json':
         run = run.parent
     problem = None
-    if (run / 'result.json').exists() and not resumable(run):
+    if (run / 'result.json').exists() and not resumable(run) and not (open_job_rows(run)
+                                                                      and continue_problem(run) == ''):
         problem = 'run already finished (result.json exists)'
     else:
         try:
@@ -9551,12 +11181,31 @@ def canary_resume(run, prev_policy, cfg, r):
                          else 'cannot resume ' + str(run) + ': security: canary: ' + type(exc).__name__) from None
 
 
+def resume_interpreter(run, cfg):
+    """section 60: a continued run takes the interpreter of the release that resumes it (``releases.python()``): the
+    run config (the daemon, every actor started from now on and the hook lines they write, the history pane) and
+    every sub-fleet config whose daemon is not running (a relaunch, revive or readopt). A sub-fleet whose daemon
+    still runs keeps its config (its daemon would write the old value back) and switches at its own next resume."""
+    old, new = cfg.get('python'), releases.python()
+    cfg['python'] = new
+    switched, running = subfleet.switch_python(run, new)
+    if old != new or switched or running:
+        print('start: this run now uses the interpreter of release ' + str(releases.own() or '?') + ': ' + new
+              + ('' if old == new else ' (was ' + str(old) + ')')
+              + ('; sub-fleet configs switched: ' + ', '.join(switched) if switched else '')
+              + ('; still running, they switch at their own next resume: ' + ', '.join(running) if running else ''))
+
+
 def resume(run, args):
     """start --resume: reattach an unfinished v2 run. False when it turned out finished (auto starts anew)."""
     path = run / 'config.json'
     cfg = load(path)
     from fleetmux import cmux_manager
     pin_paths(cfg)  # a resumed run keeps its own locations; an older config gets the current ones pinned
+    from fleetmux import i18n  # §63: a resume is the next start: it follows the setting as it is now
+    i18n.pin(None)
+    cfg['ui_language'] = i18n.language()
+    i18n.pin(cfg['ui_language'])
     cfg.setdefault('fleet_home', str(HOME.expanduser().resolve()))
     cfg.setdefault('cmux_bin', cmux_manager.CMUX)
     cfg.setdefault('cmux_state_dir', str(cfg.get('cmux_state_dir') or cmux_manager.STATE_DIR))
@@ -9564,8 +11213,8 @@ def resume(run, args):
         cfg['codex_queue'], cfg['codex_version'], _ = codex_queue.capability(cfg.get('codex'))
     try:
         runtime_v2.validate_config(cfg)
-    except ValueError as exc:
-        raise SystemExit('cannot resume ' + str(run) + ': ' + str(exc)) from exc
+    except ValueError as exc:  # this release cannot run it: its open jobs go to a new run (section 58 "Restart")
+        raise refused(run, 'cannot resume ' + str(run) + ': ' + str(exc)) from exc
     prev_security = copy.deepcopy(cfg.get('security'))  # P8h: the canary compares the old pin with the new one
     try:  # P8p: settled before anything is probed or spawned; saved with the rest below
         resume_security(cfg, args)
@@ -9577,6 +11226,11 @@ def resume(run, args):
     if live_run:  # an idempotent --resume: nothing to do, and nothing to probe
         print('this run still has a live daemon; nothing to resume:', run)
         return True
+    if (cfg.get('mode') == 'service' and (run / 'result.json').exists() and not resumable(run)
+            and open_job_rows(run)):  # section 58 "Restart": stopped with open jobs, continued; the record stays as evidence
+        (run / 'result.json').replace(run / 'result.stopped.json')
+        print('continuing ' + str(run) + ' (stopped with ' + str(len(open_job_rows(run))) + ' open job(s); its '
+              'result.json is kept as result.stopped.json)')
     # A config without `backend` (a run started before the choice existed) is a cmux run: never re-decided
     # here, so a resume where cmux does not answer is refused as before instead of moving the run to WezTerm.
     backend, why = resolve_backend(cfg.get('backend') or 'cmux')
@@ -9588,6 +11242,9 @@ def resume(run, args):
         cfg['max_attempts'] = args.max_attempts
     if getattr(args, 'lease_reclaim', None):  # §24; a run without the key keeps the default (on)
         cfg['lease_reclaim'] = args.lease_reclaim
+    cfg['restart_not_applied'] = continue_supervisor(cfg, args)  # section 60: never a silent no-op
+    if getattr(args, 'no_restore', False):
+        cfg['no_restore'] = True
     if args.roster:  # applied by the normal hot-reload on the daemon's first tick
         roster_path = Path(args.roster).expanduser().resolve()
         try:
@@ -9631,8 +11288,12 @@ def resume(run, args):
         r = connect(cfg)  # only the daemon died: its Redis is still up
     except Exception:
         if not Path(cfg['redis_runtime_dir']).is_dir():
-            raise SystemExit('cannot resume ' + str(run) + ': its Redis runtime directory is gone')
-        r = start_redis(cfg, tries=300)  # reloads the AOF from the same directory
+            raise refused(run, 'cannot resume ' + str(run) + ': its Redis runtime directory is gone')
+        try:
+            r = start_redis(cfg, tries=300)  # reloads the AOF from the same directory
+        except (SystemExit, subprocess.CalledProcessError, OSError) as exc:
+            raise refused(run, 'cannot resume ' + str(run) + ': its Redis does not load: '
+                          + str(getattr(exc, 'code', None) or exc)) from exc
     task = {} if cfg.get('mode') == 'service' else r.hgetall(TASK)
     present, value = (False, {}) if cfg.get('mode') == 'service' else result_state(run)
     result = value if isinstance(value, dict) else {}
@@ -9679,6 +11340,7 @@ def resume(run, args):
         print('--resume auto: ' + str(run) + ': task already ' + task['status'] + '; starting a new run')
         return False
     canary_resume(run, prev_security, cfg, r)  # P8h: needs the run's Redis; refused before save / spawn
+    resume_interpreter(run, cfg)
     save(path, cfg)
     mgr = manager_for(cfg)
     command = [cfg['python'], str(Path(__file__).resolve()), 'daemon', str(path), '--resume']
@@ -9688,6 +11350,7 @@ def resume(run, args):
         raise SystemExit(result.error or 'backend ' + backend + ': the daemon tab could not be opened')
     save(LATEST, dict(cfg, config=str(path)))
     print('fleet resumed (' + cfg.get('mode', 'task') + ' mode). Run directory:', run)
+    notify_route.start_warning(cfg)  # §24 "No route for human notices"
     return True
 
 
@@ -9704,6 +11367,10 @@ def daemon(cfg_path, resume=False):
         # FLEETMUX_STATE. Pin the registry in config, never fall back for new runs.
         fleet = Fleet(cfg_path, connect(cfg), manager_for(cfg))
         fleet.resume_requested = resume
+        try:
+            notify_route.startup_alarm(fleet)  # §24 "No route for human notices": audit notify.no_route
+        except Exception as exc:  # noqa: BLE001  (a warning never stops the daemon)
+            print('notify route check failed: ' + repr(exc), file=sys.stderr)
 
         def stop(signum, frame):
             fleet.stopping = True
@@ -9715,6 +11382,10 @@ def daemon(cfg_path, resume=False):
             try:  # the hot fleet-superpowers blocks go back to the file before Redis may go down
                 from fleetmux import fleet_superpowers_hot
                 fleet_superpowers_hot.flush(fleet.r, force=True)
+            except Exception:
+                pass
+            try:  # §62: the decompose parameters likewise (a root fleet only)
+                fleet.decompose_flush(force=True)
             except Exception:
                 pass
             if not fleet.v2 or fleet.explicit_stop:
@@ -10009,17 +11680,34 @@ def start(args):
             raise SystemExit('--kit-fleet: name must match ' + KIT_FLEET_RE)
         if args.roster or args.workers is not None or args.worker_names:
             raise SystemExit('--kit-fleet replaces --roster / --workers / --worker-names; pass only one of them')
+    args.carry_from = []  # section 58 "Restart": runs of this fleet home whose open jobs the new run takes over
     if getattr(args, 'resume', None):
         run = resume_target(args.resume)
-        if run and resume(run, args):
-            return
+        try:
+            if run and resume(run, args):
+                return
+        except NotContinuable as exc:
+            if args.resume != 'auto':
+                raise
+            print('--resume auto: ' + str(exc.code) + '; its open jobs go to a new run')
+            args.carry_from.append({'run': str(run), 'reason': str(exc.code)})
+    if getattr(args, 'resume', None) in (None, 'auto') and continue_home(args):
+        return  # section 58 "Restart": this fleet home's run with open jobs was continued
     if args.transport_version != 2:
         raise SystemExit('new fleet instances require Redis transport v2; v1 is only readable for existing runs')
-    # A live root fleet on this machine takes the work (fleetmux/join.py); never on an explicit --resume <run>
-    if not getattr(args, 'no_join', False) and getattr(args, 'resume', None) in (None, 'auto'):
+    # A live root fleet on this machine takes the work (fleetmux/join.py); never on an explicit --resume <run>;
+    # never when this start takes over the open jobs of a run of its own fleet home
+    if (not getattr(args, 'no_join', False) and getattr(args, 'resume', None) in (None, 'auto')
+            and not args.carry_from):
         from fleetmux import join
         if join.attach(args):
             return
+    return start_new_run(args)
+
+
+def start_new_run(args):
+    """`start` past the resume / continue / attach checks: a new run of this fleet home."""
+    kit_fleet = getattr(args, 'kit_fleet', None)
     # The private config file is resolved once, here, before the first block read; config.json records it
     # and every process of the run reads that file (pin_paths), not whatever its environment says.
     private_config = fleet_config.from_env()
@@ -10285,12 +11973,13 @@ def start(args):
         except Exception as exc:  # never stops the start; the old run keeps its records for the next one
             print('superpowers: loaded workflows not carried over: ' + repr(exc), file=sys.stderr)
             carried = None
-    from fleetmux import backends, cmux_manager
+    from fleetmux import backends, cmux_manager, i18n
     cfg = {'run': str(run), 'python': sys.executable, **redis_cfg,
            'backend': backend,  # decided once here; the daemon, actors, --resume and sub-fleets read it
            'cmux_state_dir': str(mgr.meta_path.parent),
            'fleet_home': str(HOME.expanduser().resolve()), 'cmux_bin': cmux_manager.CMUX,
            'private_config': private_config,
+           'ui_language': i18n.language(),  # §63: resolved once here; every process of the run pins it
            'workers': workers, 'mode': args.mode, 'lifecycle': args.lifecycle, 'roles': args.roles,
            'supervisor_split': bool(getattr(args, 'supervisor_split', False)),
            **({'channels': roster_channels} if roster_channels else {}),  # §53, contracts §8
@@ -10334,6 +12023,9 @@ def start(args):
            'claude_supervisor_hook_delivery': True,  # launch-time fence; old/resumed runs keep their old channel
            'adopted_supervisor_hook_delivery': True,  # same fence for sub-fleet supervisors (adopted panes, §19/§29)
            'max_attempts': args.max_attempts or DEFAULTS['max_attempts'], 'token': token,
+           **({'carry_from': args.carry_from} if getattr(args, 'carry_from', None) else {}),
+           **({'previous_run': previous_run()} if previous_run() else {}),  # section 60: the run before this one
+           **({'no_restore': True} if getattr(args, 'no_restore', False) else {}),
            'initiator': initiator,
            **({'channel_user_resume': args.channel_user_resume} if getattr(args, 'channel_user_resume', None) else {})}
     if getattr(args, 'advisor', False):  # sugar: the switch lives in the roster, never in config.json (§2.1)
@@ -10380,6 +12072,7 @@ def start(args):
         superpowers_peer.forget(carried[0])
     print('fleet started (' + (args.lifecycle or '-') + ' lifecycle, ' + args.mode + ' mode): supervisor + ' + str(len(cfg['workers']))
           + ' worker(s) initialising. Run directory:', run)
+    notify_route.start_warning(cfg)  # §24 "No route for human notices"
     if backend == 'fleetmux':  # the fleet's screen is a server: say how to look at it, or go there (--attach / --gui)
         from fleetmux.backends.fleetmux import fleetmux_bin
         binary = fleetmux_bin()
@@ -10416,6 +12109,15 @@ def night_cmd(cfg, state):
     except (OSError, ValueError) as exc:
         raise SystemExit('night ' + state + ' refused, nothing changed:\n' + str(exc)) from exc
     return dict(night.write_state(run, state == 'on'), roster=cfg['roster_night' if state == 'on' else 'roster'])
+
+
+def previous_run():
+    """section 60: the run latest.json names before this start writes it (not a join stub), else ''."""
+    try:
+        latest = load(LATEST)
+        return '' if 'join' in latest else str(Path(latest['run']).expanduser().resolve())
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
 
 
 def previous_loads(run):
@@ -10585,7 +12287,10 @@ def job_rows(r):
     jobs = json.loads(raw) if raw else {}
     return [{'id': jid, 'state': job.get('state'), 'slot': job.get('slot') or '', 'subfleet': job.get('task') or '',
              'goal': job.get('goal', '')[:120], 'waiting': job.get('waiting') or '', 'created': job.get('created'),
-             'name': (job.get('spawn') or {}).get('name') or '', 'added_worker': job.get('hot_slot') or ''}
+             'name': (job.get('spawn') or {}).get('name') or '', 'added_worker': job.get('hot_slot') or '',
+             # §58: each slot's cli:model, the chain entries skipped before it (with why) and the wall switches
+             'model_chain': ((job.get('run') and run_model_chain(job['run']))
+                             or (job.get('chain') or {}).get('model_chain') or {})}
             for jid, job in sorted(jobs.items(), key=lambda x: x[1].get('created') or 0)]
 
 
@@ -10600,8 +12305,12 @@ def status(cfg):
         try:
             task_clock(out.get('task'), awake.of(r).now())  # budget figures in the fleet's awake time
             rows = job_rows(r) if cfg.get('mode') == 'service' or not cfg.get('parent_config') else None
+            waiting = named_subfleet.waiting_rows(r)  # D28: why a declared sub-fleet that is not up yet waits
+            service = r.hgetall(SERVICE)
         finally:
             r.close(); r.connection_pool.disconnect()
+        if waiting:
+            out['subfleet_waiting'] = waiting
         if rows is not None:  # §58 / §19: open jobs of a root
             if rows or cfg.get('mode') == 'service':
                 out['jobs'] = rows
@@ -10616,17 +12325,63 @@ def status(cfg):
         release = releases.field(cfg)  # design.md §56 "Releases": running vs ~/fleetmux-current
         if release:
             out['release'] = release
+        attention = blocked_scope.rows(cfg)  # §24: sub-fleets that wait for a human (the root is not paused)
+        if attention:
+            out['attention'] = attention
+        out.update(pause_fields(service))  # §11 "Pause cause", §24 pause review
+        notice = notify_route.summary(cfg)  # §24 "No route for human notices"
+        if notice:
+            out['human_notice'] = notice
         print(json.dumps(out, ensure_ascii=False, indent=2))
+        status_attention_lines(attention)
+        status_notice_line(notice)
         if release and release['restart_needed']:
             print(releases.restart_line(cfg.get('name') or cfg['run'], release['running'], release['installed']),
                   file=sys.stderr)
         return
     r = connect(cfg)
-    print(json.dumps({'mode': cfg.get('mode', 'task'), 'lifecycle': cfg.get('lifecycle'),
-                      'task': task_clock(r.hgetall(TASK), awake.of(r).now()), 'service': r.hgetall(SERVICE),
-                      'pending_requests': r.llen(REQQ), 'daemon_beat': float(r.get('fx:daemon:beat') or 0),
-                      'agents': {n: dict(r.hgetall(key('agent', n)), inbox=r.llen(key('inbox', n)))
-                                 for n in ['supervisor'] + cfg['workers']}}, ensure_ascii=False, indent=2))
+    out = {'mode': cfg.get('mode', 'task'), 'lifecycle': cfg.get('lifecycle'),
+           'task': task_clock(r.hgetall(TASK), awake.of(r).now()), 'service': r.hgetall(SERVICE),
+           'pending_requests': r.llen(REQQ), 'daemon_beat': float(r.get('fx:daemon:beat') or 0),
+           'agents': {n: dict(r.hgetall(key('agent', n)), inbox=r.llen(key('inbox', n)))
+                      for n in ['supervisor'] + cfg['workers']}}
+    attention = blocked_scope.rows(cfg)  # §24
+    if attention:
+        out['attention'] = attention
+    notice = notify_route.summary(cfg)  # §24 "No route for human notices"
+    if notice:
+        out['human_notice'] = notice
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    status_attention_lines(attention)
+    status_notice_line(notice)
+
+
+def status_notice_line(notice):
+    line = notify_route.status_line(notice)
+    if line:
+        print(line, file=sys.stderr)
+
+
+def pause_fields(service):
+    """status: ``pause_cause`` / ``pause_review`` from fx:service (§11 "Pause cause"), each only when not empty."""
+    out = {}
+    for field, name in (('cause', 'pause_cause'), ('review', 'pause_review')):
+        raw = service.get(field) or ''
+        if raw:
+            try:
+                out[name] = json.loads(raw)
+            except ValueError:
+                out[name] = raw
+    return out
+
+
+def status_attention_lines(attention):
+    """§24: one stderr line per sub-fleet that waits for a human after the root supervisor answered BLOCKED."""
+    for row in attention:
+        print('sub-fleet ' + str(row['subfleet']) + ' waits for a human (' + str(row.get('notice', '')) + ', '
+              + time.strftime('%Y-%m-%d %H:%M', time.localtime(float(row.get('at') or 0))) + '): '
+              + str(row.get('reason', ''))[:300] + '; run: ' + str(row['run'])
+              + ('; ' + row['key'] + ', answer: ' + row['answer'] if row.get('answer') else ''), file=sys.stderr)
 
 
 def print_inspection(args):
@@ -10678,6 +12433,9 @@ def cli():
                         'terminal opens a window in the background (desktop with fleetmux-web, not over ssh) or '
                         'else attaches; nothing opens without a terminal, inside a fleetmux pane, or when a '
                         'viewer is already open on the runtime')
+    s.add_argument('--no-restore', action='store_true',
+                   help='design section 60: do not restore the previous run of this fleet home automatically (attached '
+                        'sub-fleets); the reconcile ledger still lists every item for the supervisor')
     s.add_argument('--no-join', action='store_true',
                    help='start a fleet of its own even when a root fleet of this user already runs on this machine '
                         '(default: attach to it and write a join stub; a task start then takes work with `task '
@@ -10873,11 +12631,25 @@ def cli():
     t.add_argument('--recheck', metavar='ID', help='run the dev_task delivery gate again on the files as they are now, '
                    'for this run\'s own task or a job (job-...) that the gate blocked; on pass the task completes (a job '
                    'gets its result published again as ok). Dispatches no work (lifecycle_recheck)')
+    t.add_argument('--cancel', metavar='JOB', help='cancel one job of this root (section 58): a queued, starting or suspended '
+                   'job is cancelled at once and gets a failed result; a running one gets its sub-fleet stopped')
     t.add_argument('--job', action='store_true', help='submit only as a job: refused when the fleet would take it '
                    'as its own task (a join stub sends this)')
     for name in ('status', 'stop', 'resume'):
         sp = sub.add_parser(name)
         sp.add_argument('--config', default=str(LATEST))
+        if name == 'stop':
+            sp.add_argument('--final', action='store_true',
+                            help='stop for good (design section 60): open jobs are cancelled and attached sub-fleets are '
+                                 'not brought back by the next start; without it the next start restores the fleet '
+                                 'and opens a reconcile ledger')
+    rc = sub.add_parser('reconcile', help='the reconcile ledger after a restart or a supervisor change (section 60)')
+    rc.add_argument('action', choices=('show', 'rule'))
+    rc.add_argument('item', nargs='?', help='rule: the item id (R<n>)')
+    rc.add_argument('--verdict', choices=('recovered', 'redo', 'drop'))
+    rc.add_argument('--reason', default='')
+    rc.add_argument('--ledger', default=None, help='rule: the ledger id (default: the open one)')
+    rc.add_argument('--config', default=str(LATEST))
     sub.add_parser('gui', help='show this machine\'s root fleet window; with no root fleet, start the fleet.yaml#bare '
                                     'one (bare.enabled false: a window on this HOME\'s resumable fleets)')
     sub.add_parser('view', help='show the live page of this HOME\'s running fleet in this terminal '
@@ -10907,6 +12679,8 @@ def cli():
     ap = sub.add_parser('applet', add_help=False, help='applets of a host fleet (docs/applet-interface.md section 5); '
                                                        '`fleetmux applet --help` lists the commands')
     ap.add_argument('applet_args', nargs=argparse.REMAINDER)
+    sub.add_parser('demo', add_help=False, help='watch the acceptance at work in a one-off fleet of scripted agents: '
+                   'no model, no login (fleetmux demo --help)')
     ts = sub.add_parser('tabs', add_help=False, help='list a running fleet\'s tabs, or print one tab\'s text '
                         '(read-only; `fleetmux tabs --help`)')
     ts.add_argument('tabs_args', nargs=argparse.REMAINDER)
@@ -10941,6 +12715,14 @@ def cli():
     op.add_argument('text', nargs='?', default='-')
     op.add_argument('--config', default=str(LATEST))
     op.add_argument('--wait', type=float, default=30, help='seconds to wait for the daemon\'s answer (default 30)')
+    an = sub.add_parser('answer', help='answer a sub-fleet request that waits for you (a report:<task>:<id> key from '
+                                       'status or the push) without the supervisor; prints accepted / rejected '
+                                       '(docs/design.md section 24)')
+    an.add_argument('key', help='the report:<task>:<id> key')
+    an.add_argument('decision', choices=('approve', 'reject'))
+    an.add_argument('--note', default='', help='what the sub-fleet is told with the ruling (how far an approve goes)')
+    an.add_argument('--config', default=str(LATEST))
+    an.add_argument('--wait', type=float, default=30, help='seconds to wait for the daemon\'s answer (default 30)')
     rr = sub.add_parser('result', help='service mode: print the result of one request as a JSON line; exit 0 found, '
                         '3 pending, 2 unknown id; never removes it (docs/distributed-development.md)')
     rr.add_argument('id', nargs='?', help='request / job id (a join stub defaults to its last job)')
@@ -11014,6 +12796,18 @@ def main(argv=None):
     if rest[:1] == ['tabs']:  # read-only tab titles and pane text from the fleetmux server
         from fleetmux import tabs_cli
         sys.exit(tabs_cli.main(rest[1:]))
+    if rest[:1] == ['acp']:  # docs/omnigent.md: an ACP agent over stdio; stdout carries only JSON-RPC
+        from fleetmux import acp_server
+        sys.exit(acp_server.main(rest[1:]))
+    if rest[:1] == ['cancel']:  # stop one job of the running root fleet by its id, never the root
+        from fleetmux import job_cancel
+        sys.exit(job_cancel.main(rest[1:]))
+    if rest[:1] == ['tree']:  # §62: check a tree file before submitting it (fleetmux/tree_cli.py)
+        from fleetmux import tree_cli
+        sys.exit(tree_cli.main(rest[1:]))
+    if rest[:1] == ['demo']:  # a one-off scripted fleet: the acceptance at work, no model (fleetmux/demo.py)
+        from fleetmux import demo
+        sys.exit(demo.main(rest[1:]))
     p = cli()
     args = p.parse_args(argv)
     if args.cmd == 'home':  # §50.1
@@ -11046,7 +12840,12 @@ def main(argv=None):
                 sys.exit(code)
         result = discover.run()
         discover.save(result)
-        print(json.dumps(result, ensure_ascii=False, indent=1) if args.json else discover.render(result))
+        from fleetmux import i18n  # §63: the interface language in effect, and the template in the private file
+        status, where = i18n.ensure_template()
+        result = dict(result, ui_language=i18n.language_info(),
+                      ui_template={'status': status, 'path': str(where) if where else None})
+        print(json.dumps(result, ensure_ascii=False, indent=1) if args.json
+              else discover.render(result) + '\n' + i18n.render_setup(result['ui_language'], status, where))
         return
     if args.cmd == 'gui':  # §18.2: a window on the resumable runs; no config.json, nothing pinned
         discover.ensure()  # §52: first open
@@ -11162,12 +12961,26 @@ def main(argv=None):
                   ans.get('reason') or json.dumps(ans, ensure_ascii=False))
             sys.exit(0 if ok else 2)
         elif args.cmd == 'stop':
-            print(json.dumps(request(cfg, {'kind': 'stop'}), ensure_ascii=False))
+            print(json.dumps(request(cfg, dict({'kind': 'stop'}, **({'final': True} if getattr(args, 'final', False)
+                                                                   else {}))), ensure_ascii=False))
+        elif args.cmd == 'reconcile':  # section 60
+            if args.action == 'show':
+                print(restart_state.show(cfg))
+            else:
+                if not args.item or not args.verdict:
+                    raise SystemExit('reconcile rule needs the item (R<n>) and --verdict')
+                ans = request(cfg, {'kind': 'reconcile', 'ledger': args.ledger, 'by': 'operator', 'rulings': [
+                    {'item': args.item, 'verdict': args.verdict, 'reason': args.reason}]})
+                print(json.dumps(ans, ensure_ascii=False))
+                sys.exit(0 if ans.get('status') == 'accepted' and not ans.get('refused') else 2)
         elif args.cmd in ('pause', 'resume'):
             ev = {'kind': args.cmd, 'reason': getattr(args, 'reason', '')}
             if getattr(args, 'raise_', None):
                 ev['raise'] = args.raise_
-            print(json.dumps(request(cfg, ev), ensure_ascii=False))
+            answer = request(cfg, ev)
+            print(json.dumps(answer, ensure_ascii=False))
+            if isinstance(answer, dict) and answer.get('status') == 'rejected' and answer.get('held'):
+                sys.exit(2)  # §24: a held slot that resume could not release (the reason and next step are printed)
         elif args.cmd == 'results':
             r = connect(cfg)
             while True:
@@ -11184,6 +12997,10 @@ def main(argv=None):
                 raise SystemExit('result needs a request id')
             from fleetmux import remote
             sys.exit(remote.result_cli(connect(cfg), args.id, args.wait))
+        elif args.cmd == 'answer':  # §24: the user's own ruling, never from an agent pane of this fleet
+            ans = blocked_scope.answer_send(cfg, args.key, args.decision, args.note, wait=args.wait)
+            print(json.dumps(ans, ensure_ascii=False))
+            sys.exit({'accepted': 0, 'rejected': 2}.get(ans.get('status'), 3))
         elif args.cmd == 'operator':
             ans = operator_send(cfg, sys.stdin.read() if args.text == '-' else args.text, wait=args.wait)
             print(json.dumps(ans, ensure_ascii=False))
@@ -11191,6 +13008,10 @@ def main(argv=None):
         elif args.cmd == 'request':
             spec = json.loads(sys.stdin.read() if args.spec == '-' else Path(args.spec).read_text())
             print(json.dumps(request(cfg, {'kind': 'request', 'spec': spec}), ensure_ascii=False))
+        elif getattr(args, 'cancel', None):  # section 58 "Restart": cancel one job on this root (a join stub's stop)
+            ans = request(cfg, {'kind': 'job_cancel', 'job': args.cancel})
+            print(json.dumps(ans, ensure_ascii=False))
+            sys.exit(0 if ans.get('status') in ('cancelled', 'stopping', 'ended') else 2)
         elif getattr(args, 'recheck', None):
             from fleetmux import lifecycle_recheck
             code, ans = lifecycle_recheck.cli(cfg, args.recheck)

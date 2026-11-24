@@ -172,6 +172,27 @@ def isolated_fleet_namespace(_isolation_mp, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def ui_language_zh(_isolation_mp):
+    """ui.language (docs/design.md §63): the suite runs in zh-Hans, the texts the tests were written against,
+    whatever the private file and the machine's language say. tests/test_ui_lang*.py set their own."""
+    from fleetmux import i18n
+    _isolation_mp.setenv(i18n.ENV, 'zh-Hans')
+    i18n.reset()
+    # No test ever writes the operator's real private file (D14): the template goes only into a test's own path.
+    real = (Path(os.environ.get('HOME', '~')) / '.fleetmux' / 'fleet.yaml').expanduser()
+    write = i18n.ensure_template
+
+    def guarded(path=None):
+        target = Path(path) if path is not None else fleet_config.user_path()
+        if target is not None and Path(target).expanduser().absolute() == real.absolute():
+            return 'skipped: test guard (the real private config)', target
+        return write(path)
+    _isolation_mp.setattr(i18n, 'ensure_template', guarded)
+    yield
+    i18n.pin(None)  # a run's pin (pin_paths) never leaks into the next test
+
+
+@pytest.fixture(autouse=True)
 def no_real_bare_start(_isolation_mp):
     """Bare `fleetmux` / `gui` with no root fleet starts one through `fleet.run_start` (fleetmux/open_window.py): no
     test may reach a real `start`. A test that wants the bare start stubs it; the real function stays reachable as
@@ -226,6 +247,28 @@ def no_private_config(_isolation_mp, tmp_path_factory):
     """The operator's ~/.fleetmux/fleet.yaml never leaks into a test; a test sets its own."""
     _isolation_mp.setenv(fleet_config.USER_ENV, str(tmp_path_factory.getbasetemp() / 'no-private-fleet.yaml'))
     _isolation_mp.setattr(fleet_config, '_pinned', None)  # nor a run's pin (start / pin_paths) from an earlier test
+
+
+_DECOMPOSE_ENABLED = None
+
+
+@pytest.fixture(autouse=True)
+def decompose_default_off(monkeypatch):
+    """The suite runs the old path (decomposition tree off, docs/design.md §62) unless a test takes
+    ``decompose_on``: the shipped switch is on, and the existing tests prove that off is the baseline."""
+    global _DECOMPOSE_ENABLED
+    from fleetmux import decompose
+    if _DECOMPOSE_ENABLED is None:
+        _DECOMPOSE_ENABLED = decompose.enabled
+    monkeypatch.setattr(decompose, 'enabled', lambda: False)
+
+
+@pytest.fixture
+def decompose_on(decompose_default_off, monkeypatch):
+    """The switch as the configuration says (shipped: on)."""
+    from fleetmux import decompose
+    monkeypatch.setattr(decompose, 'enabled', _DECOMPOSE_ENABLED)
+    return True
 
 
 @pytest.fixture(autouse=True)
@@ -313,3 +356,42 @@ def _start_resolves_its_default_backend_as_on_a_mac_with_cmux(_isolation_mp):
     pinned.__wrapped__ = real
     _isolation_mp.setattr(fleet, 'resolve_backend', pinned)
     _isolation_mp.setattr(base, 'cmux_installed', lambda: True)
+
+
+@pytest.fixture
+def job_chains_as_before(tmp_path, monkeypatch):
+    """§58 model chains (and §44 D27 for splits), for job and split tests about something else: a sub-fleet's
+    supervisor and a job's workers keep the run's default model, as before model chains (the slot is adopted in place,
+    no rotation). The private fleet.yaml's
+    discovery block names only that model in both chains; the rest of the block is the shipped one."""
+    import yaml
+    model = fleet.DEFAULTS['worker_model']
+    disc = dict(fleet_config.block('discovery') or {}, supervisor=[model], worker=[model])
+    path = tmp_path / 'private-fleet-chains-as-before.yaml'
+    path.write_text(yaml.safe_dump({'discovery': disc}))
+    monkeypatch.setenv(fleet_config.USER_ENV, str(path))
+    return model
+
+
+@pytest.fixture
+def fable_capped(monkeypatch):
+    """A Fable model card with max_concurrent 1 for this test only (D24: the shipped card has no cap). Tests that use
+    Fable as their example of a full model take this stub instead of the shipped value."""
+    real = fleet_config.block
+
+    def block(name, *args, **kwargs):
+        data = real(name, *args, **kwargs)
+        if name == 'models' and isinstance(data, dict) and 'fable' in data:
+            data = dict(data, fable=dict(data['fable'], max_concurrent=1))
+        return data
+    monkeypatch.setattr(fleet_config, 'block', block)
+    return 1
+
+
+@pytest.fixture
+def split_slot_keeps_its_model(monkeypatch):
+    """D27, for split tests on the v1 fake fleet whose worker runs Codex: the real subfleet.check refuses such a slot as
+    a sub-fleet supervisor before any model is picked; these tests mask that refusal (test_escalate.ok_check). Here an
+    approve without supervisor_profile keeps the slot's model, as before; the supervisor chain is not exercised."""
+    monkeypatch.setattr(fleet.Fleet, 'supervisor_chain_pick',
+                        lambda self, slot, chain=None, source=None, registry=None: ({}, None, ''))

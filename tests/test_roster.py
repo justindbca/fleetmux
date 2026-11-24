@@ -254,9 +254,17 @@ def test_handoff_table_hot_reloads_into_status(hot):
     assert slots['worker-1']['context']['handoff_source'] == 'window: roster claude; ratio: --handoff-ratio'
 
 
-def test_added_rows_on_a_capped_default_model_are_rejected_whole(hot):
-    # Added rows run the fleet default: its model card (Fable: max_concurrent 1) caps them.
+def test_added_rows_on_a_capped_default_model_are_rejected_whole(hot, monkeypatch):
+    # Added rows run the fleet default: its model card caps them. The shipped cards change their caps over time,
+    # so the test caps the Fable card at 1 itself instead of relying on the shipped value.
+    import dataclasses
     from fleetmux.agent_registry import AgentRegistry
+    shipped = AgentRegistry.model
+
+    def capped(self, key):
+        card = shipped(self, key)
+        return dataclasses.replace(card, max_concurrent=1) if card is not None and card.id == 'fable' else card
+    monkeypatch.setattr(AgentRegistry, 'model', capped)
     f = hot
     f.cfg['worker_model'] = AgentRegistry().model('fable').model
     write_roster(f, WORKERS + ['fresh-1'])

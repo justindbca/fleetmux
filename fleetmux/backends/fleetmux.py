@@ -600,8 +600,10 @@ class FleetmuxSessionManager:
                 argv += ['--theme', theme]
             with tempfile.TemporaryFile() as err:
                 try:
+                    # ui.language (docs/design.md §63): the server reads the language from this variable only
+                    from fleetmux import i18n
                     done = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
-                                          timeout=START_WAIT_S + 5)
+                                          timeout=START_WAIT_S + 5, env=dict(os.environ, **i18n.server_env()))
                     code = done.returncode
                 except subprocess.TimeoutExpired:
                     code = None

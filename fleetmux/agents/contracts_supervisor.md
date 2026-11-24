@@ -60,6 +60,7 @@ You are the top supervisor of this fleet: your own interface declarations are th
 - `phase` / `plan`: only in P0 replies (see above).
 - `interfaces[]`: new or changed interfaces. `change` is `new` (default) / `compatible` / `breaking`. `decision` (`approve` / `reject`) answers a worker's pending proposal. Optional fields: `min_chars`, `contains`, `json_keys`, `writers`, `decisions`, `final`.
 - `dispatch[].id` / `provides` / `consumes` / `edits` / `depends_on` + `serial_reason` as above.
+- `dispatch[].leaf`: `"leaf": true` on an item that is a leaf block, one worker's whole job and not worth splitting again; it never gets the long-running split nudge (see "Leaf blocks"). You accept a leaf yourself from its report.
 - `artifacts[].not_contains`: literal strings the file must not contain. `artifacts[].cmd_exit`: acceptance commands are declared **only by the caller** in the task spec (the daemon runs them in the shared output directory at COMPLETED; they must exit 0 and their output is written to `path`). A decision that adds or changes a `cmd_exit` is rejected as an invalid decision; to keep a caller's command artifact, repeat it unchanged or leave it out.
 
 ## Mid-turn handoff (context nearly full)

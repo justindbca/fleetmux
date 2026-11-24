@@ -89,6 +89,11 @@ pub fn spawn(
     if !env.contains_key("TERM") {
         cmd.env("TERM", "xterm-256color");
     }
+    // ui.language (docs/design.md §63): the server's own language is not handed down to its panes; only a spawn
+    // that names it (the demo recording) passes it on.
+    if !env.contains_key(crate::i18n::ENV) {
+        cmd.env_remove(crate::i18n::ENV);
+    }
     if !env.contains_key("COLORTERM") {
         cmd.env("COLORTERM", "truecolor");
     }

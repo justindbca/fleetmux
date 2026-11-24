@@ -783,3 +783,89 @@ Sent through the existing applet notice channel, once per key (also across resta
 `disk_free_gb`), `always_on` (bool) and `toolchains` (`{name: version}`), written by
 `fleetmux superpowers refresh` (`fleetmux/fleet_superpowers_capability.py`). Sizes are in GiB. The schema is in
 distributed-development.md, "Capability keys of a `machines` entry".
+
+## 14. Decomposition tree (design section 62)
+
+Defined in: `fleetmux/decompose.py` (key names, tree shape, parameters) and the `tree_*` / `decompose_*` methods of
+`Fleet`. Everything here exists only while `fleet.yaml#decompose.enabled` is true for the task (read once at submit;
+task hash `decompose=1`); with the switch off none of these keys or files is written and every message is the
+baseline's. A service fleet keeps no tree but holds the parameter keys (it writes back as a root).
+
+**Redis keys** (each fleet's private Redis):
+
+```
+fx:tree                  string: the tree as JSON (rev, accepted, root, goal, decisions, nodes, splits, chain,
+                         width, review, and seed when the spec brought a tree); cleared at submit
+fx:tree:notes            list: lines appended to the supervisor's next message ([tree] accepted, returns alert);
+                         taken on queue; cleared at submit
+fx:tree:summary          string: the opening summary waiting for the tick: {text, rev, sent_at}; cleared at submit
+fx:decompose:params      string: the decompose block as JSON while the fleet runs
+fx:decompose:meta        hash: write_back_seconds, loaded_at, flushed_at, dirty ("1" / "0")
+fx:decompose:tuned       list of JSON: tune items applied in this fleet {param, value, reason, origin}; cleared at
+                         submit
+```
+
+`fx:items` and `fx:escalations` keep their meaning and writers; with the switch on a split record also carries
+`delta_t` / `delta_c`.
+
+**Files**:
+
+```
+<run>/tree.json, <workspace>/tree.json   copies of fx:tree (the tick re-syncs); read only for agents
+<run>/tree.log.jsonl                     one line per accepted change: time, rev, by, added, dropped, tree, tree_drop
+<run>/tree-seeds/<task>-<hex>.json       a sub-fleet's seed: {"nodes": [...], "decisions": [...], "by": optional}
+<parent run>/subfleet-notices/tree-*.json  a sub-fleet's opening summary for its parents to pass up
+<run>/result.json  "decompose"           {rev, chain, width, review, tune} at the end of the task
+```
+
+**Spec and decision keys**:
+
+- Task spec / job spec: `tree` (absolute path of a seed file; a job's file is renumbered into the child's level) and
+  `by` (who wrote the tree: a non-empty string of at most 80 characters; default the file's top-level `by`, else
+  `submitter`). The ACP entry (`fleetmux acp`) takes both as job keys. A join stub's `task` passes the spec whole, so
+  a dev_task fleet started next to a running root brings its tree the same way.
+- With the switch on, a task of a root dev_task fleet and a job with `lifecycle: dev_task` are refused at submit
+  without `tree` ("decompose is on: a dev_task task|job must bring its tree. 1) Write the division of the work as a
+  tree file ...; 2) run `fleetmux tree check <file>` ...; 3) give the file's absolute path as "tree" in the spec").
+  Only new submissions are checked: a job taken before, a restarted run and a sub-fleet the program starts are not.
+- Supervisor decision (task mode): `tree`, `tree_drop`, `escalations[].cause`
+  (`shared_decision | file_overlap | missing_dep | scope | other`), `decompose_tune: [{param, value, reason}]`
+  (COMPLETED only). The pi `fleet_decision` task schema declares the same keys.
+- Worker report (task mode, split request JSON): `delta_t`, `delta_c` (non-negative numbers, required with the switch
+  on).
+
+**Seed** (`tree['seed']`, written once by `decompose.seed_from` when the spec brought a tree with at least one
+block; never changed afterwards):
+
+```
+{by, at, root, blocks: [{id, goal, est, owns, after, depends_on, consumes, decides}], decisions: [{id, owner, status}]}
+```
+
+**Review seed section** (`review['seed']`, recomputed with the review; null without a seed; numbers only):
+
+```
+{by, at,
+ blocks: [{id, fate: kept|changed|merged|split|dropped, changed: [field], into, pieces, est_minutes,
+           actual_minutes, ratio}],
+ added: [{id, est_minutes, actual_minutes, ratio}],
+ counts: {kept, changed, merged, split, dropped, added},
+ chain: {seed: {ids, minutes}, plan: {ids, minutes}, actual: {ids, minutes}}}
+```
+
+Compared fields: est (minutes, sessions default 1), owns (normpath, as a set), after, depends_on, consumes, decides
+(as sets). `ratio` = actual / seed estimate, 2 decimals; a merged block divides its target's actual minutes by the
+seed estimates of every seed block merged into it; a supervisor split's actual minutes are its pieces' wall minutes.
+
+**Job result**: a job's one result (`fleetmux result <job>`, `<run>/job-results/<job>.json`) carries
+`result.decompose` = the sub-fleet's result.json `decompose` block (`{rev, chain, width, review, tune}`, review with
+its `seed` section) when the sub-fleet wrote one; with the switch off there is none.
+
+**`fleetmux tree check <file> [--config <private fleet.yaml>] [--prefix <level>] [--json]`**: reads the file with
+`seed_from`, runs `decompose.apply` (the shape checks a handed-in tree goes through, same message) and `judge` with
+the shipped `decompose` block (or the private file's block laid over it). Prints the shape errors, the seed's `by`
+and block count, the longest chain, the maximum parallel width, the leaf=false blocks with their dT upper / dC lower
+bounds, and the parameters. Exit 0 shape ok, 1 shape errors or an unreadable file, 2 a bad command line or block.
+`--json`: `{ok, errors, chain, width, leaf_false: [{id, dT, dC, reason}], seed: {by, blocks} | null, params}`.
+
+**Private fleet.yaml**: only a root fleet writes, only the `decompose` block, under `<private file>.lock` (shared with
+the relay's write-back, section 13.7); a missing file is created 0600; the shipped file is never written.

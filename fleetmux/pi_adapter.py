@@ -96,7 +96,13 @@ def argv(cfg, name, generation, prompt, cwd, *, label):
 
 
 DAEMON_WATCH = {'check_interval_s': 120, 'stale_after_s': 120, 'realert_after_s': 600}
-HELD_KEYS = ('held_after_s', 'held_realert_s', 'subfleet_stuck_after_s', 'subfleet_check_s')  # runtime_v2.HELD_WATCH: the daemon's held watchdog
+HELD_KEYS = ('held_after_s', 'held_realert_s', 'subfleet_stuck_after_s', 'subfleet_check_s',  # runtime_v2.HELD_WATCH
+             'supervisor_regen', 'supervisor_regen_max', 'supervisor_regen_window_s',  # runtime_v2.REGEN_WATCH
+             'supervisor_regen_backoff_s', 'supervisor_regen_probe',  # the daemon's own keys, never exported
+             'subfleet_blocked_marks_child',  # blocked_scope.DEFAULTS (docs/design.md section 24)
+             'held_requeue', 'held_requeue_causes', 'held_requeue_after_s', 'held_requeue_max',  # held_requeue
+             'held_requeue_window_s', 'pause_review', 'pause_review_after_s', 'pause_review_every_s',  # pause_review
+             'pause_review_wall_retry_s', 'no_route_alarm')  # notify_route.DEFAULTS
 
 
 def daemon_watch():

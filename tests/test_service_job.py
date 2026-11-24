@@ -21,6 +21,9 @@ from test_subfleet import given, hook, no_launch, step, tree  # noqa: F401
 from test_v2_codex_claude import answer_turn, typed
 from fleetmux import fleet, fleet_config, lifecycle_close, remote, runtime_v2, subfleet
 
+# §58 model chains: these tests are about jobs, not models; tests/test_job_model_chain.py covers the chains
+pytestmark = pytest.mark.usefixtures('job_chains_as_before')
+
 GOAL = 'Survey the five vendor APIs and write a comparison report with a recommendation'
 
 
@@ -123,7 +126,8 @@ def test_job_spec_is_validated_and_overrides_the_config_block(svc, ok_check):
 
 def test_config_block_defaults():
     got = fleet_config.job_subfleet()
-    assert got == {'workers': 2, 'supervisor_profile': None, 'worker_profiles': [], 'hours': 4}
+    assert got == {'workers': 2, 'supervisor_profile': None, 'worker_profiles': [], 'hours': 4,
+                   'supervisor': None, 'worker': None}  # §58 model chains: null = the discovery chains
     assert 'job_subfleet' in fleet_config.BLOCKS and 'job_subfleet' in fleet_config.USER_BLOCKS
 
 
@@ -364,12 +368,15 @@ def test_job_with_supervisor_profile_rotates_then_runs(split_tree, monkeypatch):
     assert result(f, jid)['status'] == 'ok' and jid not in jobs(f)
 
 
-def test_parent_stop_stops_the_job_subfleet_and_publishes(split_tree):
+def test_parent_stop_suspends_the_job_subfleet_without_a_result(split_tree):
+    """section 58 "Restart": a stop of the root suspends a running job's sub-fleet (no result); the next start of the root
+    hands it to a fresh slot (tests/test_job_queue_restart.py)."""
     t = split_tree
     jid, key = start_job(t)
     assert subfleet.stop_children(t.f, wait=0)
-    got = result(t.f, jid)
-    assert got['status'] == 'failed' and key in got['error'] and jid not in jobs(t.f)
+    assert result(t.f, jid) is None
+    assert jobs(t.f)[jid]['state'] == 'suspended' and jobs(t.f)[jid]['task'] == key
+    assert subfleet.record(t.f.run_dir / 'sub' / key)['state'] == 'suspended'
 
 
 # ------------------------------------------------------------------ task mode (§19 "Task root": tests/test_task_root_job.py)
@@ -569,7 +576,8 @@ def test_no_idle_worker_adds_one_that_supervises_the_job_and_retires_after(split
     key, rec = job_rec(f, jid)
     assert rec['slot'] == 'worker-3' and rec['status'] == 'delegated' and jobs(f)[jid]['state'] == 'running'
     assert f.agent('worker-3')['state'] == 'delegated'
-    assert subfleet.stop_children(f, wait=0)  # the job ends (here: cancelled) and is collected
+    f.job_cancel(jid)  # the job ends (an operator cancel; a root stop would suspend it, section 58 "Restart")
+    assert subfleet.stop_children(f, wait=0)  # its sub-fleet is collected
     assert result(f, jid)['status'] == 'failed'
     assert 'worker-3' not in path.read_text()
     f.setf('worker-1', state='idle')

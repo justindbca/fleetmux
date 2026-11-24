@@ -63,6 +63,7 @@ def test_escalate_keeps_the_row_open_and_reaches_the_supervisor(cf, ok_check):
     assert cf.escalation_state()['M0']['status'] == 'escalated'
 
 
+@pytest.mark.usefixtures('split_slot_keeps_its_model')  # D27: a v1 Codex slot; the masked check (see the fixture)
 def test_approve_writes_the_spawn_request_and_marks_delegated(cf, ok_check):
     parallel_m0(cf)
     report(cf, 'worker-1', escalate())
@@ -164,6 +165,7 @@ def test_child_completion_closes_the_row_and_releases_dependents(cf, ok_check):
     assert cf.escalation_finished({'task_id': 'M0'}, True) == ''  # an operator spawn: no table change
 
 
+@pytest.mark.usefixtures('split_slot_keeps_its_model')  # D27: a v1 Codex slot; the masked check (see the fixture)
 def test_plain_task_dispatch_gets_an_id_and_can_be_split(cf, ok_check):
     # §44: a dispatch item without `id` gets the next free M<n>, so any plain task can be split.
     cf.handle({'kind': 'task', 'request_id': 'r1', 'spec': {'goal': 'research report'}})
@@ -214,6 +216,7 @@ def test_broken_roster_yaml_keeps_the_last_limits(tmp_path):
 
 
 # ------------------------------------------------------------------ v2: escalate -> approve -> spawn -> done
+@pytest.mark.usefixtures('job_chains_as_before')  # D27: the split supervisor keeps the slot's model (pinned chain)
 def test_v2_escalate_approve_spawn_and_completion(tree, monkeypatch):
     t, f = tree, tree.f
     monkeypatch.setattr(subfleet, 'default_launch', no_launch)

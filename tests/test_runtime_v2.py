@@ -159,8 +159,26 @@ def test_strict_identity_settlement_does_not_publish_or_release(fx, field, value
 def test_aborted_candidate_holds_active_pel_without_success(fx, change):
     req(fx); fx.pump(); env = receive(fx, 'worker-1')
     settle(fx, 'worker-1', env, **change)
-    assert result(fx)['status'] == 'failed'
+    if change.get('aborted'):
+        # Rulings 14 / 23 (design section 24 "Held requeue"): a service request dispatched to a worker and
+        # interrupted (cause aborted, listed in held_requeue_causes) holds only its slot; nothing is published and the
+        # fleet is not paused until the daemon re-runs it or gives up. The candidate is still never applied.
+        assert fx.r.get(fleet.RESULT + 'r1') is None and fx.agent('worker-1').get('requeue_due') and not fx.paused()
+    else:  # failed / unfinished are not listed in held_requeue_causes: published failed and paused at once
+        assert result(fx)['status'] == 'failed' and fx.paused()
     assert fx.agent('worker-1')['state'] == 'held'
+    assert fx.v2.bus.slot_state('worker-1')['pel_count'] == 1
+
+
+def test_aborted_request_that_may_not_be_replayed_is_published_failed_and_pauses(fx):
+    """Ruling 23: the same interruption on a request that may not be re-run (replay: false) keeps today's behaviour."""
+    spec = dict(id='r1', payload={'message': 'x'}, reply={'required': ['reply'], 'allowed': ['reply']}, to='worker-1',
+                replay=False)
+    event(fx, dict(kind='request', request_id='cmd-r1', spec=spec))
+    fx.pump(); env = receive(fx, 'worker-1')
+    settle(fx, 'worker-1', env, aborted=True)
+    assert result(fx)['status'] == 'failed' and fx.paused() and fx.agent('worker-1')['state'] == 'held'
+    assert not fx.agent('worker-1').get('requeue_due')
     assert fx.v2.bus.slot_state('worker-1')['pel_count'] == 1
 
 

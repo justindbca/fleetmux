@@ -435,6 +435,7 @@ def split_round(f, rid):
         assert rid + '.done' in f.split_finished(child, run)
 
 
+@pytest.mark.usefixtures('split_slot_keeps_its_model')  # D27: a v1 Codex slot; the masked check (see the fixture)
 def test_split_delegated_and_done_pushed_to_origin(fx, fake_type):
     f = fx
     ch, transport, _ = channel(f)

@@ -181,8 +181,10 @@ FS = _RealFS()
 def pause_service(r, reason, *, now=None):
     """Writes fx:service paused/reason/at (HSET {paused: 1, reason, at}, the same fields as Fleet.pause) and no
     audit row; never resumes, never touches stop_epoch, Redis errors propagate. Shared by P8h / P8n (Z9; sec-2
-    request #3)."""
-    r.hset(SERVICE, mapping={'paused': 1, 'reason': reason, 'at': time.time() if now is None else now})
+    request #3). ``cause`` kind security (Fleet.pause's cause field, docs/design.md section 24 "Pause review"): a
+    security pause is never lifted by the daemon's pause review."""
+    r.hset(SERVICE, mapping={'paused': 1, 'reason': reason, 'at': time.time() if now is None else now,
+                             'cause': json.dumps({'kind': 'security'})})
 
 
 def _text(value):

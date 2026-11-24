@@ -13,6 +13,7 @@ import pytest
 
 from test_subfleet import (adopt_child, drive, hook, result, step, stop_child_like_daemon, supervisor_texts,  # noqa: F401
                            svc, write_roster)
+from test_named_subfleet_chain import named_chain_as_before  # noqa: F401  (fixture)
 from fleetmux import fleet, named_subfleet, subfleet
 
 
@@ -41,6 +42,7 @@ def attach_up(t, name='docs', **extra):
     return rid, rec, cf
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_attach_brings_a_service_child_up_on_an_idle_worker_and_answers_its_address(root):
     t, f = root, root.f
     rid, rec, cf = attach_up(t, workers=2)
@@ -60,6 +62,7 @@ def test_attach_brings_a_service_child_up_on_an_idle_worker_and_answers_its_addr
     assert any('index the docs' in x for x in supervisor_texts(cf))
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_a_roster_reload_keeps_the_attached_child_up(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -70,6 +73,7 @@ def test_a_roster_reload_keeps_the_attached_child_up(root):
     assert subfleet.record(rec['run'])['state'] == 'running'
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_detach_takes_only_that_child_down(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -87,6 +91,7 @@ def test_detach_takes_only_that_child_down(root):
     assert again['status'] == 'rejected' and 'not an attached sub-fleet' in again['reason']
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_root_stop_takes_the_attached_child_down(root):
     t, f = root, root.f
     rid, answer = op(t, 'attach')
@@ -123,6 +128,7 @@ def test_attach_name_clash_with_a_declared_or_attached_sub_fleet_is_refused(svc)
     assert first['status'] == 'accepted' and second['status'] == 'rejected' and 'already declared' in second['reason']
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_attach_skips_a_roster_supervisor_slot_and_a_job_never_takes_its_slot(svc):
     t, f = svc, svc.f  # ops is declared on worker-1
     op(t, 'attach')
@@ -155,6 +161,7 @@ def test_no_idle_worker_adds_one_and_detach_removes_it(root):
     assert 'worker-3' not in path.read_text() and not f.r.hgetall(named_subfleet.DETACHED)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_attached_children_have_no_default_sub_fleet_cap(root):
     t, f = root, root.f
     assert subfleet.limits(f.cfg)['child_workers_max'] == 3  # a split's default
@@ -165,6 +172,7 @@ def test_attached_children_have_no_default_sub_fleet_cap(root):
     assert subfleet.record(f.run_dir / 'sub' / 'docs')['state'] == 'running'
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_attached_child_survives_in_the_store_and_its_roles_reach_the_child(root, tmp_path):
     t, f = root, root.f
     roles = tmp_path / 'roles'
@@ -193,6 +201,7 @@ def test_a_worker_added_for_an_attached_child_is_not_refused_by_the_reload(root,
     assert f.agent('worker-3').get('tmux_view') == '1'  # marked when it was created
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_detach_inside_the_request_writes_no_drain_the_tick_drains(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -202,6 +211,7 @@ def test_detach_inside_the_request_writes_no_drain_the_tick_drains(root):
     assert named_subfleet.state(f, 'docs')['state'] == 'draining'
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_a_restarted_root_daemon_keeps_the_attached_child(root):
     t, f = root, root.f
     _, rec, cf = attach_up(t)
@@ -212,6 +222,7 @@ def test_a_restarted_root_daemon_keeps_the_attached_child(root):
     assert named_subfleet.state(f, 'docs')['state'] == 'up'
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_the_op_start_sends_is_taken_by_a_real_root(root):
     from types import SimpleNamespace
     from fleetmux import join

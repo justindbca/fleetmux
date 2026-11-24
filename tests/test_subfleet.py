@@ -1159,6 +1159,9 @@ def result(f, rid):
     return json.loads(raw) if raw else None
 
 
+from test_named_subfleet_chain import named_chain_as_before  # noqa: E402,F401  (fixture; after result: it imports result from here)
+
+
 def supervisor_answers(t, rid, decision='approve', note='fine'):
     f = t.f
     step(t)
@@ -1337,6 +1340,7 @@ def domain_parent(t):
 
 @pytest.mark.parametrize('extra, want', [('', ['us_options']), ('    worker_domains: []\n', []),
                                          ('    worker_domains: [research_web]\n', ['research_web'])])
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_child_worker_domains_replaces_the_parents_floor_or_inherits_it(svc, extra, want):
     """§29 d) (user 10-14): an entry's worker_domains replaces the parent's floor ([] = none, e.g. a
     memory-extraction child that needs no trading skills); not written = the parent's, as before."""
@@ -1364,6 +1368,7 @@ def test_named_child_worker_domains_not_in_the_kit_is_rejected_by_program(svc):
 
 
 @pytest.mark.parametrize('switch', ['', 'advisor: off\n', 'advisor: on\n'])
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_child_roster_has_its_own_advisor_switch_default_off(svc, switch):
     """§29 c) (user 10-14): a sub-fleet roster may say advisor: on | off; not written = off. The parent's
     switch never reaches the child (child_config drops it)."""
@@ -1398,6 +1403,7 @@ def test_named_child_roster_advisor_value_is_checked_with_the_parent_roster(tmp_
 
 
 # §5.1 + §5.2
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_external_up_is_gated_approved_and_answered_with_the_child_address(svc):
     t, f = svc, svc.f
     rid, answer = ask(t, 'up', 'nope')
@@ -1535,6 +1541,7 @@ def launches(f):
     return out
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_down_on_the_hook_channel_hands_over_through_the_sessions_own_note(svc, monkeypatch):
     """§29 (user 10-14): return = the returned session writes a handoff note (design §4 rotation on its own
     hook channel, no typing: its rewake fallback hands the dump prompt over), then worker-1's next
@@ -1590,6 +1597,7 @@ def test_named_down_on_the_hook_channel_hands_over_through_the_sessions_own_note
     assert rec2['attempt'] == 2 and rec2['pane'] == info['pane'] and rec2['generation'] == 1
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_return_handoff_nobody_takes_falls_back_to_the_skeleton_without_holding(svc):
     """§29: no rewake left to wake the returned session: after RETURN_WAKE_S the daemon's skeleton note
     (sub-fleet name, up / down time, answered and open request ids) goes to the next generation; the
@@ -1621,6 +1629,7 @@ def test_named_return_handoff_nobody_takes_falls_back_to_the_skeleton_without_ho
     assert 'sub-fleet ops' in launch and 'Read the handoff note' in launch and 'resumed after an interruption' not in launch
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_return_with_the_session_gone_starts_the_next_generation_on_a_skeleton_note(svc):
     """§29: the delegated session died with the sub-fleet: nobody can write, the skeleton note goes
     straight to the next generation (never "resumed after an interruption")."""
@@ -1731,6 +1740,7 @@ def test_parent_resume_restarts_autostart_and_takes_back_external_ones(svc):
 
 
 # §5.6
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_rotation_gate_rotates_before_delegating(svc, monkeypatch):
     t, f = svc, svc.f
     usage = {'worker-1': (90, 100)}
@@ -1831,6 +1841,7 @@ def test_child_workers_take_entry_values_or_builtin_defaults_never_the_parents(s
 
 
 # §5.10
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_child_self_pause_shows_as_paused_in_the_parent_hash(svc):
     t, f = svc, svc.f
     _, rec, cf = bring_up(t)
@@ -2000,6 +2011,7 @@ def test_hook_waiting_on_a_vanished_child_takes_nothing_and_ends_with_the_return
     assert not [x for x in events if x.get('event') in ('settled', 'turn.settled')]
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_adopted_supervisor_goes_back_to_the_parent_channel_for_the_return_handoff(svc, monkeypatch):
     t, f = svc, svc.f
     route_on(t)
@@ -2136,6 +2148,7 @@ def test_held_adopted_supervisor_whose_session_is_gone_hands_the_sub_fleet_back(
     assert f.agent('worker-1')['generation'] == '1' and f.agent('worker-1')['state'] != 'delegated'
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the attached child's slot keeps its model
 def test_named_child_workers_start_on_the_run_default_then_switch_to_their_roster_card(svc):
     """brief-m4 §7.3: a named sub-fleet's first up starts its workers on the run default; each switches to its
     roster card once idle (roster.profile_switched). Only a split's approved cards (§44) start on the card."""

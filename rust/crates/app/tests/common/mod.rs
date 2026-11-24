@@ -257,6 +257,9 @@ pub fn spawn_server(runtime: &Path, log_dir: &Path, name: &str, env: &[(&str, &s
         .arg("--runtime")
         .arg(runtime)
         .args(["--session", SESSION])
+        // ui.language (docs/design.md §63): the texts these tests were written against; a test passes
+        // ("FLEETMUX_UI_LANGUAGE", "en") to check the English ones.
+        .env("FLEETMUX_UI_LANGUAGE", "zh-Hans")
         .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::from(out.try_clone().expect("dup output file")))

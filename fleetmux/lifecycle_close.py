@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 from fleetmux import awake, fleet_config, lifecycle, lifecycle_deliver, lifecycle_hold, paths
+from fleetmux.i18n import t
 
 LIFE = 'fx:lifecycle'  # per-run lifecycle state: started:/gate:/cap:/timeout:/held:<task id>, service_active_at
 NOTIFIER = None        # tests / embedders: callable(record) -> status string; replaces every real channel
@@ -114,6 +115,12 @@ def notify(f, event, text, policy=None):
             fh.write(json.dumps(rec, ensure_ascii=False) + '\n')
         f.log('lifecycle.notified', what=event, channel=channel, status=rec['status'])
         out.append(rec)
+    from fleetmux import notify_route
+    if out and all(x['status'] in notify_route.UNSENT for x in out):  # design.md section 24: left on no leg
+        try:
+            notify_route.record_undelivered(cfg, event, text)
+        except OSError as exc:  # a count never breaks a notice
+            f.log('notify.count_failed', level='error', error=str(exc)[:300])
     return out
 
 
@@ -166,6 +173,15 @@ def fleet_slots(f, models=False):
     task = f.task()
     return slot_record(f.cfg, {w: f.agent(w) for w in f.workers}, task.get('agent_registry'), models=models,
                        review_slot=task.get('review_slot'))
+
+
+def acceptance_verdict(f, mode, task_id, ok, problem='', claimed_by='supervisor', **extra):
+    """launch-demo brief §1.2: one audit event per "reported done -> judged by the program" point, so the number
+    of bounces can be counted across the modes (dev_task / review_loop / task_artifacts). Bookkeeping only: it
+    is written after the judgement and never changes it. ``problem`` is cut to its first line."""
+    line = (str(problem or '').strip().splitlines() or [''])[0][:500]
+    f.log('acceptance.verdict', mode=mode, task_id=task_id, ok=bool(ok), problem='' if ok else line,
+          claimed_by=claimed_by or 'supervisor', **extra)
 
 
 def task_spec(task):
@@ -352,16 +368,32 @@ def completion_problem(f, policy, task, spec):
             f.log('lifecycle.gate', ok=rec['ok'], problem=rec.get('problem', ''), steps=rec.get('steps', []),
                   tests={'returncode': tests.get('returncode'), 'log': tests.get('log') or '',
                          'tail': '\n'.join((tests.get('tail') or '').splitlines()[-20:])})
+            # written with lifecycle.gate: the gate:<tid> cache makes it once per task
+            acceptance_verdict(f, 'dev_task', task['id'], rec['ok'], rec.get('problem', ''))
         else:
             rec = json.loads(raw)
         return None if rec['ok'] else 'dev_task done_when not met: ' + rec.get('problem', '')
     if name == 'review_loop' and spec.get('review_file'):
         verdict, _, problem = lifecycle_deliver.load_verdict(f.workspace(), spec['review_file'], fleet_slots(f))
         if verdict is None:
-            return 'review_loop done_when not met: ' + problem
-        problem = lifecycle_deliver.review_problem(verdict)
-        return 'review_loop done_when not met: ' + problem if problem else None
+            result = 'review_loop done_when not met: ' + problem
+        else:
+            problem = lifecycle_deliver.review_problem(verdict)
+            result = 'review_loop done_when not met: ' + problem if problem else None
+        _review_verdict_once(f, task['id'], verdict, result)
+        return result
     return None
+
+
+def _review_verdict_once(f, tid, verdict, result):
+    """review_loop has no gate cache and a job child re-enters completion_problem every tick: log the verdict
+    only when this judgement differs from the last one logged (round / verdict / outcome). Never touches the
+    result."""
+    sig = json.dumps([(verdict or {}).get('round'), (verdict or {}).get('verdict'), result], ensure_ascii=False)
+    if _hget(f, 'verdict:' + tid) == sig:
+        return
+    _hset(f, **{'verdict:' + tid: sig})
+    acceptance_verdict(f, 'review_loop', tid, result is None, (result or '').split(': ', 1)[-1])
 
 
 # ------------------------------------------------------------------ after retirement (RuntimeV2.run tail)
@@ -463,10 +495,11 @@ def all_gone(mgr, meta, wait=10.0):
 
 
 SIDEBAR_VIA = 'fleetmux-sidebar'  # result.json closed_via of a sidebar × close (§12.1 / §13.5)
-CLOSED_LINE1 = '已关闭 · 可恢复'  # the grey card's first line after such a close (§13.3)
-TREE_CLOSED_LINE1 = '已收回 · 随根关闭'  # a sub-fleet card closed with its root (brief-m4 §9 defect A)
-TREE_CLOSED_LINE2 = '只读，可看记录'  # same second line as a reclaimed sub-fleet card (fleetmux_sidebar._child)
-STOPPED_STATE, STOPPED_LINE1 = 'stopped', '已停止'  # a stopped run that is no ↺ history entry: grey, no ×, no ↺
+# Card texts (key, English; ui.language, docs/design.md §63), looked up when the card is written.
+CLOSED_LINE1 = ('card.closed.line1', 'closed, restorable')  # the grey card's first line after such a close (§13.3)
+TREE_CLOSED_LINE1 = ('card.tree_closed.line1', 'reclaimed, closed with root')  # closed with its root (m4 §9 A)
+TREE_CLOSED_LINE2 = ('sidebar.readonly.line2', 'read-only, log kept')  # as a reclaimed sub-fleet card (sidebar._child)
+STOPPED_STATE, STOPPED_LINE1 = 'stopped', ('card.stopped.line1', 'stopped')  # no ↺ history entry: grey, no ×, no ↺
 RESUME_ENV_CFG = (('FLEETMUX_HOME', 'fleet_home'), ('FLEETMUX_STATE', 'cmux_state_dir'),
                   ('FLEETMUX_CONFIG', 'private_config'))  # the run's pinned locations
 RESUME_ENV_OS = ('FLEETMUX_BIN', 'FLEETMUX_THEME', 'PATH')  # what the ↺ pane inherits
@@ -521,7 +554,7 @@ def subtree_card_ids(cfg):
     return ids
 
 
-def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=CLOSED_LINE1):
+def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=None):
     """Rewrite this run's card in kv ``sidebar``: grey dot, ``已关闭 · 可恢复`` (§13.5) — or the given ``state`` /
     ``line1`` (:func:`retire_cards`).
 
@@ -529,6 +562,7 @@ def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=CLOSED_LI
     running / paused / stopping becomes ``reclaimed`` / ``已收回 · 随根关闭`` / ``只读，可看记录`` - the tree was
     closed with its root (brief-m4 §9 defect A). A card already reclaimed and every card outside the tree keep
     their text; the next daemon push after ↺ rebuilds the tree cards from the records."""
+    line1 = t(*CLOSED_LINE1) if line1 is None else line1
     get, put = getattr(mgr, 'kv_get', None), getattr(mgr, '_kv_set', None)
     if get is None or put is None:
         return False
@@ -544,7 +578,7 @@ def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=CLOSED_LI
             card.update(state=state, line1=line1)
             changed = True
         elif isinstance(card, dict) and card.get('id') in subtree and card.get('state') in LIVE_CARD_STATES:
-            card.update(state='reclaimed', line1=TREE_CLOSED_LINE1, line2=TREE_CLOSED_LINE2)
+            card.update(state='reclaimed', line1=t(*TREE_CLOSED_LINE1), line2=t(*TREE_CLOSED_LINE2))
             changed = True
     if changed:
         put('sidebar', json.dumps(data, ensure_ascii=False, separators=(',', ':')))
@@ -629,7 +663,7 @@ def retire_cards(mgr, cfg, run, res):
     subtree = subtree_card_ids(cfg) - {run.name}
     line1 = fleetmux_history._line1(res) if res.get('resumable') is True else None
     if line1 is None:
-        return mark_sidebar_closed(mgr, run.name, subtree, state=STOPPED_STATE, line1=STOPPED_LINE1)
+        return mark_sidebar_closed(mgr, run.name, subtree, state=STOPPED_STATE, line1=t(*STOPPED_LINE1))
     mark_sidebar_closed(mgr, run.name, subtree, line1=line1)
     return register_history(mgr, cfg, run, dict(resume_entry(cfg, run, res), line1=line1))
 

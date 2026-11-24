@@ -30,6 +30,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::backend::ByteBackend;
+use crate::i18n::{Lang, tr, tr_fmt};
 use crate::server::State;
 use crate::server::view::{Selection, Viewer};
 
@@ -346,7 +347,7 @@ fn paint(
         if let Some(title) = reclaimed_title(state) {
             for g in [Group::Supervisor, Group::Workers] {
                 if layout.selected(g).is_none() {
-                    draw_read_only_banner(&mut buf, group_rect(&rects, g), &title);
+                    draw_read_only_banner(&mut buf, group_rect(&rects, g), &title, state.side.lang);
                 }
             }
         }
@@ -492,18 +493,18 @@ fn reclaimed_title(state: &State) -> Option<String> {
 }
 
 /// M4 (design m4 R7): the three lines of a read-only page, centred in the group rectangle `r` (clipped to it).
-fn draw_read_only_banner(buf: &mut Buffer, r: LRect, title: &str) {
+fn draw_read_only_banner(buf: &mut Buffer, r: LRect, title: &str, lang: Lang) {
     let lines = [
         (
-            format!("子 fleet {title} 已收回 · 只读"),
+            tr_fmt(lang, "banner.reclaimed.title", "sub-fleet {title} reclaimed, read-only", &[("title", title)]),
             Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
         (
-            "下面是它的运行记录；点侧栏别的卡片切回".to_string(),
+            tr(lang, "banner.reclaimed.log", "Its run log is below. Click another card in the sidebar to switch back."),
             Style::new().fg(Color::Gray),
         ),
         (
-            "同名再起时这一页会重新启用".to_string(),
+            tr(lang, "banner.reclaimed.reuse", "This page comes back when the same name starts again."),
             Style::new().fg(Color::DarkGray),
         ),
     ];
@@ -553,8 +554,9 @@ fn draw_placeholder(
     let white = Style::new()
         .fg(Color::White)
         .add_modifier(Modifier::BOLD);
+    let lang = side.lang;
     let exit = (
-        super::sidebar::PLACEHOLDER_EXIT.to_string(),
+        tr(lang, "placeholder.exit", super::sidebar::PLACEHOLDER_EXIT),
         Style::new().fg(Color::DarkGray),
     );
     let lines = if super::sidebar::just_closed(data) {
@@ -567,22 +569,18 @@ fn draw_placeholder(
             .unwrap_or_default();
         vec![
             (
-                format!(
-                    "{}{name}{}",
-                    super::sidebar::PLACEHOLDER_TITLE_HEAD,
-                    super::sidebar::PLACEHOLDER_TITLE_TAIL
-                ),
+                tr_fmt(lang, "placeholder.closed", super::sidebar::PLACEHOLDER_TITLE, &[("title", name)]),
                 white,
             ),
             (
-                super::sidebar::PLACEHOLDER_RESTORE.to_string(),
+                tr(lang, "placeholder.restore", super::sidebar::PLACEHOLDER_RESTORE),
                 Style::new().fg(Color::Gray),
             ),
             exit,
         ]
     } else {
         vec![
-            (super::sidebar::PLACEHOLDER_NO_FLEET.to_string(), white),
+            (tr(lang, "placeholder.no_fleet", super::sidebar::PLACEHOLDER_NO_FLEET), white),
             exit,
         ]
     };
@@ -929,20 +927,33 @@ fn status(state: &State, buf: &mut Buffer, r: LRect) {
         Group::Lower => "lower",
         Group::Workers => "workers",
     };
+    let lang = state.side.lang;
     let mut text = String::from(" fleetmux");
     // S1b (plan §11.1): the close request's state stays on the line until it changes, then the one-shot toolbar
     // notice (cleared by the next key press or mouse press).
     match &state.side.stop {
         super::sidebar::Stop::None => {}
-        super::sidebar::Stop::Requested => text.push_str("  已请求关闭，等 daemon…"),
-        super::sidebar::Stop::Accepted => text.push_str("  正在关闭…"),
-        super::sidebar::Stop::Refused(reason) => {
-            text.push_str(&format!("  关闭被拒：{reason}"))
+        super::sidebar::Stop::Requested => {
+            text.push_str("  ");
+            text.push_str(&tr(lang, "top.stop.requested", "close requested, waiting for the daemon..."));
         }
+        super::sidebar::Stop::Accepted => {
+            text.push_str("  ");
+            text.push_str(&tr(lang, "top.stop.accepted", "closing..."));
+        }
+        super::sidebar::Stop::Refused(reason) => {
+            text.push_str("  ");
+            text.push_str(&tr_fmt(lang, "top.stop.refused", "close refused: {reason}", &[("reason", reason)]));
+        }
+    }
+    // Design section 19: a child card's confirmed close stays on the line until the root daemon answers.
+    if let super::sidebar::ChildStop::Requested(_) = &state.side.child_stop {
+        text.push_str("  已请求关闭子 fleet，等 daemon…");
     }
     // S2b (plan §13.6-4): the restore pane runs until kv `restorable` is cleared (the daemon's cards are back).
     if state.side.resuming {
-        text.push_str("  正在恢复…");
+        text.push_str("  ");
+        text.push_str(&tr(lang, "top.resuming", "restoring..."));
     }
     // A42-LINUX-RESTORE-FAILURE-04: a failed restore keeps its reason on the line until the operator retries.
     if let crate::server::view::ResumeAttempt::Failed { reason } = &state.resume {
@@ -980,7 +991,11 @@ fn status(state: &State, buf: &mut Buffer, r: LRect) {
     text.push_str(&format!("  {hint} prefix  {hint} d detach"));
     if state.side.data.is_some() {
         // S1 (plan §2.2): the sidebar's toggle key, only while the daemon has pushed a sidebar.
-        let what = if state.side.hidden { "显示侧栏" } else { "隐藏侧栏" };
+        let what = if state.side.hidden {
+            tr(lang, "bottom.sidebar.show", "show sidebar")
+        } else {
+            tr(lang, "bottom.sidebar.hide", "hide sidebar")
+        };
         text.push_str(&format!("  {hint} s {what}"));
     }
     // M4 (design m4 R6): a child page names itself right before `focus:` (the root page adds nothing).

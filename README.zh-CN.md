@@ -4,7 +4,22 @@
 
 [English](README.md) · **中文** · [Français](README.fr.md) · [Español](README.es.md)
 
-**跨机器、跨 harness 的常驻 AI 团队。** 跑的是一支团队，而不是一个助理：fleetmux 把一个监工（supervisor）agent 和 N 个 worker agent 作为看得见的终端会话跑起来。
+**跨机器、跨 harness 的常驻 AI 团队。**
+
+- 交付由程序验收，不采信模型自报：没通过检查的「已完成」会被打回给 worker。
+- agent 常驻运行，上下文快满的会话自动交接给新会话。
+- 模型撞上用量墙时，该槽位自动换到下一个可用模型。
+
+![fleetmux demo：脚本演员自称完成，程序判不通过并打回，改好后通过](https://raw.githubusercontent.com/justindbca/fleetmux/main/docs/images/fleetmux-demo.svg)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+fleetmux demo
+```
+
+<!-- numbers -->
+
+跑的是一支团队，而不是一个助理：fleetmux 把一个监工（supervisor）agent 和 N 个 worker agent 作为看得见的终端会话跑起来。
 监工只判断、只派活；worker 只执行；任务什么时候算完成，由 daemon 判定，而不是由模型说了算。上下文快满的会话会写一份交接单，
 换一个新会话接着干，所以一个任务可以跨很多个模型会话连续跑几个小时。同一个 fleet 里可以混用官方 **Claude Code**、官方
 **Codex CLI**、**Pi**（Codex 模型与本地模型）和 **opencode**，任意「监工 × worker」组合均可，前提是该组合已通过真跑冒烟

@@ -4,7 +4,22 @@
 
 [English](README.md) · [中文](README.zh-CN.md) · [Français](README.fr.md) · **Español**
 
-**El equipo de IA siempre activo, en varias máquinas y con varios harnesses.** Un equipo, no un único asistente: fleetmux ejecuta un agente supervisor y N agentes workers como sesiones de
+**El equipo de IA siempre activo, en varias máquinas y con varios harnesses.**
+
+- La entrega la acepta el programa, no el informe del propio modelo: una declaración que no pasa la verificación vuelve al worker.
+- Los agentes funcionan de forma continua, y una sesión cerca de su límite de contexto cede el relevo automáticamente a una sesión nueva.
+- Cuando un modelo alcanza su límite de uso, el puesto pasa al siguiente modelo disponible.
+
+![fleetmux demo: agentes con guion dicen haber terminado, el programa lo rechaza, el trabajo corregido se acepta](https://raw.githubusercontent.com/justindbca/fleetmux/main/docs/images/fleetmux-demo.svg)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/justindbca/fleetmux/main/scripts/install.sh | bash
+fleetmux demo
+```
+
+<!-- numbers -->
+
+Un equipo, no un único asistente: fleetmux ejecuta un agente supervisor y N agentes workers como sesiones de
 terminal visibles. El supervisor solo evalúa y reparte el trabajo; los workers solo ejecutan; quien decide cuándo está
 terminado el trabajo es un daemon, no los modelos. Una sesión que se acerca a su límite de contexto cede el relevo a una
 sesión nueva mediante una nota de traspaso escrita, de modo que una misma tarea puede durar horas a lo largo de muchas

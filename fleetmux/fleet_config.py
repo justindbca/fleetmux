@@ -9,10 +9,14 @@ and the matrix change only in the shipped file).
 An explicit path (``--prompt-table``, a test table) may be either this format or a bare table:
 a file whose top-level keys are all block names is read as blocks, anything else is the table itself.
 """
+import contextlib
 import copy
+import fcntl
 import os
 import re
+import tempfile
 import threading
+import time
 from pathlib import Path
 
 from fleetmux import paths
@@ -23,9 +27,10 @@ USER_ENV = 'FLEETMUX_CONFIG'
 USER_FILE = None  # None: paths.default_home() / 'fleet.yaml' (never follows FLEETMUX_HOME), resolved on use
 BLOCKS = ('cli_pairs', 'lifecycle_modes', 'walls', 'watchdog_prompts', 'capability_matrix', 'models',
           'profiles', 'accounts', 'tools', 'pi_context', 'daemon_watch', 'fresh_dispatch', 'dsh',
-          'discovery', 'remote', 'session_env', 'job_subfleet', 'gui', 'bare', 'relay')
+          'discovery', 'remote', 'session_env', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose',
+          'ui')
 USER_BLOCKS = ('accounts', 'tools', 'walls', 'lifecycle_modes', 'pi_context', 'daemon_watch', 'fresh_dispatch',
-               'discovery', 'remote', 'job_subfleet', 'gui', 'bare', 'relay')
+               'discovery', 'remote', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose', 'ui')
 
 NONE = 'none'  # recorded when there is no private file
 
@@ -54,6 +59,80 @@ def user_path():
     if _pinned is not None:
         return None if _pinned == NONE else Path(_pinned)
     return Path(os.environ.get(USER_ENV) or USER_FILE or paths.default_home() / 'fleet.yaml').expanduser()
+
+
+def write_target():
+    """The private file a write-back goes to: the one this process reads, else (a run that recorded none) the one the
+    environment names ($FLEETMUX_CONFIG, else the default); it is created when missing."""
+    return user_path() or Path(os.environ.get(USER_ENV) or USER_FILE or paths.default_home() / 'fleet.yaml').expanduser()
+
+
+LOCK_TIMEOUT = 10.0  # seconds a writer of the private file waits for its lock
+
+
+@contextlib.contextmanager
+def user_file_lock(path=None, timeout=LOCK_TIMEOUT):
+    """Exclusive lock on ``<private file>.lock``: every writer of the private file (the decompose and relay
+    write-backs) reads, changes and replaces it under this lock, so neither loses the other's change."""
+    target = Path(path) if path is not None else write_target()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(target.with_name(target.name + '.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise ValueError(str(target) + ' is locked by another writer') from None
+                time.sleep(.05)
+        yield target
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
+
+
+def _splice(text, name, value):
+    """``text`` with its top-level block ``name`` replaced by ``value`` (appended when absent); every other line,
+    comments included, stays as it is."""
+    import yaml
+    lines = text.splitlines(keepends=True)
+    top = [i for i, line in enumerate(lines) if re.match(r'[A-Za-z_][\w-]*\s*:', line)]
+    start = next((i for i in top if re.match(re.escape(name) + r'\s*:', lines[i])), None)
+    dumped = yaml.safe_dump({name: value}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    if start is None:
+        return text + ('' if not text or text.endswith('\n') else '\n') + dumped
+    end = next((i for i in top if i > start), len(lines))
+    while end - 1 > start and not lines[end - 1].startswith((' ', '\t')) and (
+            not lines[end - 1].strip() or lines[end - 1].startswith('#')):
+        end -= 1  # blank lines and column-0 comments in front of the next block belong to it
+    return ''.join(lines[:start]) + dumped + ''.join(lines[end:])
+
+
+def write_user_block(name, value, path=None):
+    """Replace block ``name`` of the private file (never the shipped one) under the private file's lock: re-read,
+    splice that one block, check the result parses to the same other blocks, write a 0600 temporary file and
+    rename it over the file. Returns the path."""
+    import yaml
+    if name not in USER_BLOCKS:
+        raise ValueError('block ' + name + ' may not be written to the private file')
+    target = Path(path).expanduser() if path is not None else write_target()
+    if target.resolve() == SHIPPED.resolve():
+        raise ValueError('a block is written back only to the private fleet.yaml, never the shipped one')
+    with user_file_lock(target):
+        text = target.read_text(encoding='utf-8') if target.is_file() else ''
+        old = (yaml.safe_load(text) or {}) if text.strip() else {}
+        new_text = _splice(text, name, value)
+        new = yaml.safe_load(new_text) or {}
+        if not isinstance(old, dict) or new.get(name) != value or {k: v for k, v in new.items() if k != name} != {
+                k: v for k, v in old.items() if k != name}:
+            raise ValueError('cannot replace block ' + name + ' of ' + str(target) + ' in place')
+        fd, tmp = tempfile.mkstemp(prefix=target.name + '.', dir=target.parent)
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(new_text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+    return target
 
 
 def _stat(path):
@@ -134,7 +213,18 @@ def fresh_hint_ratio():
     return value
 
 
-JOB_SUBFLEET = {'workers': 2, 'supervisor_profile': None, 'worker_profiles': [], 'hours': 4}
+JOB_SUBFLEET = {'workers': 2, 'supervisor_profile': None, 'worker_profiles': [], 'hours': 4,
+                'supervisor': None, 'worker': None}
+
+
+def check_chain(value, where, absent='null'):
+    """A model chain (docs/design.md §58): None, or a non-empty list of non-empty pattern strings; ValueError else."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(p, str) and p.strip() for p in value):
+        raise ValueError(where + ' must be a non-empty list of model patterns (e.g. ["astra"]) or ' + absent
+                         + ', got ' + repr(value))
+    return list(value)
 
 
 def job_subfleet():
@@ -144,6 +234,14 @@ def job_subfleet():
     if not isinstance(raw, dict) or set(raw) - set(JOB_SUBFLEET):
         raise ValueError('fleet.yaml#job_subfleet must be a mapping with only: ' + ', '.join(JOB_SUBFLEET))
     out = dict(JOB_SUBFLEET, **raw)
+    for key in ('supervisor', 'worker'):
+        out[key] = check_chain(out[key], 'fleet.yaml#job_subfleet.' + key)
+    if out['supervisor'] is not None and out['supervisor_profile'] is not None:
+        raise ValueError('fleet.yaml#job_subfleet sets both supervisor (a model chain) and supervisor_profile (a card); '
+                         'set one of them to null')
+    if out['worker'] is not None and out['worker_profiles']:
+        raise ValueError('fleet.yaml#job_subfleet sets both worker (a model chain) and worker_profiles (cards); '
+                         'set worker to null or worker_profiles to []')
     out['worker_profiles'] = list(out['worker_profiles'] or [])
     workers, hours = out['workers'], out['hours']
     if type(workers) is not int or workers < 1:

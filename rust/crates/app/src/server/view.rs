@@ -41,6 +41,7 @@ use super::State;
 use super::mouse::{self, Action, ClickMemory};
 use super::scroll::{self, PageAction};
 use crate::attach::clipboard;
+use crate::i18n::{Lang, tr, tr_fmt};
 use crate::attach::input::{InputScanner, Token, split_keys};
 use crate::render::draw::{self, DrawnPanes, draw_cached};
 use crate::render::sidebar;
@@ -830,16 +831,20 @@ pub(crate) fn layout_changed(state: &mut State) {
 }
 
 /// The toolbar's one-shot notices (plan §11.1): each button that has no action yet says when its milestone opens.
-const SWITCH_NOTICE: &str = "切换 fleet：S3 开放";
-const CHILD_CLOSE_NOTICE: &str = "关闭子 fleet：S3 开放";
+const SWITCH_NOTICE: (&str, &str) = ("notice.switch_later", "Switching fleets: available in S3");
+const CHILD_CLOSE_NOTICE: (&str, &str) = ("notice.child_close_refused", "This sub-fleet cannot be closed from the sidebar");
+/// Design section 19: one child close request at a time; a second card's `×` says so instead of opening a box.
+const CHILD_PENDING_NOTICE: (&str, &str) =
+    ("notice.child_close_pending", "The previous sub-fleet close request is still being handled");
 /// M4 (design m4 R8): a card names a page (`page`) the server does not have.
-const NO_PAGE_NOTICE: &str = "这个 fleet 没有画面可看";
+const NO_PAGE_NOTICE: (&str, &str) = ("notice.no_page", "This fleet has no screen to show");
 /// Plan §13.6-2: the one-shot answer of the topbar's `↺`, `^b r` and a card's `↺` when kv `restorable` names no
 /// run for it (S2b replaces the S1f `REOPEN_NOTICE`).
-const NOTHING_TO_RESTORE: &str = "没有可恢复的 fleet";
+const NOTHING_TO_RESTORE: (&str, &str) = ("notice.nothing_to_restore", "No fleet to restore");
 /// Plan §18.2 / §18.7-4: one fleet per session — while a card is still `running` / `paused` / `stopping` a second
 /// `↺` only says this. The check comes after the nothing-to-restore one, which §18.7-4 fixes the order of.
-const RESTORE_WHILE_RUNNING: &str = "先关闭正在运行的 fleet 再恢复";
+const RESTORE_WHILE_RUNNING: (&str, &str) =
+    ("notice.restore_while_running", "Close the running fleet before restoring");
 /// Title of the pane a restore spawns (plan §13.3 / §13.5): the `start --resume` output stays visible in it.
 const RESUME_TITLE: &str = "resume";
 
@@ -1092,6 +1097,12 @@ fn notice(state: &mut State, text: &str) {
     state.viewers.mark_dirty();
 }
 
+/// [`notice`] of a `(key, English)` text in the interface language (docs/design.md §63).
+fn notice_key(state: &mut State, (key, en): (&str, &str)) {
+    let text = tr(state.side.lang, key, en);
+    notice(state, &text);
+}
+
 /// Drop the one-shot toolbar notice if there is one (plan §11.1: the next key press or mouse press clears it).
 fn clear_notice(state: &mut State) {
     if state.side.notice.take().is_some() {
@@ -1138,11 +1149,11 @@ fn select_card(state: &mut State, j: usize) {
     match card {
         Some((Some(page), _)) if page != state.fleet_pages.current => {
             if !select_page(state, &page) {
-                notice(state, NO_PAGE_NOTICE);
+                notice_key(state, NO_PAGE_NOTICE);
             }
         }
         Some((Some(_), _)) => fleet_view(state),
-        Some((None, true)) => notice(state, SWITCH_NOTICE),
+        Some((None, true)) => notice_key(state, SWITCH_NOTICE),
         _ => fleet_view(state),
     }
 }
@@ -1251,9 +1262,96 @@ pub(crate) fn close_confirm(state: &mut State) {
     if !state.side.confirm {
         return;
     }
-    state.side.confirm = false;
-    state.side.close_bash = None;
+    close_box(&mut state.side);
     state.viewers.forget_drawn();
+}
+
+/// The box closes without writing anything (any key but `y`, a paste, a press outside the confirm button).
+pub(crate) fn close_box(side: &mut sidebar::Side) {
+    side.confirm = false;
+    side.close_bash = None;
+    side.close_child = None;
+}
+
+/// Design section 19: a child card's `×` opens its close box (`Ok`), or says why not (`Err`, the notice): the card has
+/// no `×` (no `close` from the root daemon, not running, or its request is already out; the root card keeps its own
+/// box, [`open_confirm`]), or another child request still waits for the daemon's answer.
+pub(crate) fn open_child_box(side: &mut sidebar::Side, j: usize) -> Result<(), (&'static str, &'static str)> {
+    let card = side.data.as_ref().and_then(|d| d.fleets.get(j)).cloned();
+    let Some(e) = card.filter(|e| j > 0 && e.page.as_deref().is_some_and(|p| !p.is_empty())) else {
+        return Err(CHILD_CLOSE_NOTICE);
+    };
+    if !sidebar::closeable(side, &e) {
+        return Err(CHILD_CLOSE_NOTICE);
+    }
+    if matches!(side.child_stop, sidebar::ChildStop::Requested(_)) {
+        return Err(CHILD_PENDING_NOTICE);
+    }
+    side.close_bash = None;
+    side.close_child = Some(e.id);
+    side.confirm = true;
+    Ok(())
+}
+
+/// `y` in a child card's box (design section 19): write the root-only kv `child_stop`
+/// `{"v":1,"state":"requested","id","page","at"}` for the root daemon, hide that card's `×` until it answers and
+/// close the box. False (nothing written) when no child box is open.
+pub(crate) fn confirm_child(side: &mut sidebar::Side, kv: &mut BTreeMap<String, String>, at: u64) -> bool {
+    let Some(id) = side.close_child.clone() else {
+        return false;
+    };
+    let page = side
+        .data
+        .as_ref()
+        .and_then(|d| d.fleets.iter().find(|e| e.id == id))
+        .and_then(|e| e.page.clone())
+        .unwrap_or_default();
+    kv.insert(
+        "child_stop".to_string(),
+        serde_json::json!({"v": 1, "state": "requested", "id": id, "page": page, "at": at}).to_string(),
+    );
+    side.child_stop = sidebar::ChildStop::Requested(id);
+    close_box(side);
+    true
+}
+
+/// kv `child_stop` as [`sidebar::ChildStop`] (design section 19): `requested` / `accepted` / `refused` with the card
+/// `id` and the daemon's `reason`; anything else is no request.
+pub(crate) fn parse_child_stop(text: &str) -> sidebar::ChildStop {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return sidebar::ChildStop::None;
+    };
+    let id = value.get("id").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    let reason = value.get("reason").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    match value.get("state").and_then(|s| s.as_str()) {
+        Some("requested") => sidebar::ChildStop::Requested(id),
+        Some("accepted") => sidebar::ChildStop::Accepted(id, reason),
+        Some("refused") => sidebar::ChildStop::Refused(id, reason),
+        _ => sidebar::ChildStop::None,
+    }
+}
+
+/// Re-read kv `child_stop` into [`State::side`] (design section 19): the root daemon's answer gives the card its `×`
+/// back (refused) or turns it `stopping` with the next cards (accepted); either way it is a one-shot notice.
+pub(crate) fn sync_child_stop(state: &mut State) {
+    let stop = state
+        .kv
+        .get("child_stop")
+        .map(|v| parse_child_stop(v))
+        .unwrap_or_default();
+    if state.side.child_stop == stop {
+        return;
+    }
+    match &stop {
+        sidebar::ChildStop::Accepted(_, note) => {
+            let text = if note.is_empty() { "子 fleet 正在关闭".to_string() } else { format!("子 fleet 正在关闭：{note}") };
+            notice(state, &text);
+        }
+        sidebar::ChildStop::Refused(_, reason) => notice(state, &format!("关闭子 fleet 被拒：{reason}")),
+        _ => {}
+    }
+    state.side.child_stop = stop;
+    state.viewers.mark_dirty();
 }
 
 /// `y` in the close box (plan §2.5 / §11.3): write kv `stop_request` for this fleet's daemon, remember that the
@@ -1270,6 +1368,12 @@ fn confirm_stop(state: &mut State, kill: &mut Option<PaneId>) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Design section 19: a child card's box asks the root daemon to stop that sub-fleet, never this fleet.
+    if confirm_child(&mut state.side, &mut state.kv, at) {
+        state.viewers.forget_drawn();
+        state.viewers.mark_dirty();
+        return;
+    }
     state.kv.insert(
         "stop_request".to_string(),
         format!(r#"{{"v":1,"state":"requested","at":{at}}}"#),
@@ -1352,7 +1456,7 @@ pub(crate) fn reopen(state: &mut State) {
         .and_then(|r| r.runs.first().cloned());
     match run {
         Some(run) => restore_run(state, &run),
-        None => notice(state, NOTHING_TO_RESTORE),
+        None => notice_key(state, NOTHING_TO_RESTORE),
     }
 }
 
@@ -1374,7 +1478,7 @@ pub(crate) fn restore(state: &mut State, i: usize) {
     });
     match run {
         Some(run) => restore_run(state, &run),
-        None => notice(state, NOTHING_TO_RESTORE),
+        None => notice_key(state, NOTHING_TO_RESTORE),
     }
 }
 
@@ -1384,7 +1488,7 @@ pub(crate) fn restore(state: &mut State, i: usize) {
 /// is running (or its pane still exists) another click spawns nothing: one restore at a time.
 fn restore_run(state: &mut State, run: &sidebar::RestoreRun) {
     if state.side.data.as_ref().is_some_and(sidebar::has_live_card) {
-        notice(state, RESTORE_WHILE_RUNNING);
+        notice_key(state, RESTORE_WHILE_RUNNING);
         return;
     }
     if state.side.resuming || state.panes.list().iter().any(|p| p.title == RESUME_TITLE) {
@@ -1440,7 +1544,7 @@ pub(crate) fn resume_exited(state: &mut State, exited: &super::pane::Exited) {
             state.viewers.mark_dirty();
         }
         Some(status) => {
-            let reason = exit_reason(status, &exited.tail, exited.pty_open);
+            let reason = exit_reason(status, &exited.tail, exited.pty_open, state.side.lang);
             log(
                 "WARN",
                 &format!(
@@ -1470,7 +1574,8 @@ pub(crate) fn resume_exited(state: &mut State, exited: &super::pane::Exited) {
 pub(crate) fn restore_cancelled(state: &mut State) {
     state.resume = ResumeAttempt::Idle;
     state.side.resuming = false;
-    notice(state, "恢复已取消");
+    let text = tr(state.side.lang, "notice.restore_cancelled", "Restore cancelled");
+    notice(state, &text);
     state.viewers.mark_dirty();
 }
 
@@ -1484,7 +1589,7 @@ fn exit_word(status: &portable_pty::ExitStatus) -> String {
 
 /// The status line's one-line summary of a failed restore: the last non-empty line of the pane's output (what the
 /// operator can act on), else the exit code. Whitespace is collapsed and the text is bounded.
-fn exit_reason(status: &portable_pty::ExitStatus, tail: &str, pty_open: bool) -> String {
+fn exit_reason(status: &portable_pty::ExitStatus, tail: &str, pty_open: bool, lang: Lang) -> String {
     let line = tail
         .lines()
         .rev()
@@ -1494,15 +1599,22 @@ fn exit_reason(status: &portable_pty::ExitStatus, tail: &str, pty_open: bool) ->
     let text = if line.is_empty() {
         // `pty_open`: a background child still holds the PTY, so "no output" would be a claim we cannot make.
         if pty_open {
-            format!(
-                "恢复失败：恢复进程退出（{}），没有已捕获输出（PTY 未关闭）",
-                exit_word(status)
+            tr_fmt(
+                lang,
+                "notice.restore_failed.no_capture",
+                "restore failed: the restore process exited ({status}), no captured output (PTY not closed)",
+                &[("status", &exit_word(status))],
             )
         } else {
-            format!("恢复失败：恢复进程退出（{}），没有输出", exit_word(status))
+            tr_fmt(
+                lang,
+                "notice.restore_failed.no_output",
+                "restore failed: the restore process exited ({status}), no output",
+                &[("status", &exit_word(status))],
+            )
         }
     } else {
-        format!("恢复失败：{line}")
+        tr_fmt(lang, "notice.restore_failed", "restore failed: {line}", &[("line", line)])
     };
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.chars().count() > 160 {
@@ -1842,11 +1954,14 @@ fn mouse_input(state: &mut State, id: ViewerId, report: &[u8], kill: &mut Option
                 sidebar::SideHit::Next => side_step(state, true),
                 // S1c (plan §14.2 / §14.5-3): `j ≥ fleets.len()` is a bash card — its `×` closes that page (asking
                 // first while a program runs in it). The root fleet's `×` keeps the S2 close box; a child fleet's
-                // still waits for S3.
+                // opens its own box (design section 19), confirmed only by `y`.
                 sidebar::SideHit::Close(j) => match sidebar::bash_at(&state.side, j).cloned() {
                     Some(pane) => close_bash(state, pane, kill),
                     None if j == 0 => open_confirm(state),
-                    None => notice(state, CHILD_CLOSE_NOTICE),
+                    None => match open_child_box(&mut state.side, j) {
+                        Ok(()) => state.viewers.forget_drawn(),
+                        Err(text) => notice_key(state, text),
+                    },
                 },
                 // S1c (plan §14.2 / §14.5-2): two left presses within `mouse::DOUBLE_CLICK` on the sidebar's empty
                 // card area open a bash page. Only the blank area counts: a card, the topbar and the status line are
@@ -2582,6 +2697,7 @@ mod tests {
             line1: String::new(),
             line2: String::new(),
             page: page.map(str::to_string),
+            close: None,
         };
         let mut d = sidebar::Data {
             current: "root".into(),
@@ -2601,5 +2717,62 @@ mod tests {
         assert_eq!(percent_decode("file%3A%2F%2F%2Fr%2Fsub%2FM0%2Fhistory.html"), "file:///r/sub/M0/history.html");
         assert_eq!(percent_decode("a+b%2"), "a b%2");
         assert_eq!(percent_decode("%e5%8f%aa"), "只");
+    }
+
+    fn child_side() -> sidebar::Side {
+        let card = |id: &str, page: &str, close: bool| {
+            let close = if close { r#","close":{"title":"关闭子 fleet「x」？","body":"取消这件 job"}"# } else { "" };
+            format!(r#"{{"id":"{id}","title":"{id}","state":"running","line1":"a","line2":"b","page":"{page}"{close}}}"#)
+        };
+        let json = format!(
+            r#"{{"v":1,"current":"r","fleets":[{},{},{}]}}"#,
+            card("r", "", false),
+            card("c", "M0", true),
+            card("d", "M1", true)
+        );
+        sidebar::Side {
+            data: Some(sidebar::parse(&json).expect("cards parse")),
+            ..sidebar::Side::default()
+        }
+    }
+
+    /// Design section 19: a child card's box writes kv `child_stop` only on `y`; any other key, a paste or a press
+    /// outside the confirm button closes the box ([`close_box`]) and writes nothing.
+    #[test]
+    fn child_close_writes_child_stop_only_after_y() {
+        let mut side = child_side();
+        let mut kv = BTreeMap::new();
+        assert_eq!(open_child_box(&mut side, 1), Ok(()));
+        assert!(side.confirm && side.close_child.as_deref() == Some("c"));
+        close_box(&mut side);
+        assert!(!side.confirm && side.close_child.is_none());
+        assert!(!confirm_child(&mut side, &mut kv, 5), "no box open: nothing to confirm");
+        assert!(kv.is_empty(), "cancelled: nothing written {kv:?}");
+        open_child_box(&mut side, 1).expect("the box opens again");
+        assert!(confirm_child(&mut side, &mut kv, 5));
+        let v: serde_json::Value = serde_json::from_str(&kv["child_stop"]).expect("child_stop is JSON");
+        assert_eq!(v, serde_json::json!({"v": 1, "state": "requested", "id": "c", "page": "M0", "at": 5}));
+        assert!(!side.confirm && side.close_child.is_none());
+        assert_eq!(side.child_stop, sidebar::ChildStop::Requested("c".to_string()));
+        let card = side.data.as_ref().expect("data").fleets[1].clone();
+        assert!(!sidebar::closeable(&side, &card), "its × is gone until the daemon answers");
+    }
+
+    /// One request at a time: while one is out, another child card's `×` says so instead of opening a box; the
+    /// daemon's answer (`refused` here) gives the card its `×` back.
+    #[test]
+    fn a_second_child_close_waits_for_the_answer() {
+        let mut side = child_side();
+        let mut kv = BTreeMap::new();
+        open_child_box(&mut side, 1).expect("box");
+        assert!(confirm_child(&mut side, &mut kv, 5));
+        assert_eq!(open_child_box(&mut side, 2), Err(CHILD_PENDING_NOTICE));
+        assert!(!side.confirm);
+        assert_eq!(open_child_box(&mut side, 1), Err(CHILD_CLOSE_NOTICE), "the requested card has no × now");
+        side.child_stop = parse_child_stop(r#"{"v":1,"state":"refused","id":"c","reason":"autostart"}"#);
+        assert_eq!(side.child_stop, sidebar::ChildStop::Refused("c".into(), "autostart".into()));
+        assert_eq!(open_child_box(&mut side, 1), Ok(()));
+        assert_eq!(parse_child_stop("not json"), sidebar::ChildStop::None);
+        assert_eq!(open_child_box(&mut side, 0), Err(CHILD_CLOSE_NOTICE), "the root card keeps its own box");
     }
 }

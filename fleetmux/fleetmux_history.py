@@ -23,11 +23,14 @@ import os
 import time
 from pathlib import Path
 
+from fleetmux.i18n import t
+
 MAX_CARDS = 16  # = sidebar.rs MAX_FLEETS: kv `sidebar` may not list more cards (§18.3)
 SIDEBAR_VIA = 'fleetmux-sidebar'  # result.json closed_via of a sidebar × close (§12.1)
-CLOSED_LINE1 = '已关闭 · 可恢复'  # a card the sidebar × closed (§13.3)
-TIMEOUT_LINE1 = '到点停 · 可恢复'  # a card the lifecycle timeout stopped, still resumable (§18.6)
-CLOSED_AT_FMT = '关闭于 %m-%d %H:%M'  # the card's second line (§18.2)
+# Card texts (key, English; ui.language, docs/design.md §63).
+CLOSED_LINE1 = ('card.closed.line1', 'closed, restorable')  # a card the sidebar × closed (§13.3)
+TIMEOUT_LINE1 = ('card.timeout.line1', 'timed out, restorable')  # stopped by the lifecycle timeout, resumable (§18.6)
+CLOSED_AT_FMT = ('card.closed_at', 'closed %m-%d %H:%M')  # the card's second line, a strftime format (§18.2)
 KV_RESTORABLE, KV_SIDEBAR = 'restorable', 'sidebar'
 RESUME_KEYS = ('id', 'title', 'closed_at', 'argv', 'cwd', 'env')  # the kv item's exact fields (§18.3)
 
@@ -46,9 +49,9 @@ def _read(path):
 def _line1(res):
     """The card's first line for a resumable result.json, or None when it is not a history entry (§18.6)."""
     if res.get('closed_via') == SIDEBAR_VIA:
-        return CLOSED_LINE1
+        return t(*CLOSED_LINE1)
     if res.get('closed_by') == 'timeout':
-        return TIMEOUT_LINE1
+        return t(*TIMEOUT_LINE1)
     return None
 
 
@@ -89,8 +92,8 @@ def restorable_runs(home, state_dir):
 def cards(runs):
     """The grey ``closed`` cards of the history, in display order (§18.2)."""
     return [{'id': r['id'], 'title': r['title'], 'state': 'closed',
-             'line1': r.get('line1') or CLOSED_LINE1,
-             'line2': time.strftime(CLOSED_AT_FMT, time.localtime(r['closed_at']))}
+             'line1': r.get('line1') or t(*CLOSED_LINE1),
+             'line2': time.strftime(t(*CLOSED_AT_FMT), time.localtime(r['closed_at']))}
             for r in runs]
 
 

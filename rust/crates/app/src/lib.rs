@@ -4,6 +4,7 @@
 //! attach-1.
 pub mod attach;
 pub mod forward;
+pub mod i18n;
 pub mod paths;
 pub mod render;
 pub mod server;

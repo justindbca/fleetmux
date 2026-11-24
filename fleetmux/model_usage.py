@@ -52,8 +52,8 @@ def slot_card(info: Mapping, cfg: Mapping, registry: AgentRegistry) -> Tuple[Opt
     except ValueError:
         launch = {}
     profile = launch.get('profile_id') or None
-    if not profile:
-        return None, default_model(cfg, registry)
+    if not profile:  # a launch with no card (a job supervisor's chain pick, §58) counts the model it runs
+        return None, default_model(dict(cfg, **(launch.get('overrides') or {})), registry)
     try:
         return profile, limit_key(registry.get(profile))
     except KeyError:

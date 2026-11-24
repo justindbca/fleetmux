@@ -21,6 +21,10 @@ from test_subfleet import given, hook, step
 from test_v2_codex_claude import answer_turn, typed
 from fleetmux import fleet, runtime_v2, subfleet
 
+# D27: these split tests are not about models; the supervisor chain is pinned to the run's default model, so the slot
+# keeps its model as before (tests/test_subfleet_supervisor_chain.py covers the chain)
+pytestmark = pytest.mark.usefixtures('job_chains_as_before')
+
 WORKERS = ['worker-1', 'worker-2']
 SPLIT = {'reason': 'five sources to fetch and merge: two parts run in parallel', 'workers': 2,
          'proposal': [dict(p) for p in PROPOSAL]}

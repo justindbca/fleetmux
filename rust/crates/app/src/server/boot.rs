@@ -486,6 +486,7 @@ pub fn run(args: &[String]) -> ExitCode {
     }
     let runtime = opts.runtime.clone();
     let _ = LOG.set(runtime.join("server.log"));
+    raise_nofile_limit();
 
     if let Err(e) = paths::check_runtime_perms(&runtime) {
         return fail(5, &format!("runtime directory {}: {e}", runtime.display()));
@@ -615,7 +616,11 @@ async fn serve_until_shutdown(
         start_time,
         prefix: prefix_bytes(&opts.prefix).expect("validated by parse_opts"),
         web: Default::default(),
-        side: Default::default(),
+        // ui.language (docs/design.md §63): what Python passed in FLEETMUX_UI_LANGUAGE, read once here
+        side: crate::render::sidebar::Side {
+            lang: crate::i18n::Lang::from_env(),
+            ..Default::default()
+        },
         resume: Default::default(),
         fleet_pages: Default::default(),
     };
@@ -710,6 +715,68 @@ async fn serve_until_shutdown(
 const LOGIND_CONF: &str = "/etc/systemd/logind.conf";
 
 /// The logind config to check: `$FLEETMUX_LOGIND_CONF` when set and non-empty, else [`LOGIND_CONF`].
+/// Raise the open-file soft limit (RLIMIT_NOFILE) to the hard limit. Each pane holds a few descriptors here
+/// (PTY master and its copies), so the macOS launchd default soft limit of 256 stopped `pane.spawn` near 80
+/// panes (`dup of fd N failed`). Panes inherit the raised limit. macOS refuses a soft limit above
+/// `kern.maxfilesperproc` (and RLIM_INFINITY), so the target is capped there; on failure the limit is left as
+/// it was and one WARN line is logged.
+fn raise_nofile_limit() {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        log(
+            "WARN",
+            &format!(
+                "getrlimit(RLIMIT_NOFILE): {}",
+                std::io::Error::last_os_error()
+            ),
+        );
+        return;
+    }
+    let before = lim.rlim_cur;
+    let mut target = lim.rlim_max;
+    #[cfg(target_os = "macos")]
+    {
+        let mut max: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>();
+        let name = c"kern.maxfilesperproc";
+        let ok = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                (&mut max as *mut libc::c_int).cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } == 0;
+        if ok && max > 0 {
+            target = target.min(max as libc::rlim_t);
+        } else {
+            target = target.min(10240); // OPEN_MAX in <sys/syslimits.h>
+        }
+    }
+    if target <= before {
+        return;
+    }
+    lim.rlim_cur = target;
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
+        log(
+            "WARN",
+            &format!(
+                "setrlimit(RLIMIT_NOFILE) {before} -> {target}: {}",
+                std::io::Error::last_os_error()
+            ),
+        );
+        return;
+    }
+    log(
+        "INFO",
+        &format!("open-file soft limit raised: {before} -> {target}"),
+    );
+}
+
 fn logind_conf(env: Option<std::ffi::OsString>) -> PathBuf {
     env.filter(|v| !v.is_empty())
         .map_or_else(|| PathBuf::from(LOGIND_CONF), PathBuf::from)

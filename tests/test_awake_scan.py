@@ -28,7 +28,23 @@ CHANNEL = 'channel adapters and the actor run on wall time (remote services, inj
 SECURITY = 'confirmation nonces and tickets expire in real time on purpose: a sleep only voids them (fail closed)'
 WATCHDOG = 'watchdog-style stall window on busy_since; the daemon gap floors it (act_floor, section 24); open'
 
+DEMO = ('section 61 `fleetmux demo`: a one-off foreground run of a scripted fleet in a temp home; its waits are '
+          'seconds long and end with the command (no daemon deadline across a sleep)')
+
 ALLOWED = {
+    'fleetmux/demo.py::cleanup': DEMO,
+    'fleetmux/demo.py::run': DEMO,
+    'fleetmux/demo.py::settle_audit': DEMO,
+    'fleetmux/demo.py::stop_terminal_server': DEMO,
+    'fleetmux/demo.py::wait_closed': DEMO,
+    'fleetmux/demo.py::wait_for_end': DEMO,
+    'fleetmux/restart_state.py::deliver': 'section 60 ruling reminder: delivered_at is kept in the ledger file across '
+                                         'daemon lives; a reminder right after a wake is harmless (it fails nothing)',
+    'fleetmux/restart_state.py::prune': 'section 60: a temp file is judged by its mtime, which is wall time',
+    'fleetmux/restart_state.py::tick': 'section 60 timer snapshot: last_timer_at is kept in state.json across daemon '
+                                      'lives; an extra snapshot right after a wake is harmless (it fails nothing)',
+    'fleetmux/subfleet.py::readopt_child': 'section 58: the job deadline moves by the wall time the root was down '
+                                           '(suspended_at is written by an earlier process; sleep included on purpose)',
     'fleetmux/agent_bridge.py::daemon_beat': LIVENESS,
     'fleetmux/applet_view.py::tick': TTL + ' (tab check and retry cadence)',
     'fleetmux/brake.py::pool_reading': TTL,

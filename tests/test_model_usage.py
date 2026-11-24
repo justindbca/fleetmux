@@ -279,7 +279,7 @@ def test_switch_away_from_a_capped_model_keeps_its_ticket_until_the_old_tab_clos
     assert f.model_usage(REG).holders('flashnext') == ['worker-2']
 
 
-def test_the_fleet_default_is_capped_like_a_card():
+def test_the_fleet_default_is_capped_like_a_card(fable_capped):
     assert model_usage.default_problem(PI, ['w1', 'w2'], REG) is None
     assert model_usage.default_problem(PI, ['w1', 'w2', 'w3'], REG) == (
         'fleet default worker model flashnext: 3 worker slots (w1, w2, w3) exceed max_concurrent 2')
@@ -288,7 +288,8 @@ def test_the_fleet_default_is_capped_like_a_card():
     assert model_usage.default_problem(CLAUDE, ['w%d' % i for i in range(9)], REG) is None  # opus: 按名额
     assert model_usage.default_problem({'worker_cli': 'pi', 'pi_model': 'local/x'}, ['a', 'b', 'c'], REG) is None
     fable = {'worker_cli': 'claude', 'worker_model': REG.model('fable').model}
-    assert 'max_concurrent 1' in model_usage.default_problem(fable, ['w1', 'w2'], REG)
+    capped = AgentRegistry()  # built under fable_capped: Fable at max_concurrent 1 (a stub, D24)
+    assert 'max_concurrent 1' in model_usage.default_problem(fable, ['w1', 'w2'], capped)
     # A roster of only default slots is capped by the default model's own card.
     assert model_usage.check_slots(PI, ['a', 'b', 'c'], {}, REG) == [
         'model flashnext: 3 slots (a, b, c) exceed max_concurrent 2']
@@ -309,7 +310,7 @@ def test_switching_back_to_the_default_is_gated(live):
     assert f.card_gate('worker-1', None, REG) is None
 
 
-def test_start_without_profiles_refuses_more_default_slots_than_the_card_allows(monkeypatch):
+def test_start_without_profiles_refuses_more_default_slots_than_the_card_allows(monkeypatch, fable_capped):
     from fleetmux import cmux_manager
 
     def forbidden():
@@ -323,7 +324,7 @@ def test_start_without_profiles_refuses_more_default_slots_than_the_card_allows(
                     '--worker-model', REG.model('fable').model, '--allow-development-v2'])
 
 
-def test_a_sub_fleet_on_a_capped_default_is_refused(fx):
+def test_a_sub_fleet_on_a_capped_default_is_refused(fx, fable_capped):  # Fable at 1: a stub (D24)
     from fleetmux import subfleet
     f = fx
     f.cfg.update(worker_cli='claude', worker_model=REG.model('fable').model)

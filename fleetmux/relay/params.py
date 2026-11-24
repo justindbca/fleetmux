@@ -232,22 +232,30 @@ def write_back(hot: HotStore, block: dict, *, path=None) -> dict:
     if not out:
         return {}
     try:
-        data = yaml.safe_load(target.read_text()) if target.is_file() else None
-        data = data if isinstance(data, dict) else {}
-        relay = data.setdefault("relay", {})
-        if not isinstance(relay, dict):
-            raise ConfigError(f"{target}: relay must be a mapping")
-        relay_hot = relay.setdefault("hot", {})
-        if not isinstance(relay_hot, dict):
-            raise ConfigError(f"{target}: relay.hot must be a mapping")
-        relay_hot.update(copy.deepcopy(out))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
-        with os.fdopen(fd, "w") as f:
-            yaml.safe_dump(data, f, sort_keys=False)
-        os.replace(tmp, target)
-    except (OSError, yaml.YAMLError) as exc:
+        with fleet_config.user_file_lock(target):  # the decompose write-back takes the same lock
+            return _write_hot(target, out)
+    except ConfigError:
+        raise
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         raise ConfigError(f"cannot write relay hot values back to {target}: {exc}") from exc
+
+
+def _write_hot(target, out):
+    """write_back under the private file's lock: re-read the file, merge ``out`` into relay.hot, replace it."""
+    data = yaml.safe_load(target.read_text()) if target.is_file() else None
+    data = data if isinstance(data, dict) else {}
+    relay = data.setdefault("relay", {})
+    if not isinstance(relay, dict):
+        raise ConfigError(f"{target}: relay must be a mapping")
+    relay_hot = relay.setdefault("hot", {})
+    if not isinstance(relay_hot, dict):
+        raise ConfigError(f"{target}: relay.hot must be a mapping")
+    relay_hot.update(copy.deepcopy(out))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
+    with os.fdopen(fd, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    os.replace(tmp, target)
     return out
 
 

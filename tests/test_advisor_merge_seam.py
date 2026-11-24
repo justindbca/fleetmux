@@ -13,6 +13,9 @@ from test_advisor_rescue import consult, rescue_decision, respawn_sheet, worked
 from test_fleet import decision, fx, turn  # noqa: F401
 from fleetmux import fleet, night, roster
 
+# Fable is the example of a full model here: a stubbed card with max_concurrent 1 (D24: the shipped one has none)
+pytestmark = pytest.mark.usefixtures('fable_capped')
+
 
 def fable_wait(f):
     """worker-1 takes the only fable ticket, worker-2's fable sheet waits for it."""

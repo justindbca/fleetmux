@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fleetmux import fleet, fleetmux_sidebar, subfleet  # noqa: E402
+from fleetmux import fleet, fleetmux_sidebar, named_subfleet, subfleet  # noqa: E402
 from fleetmux.backends import fleetmux as fm  # noqa: E402
 
 RUN = 'fleet-20261029-231820-ab12cd34'
@@ -560,3 +560,72 @@ def test_the_docs_carry_the_history_entry_point_and_the_grey_card_rules():
         'README must carry the empty-history message of `gui` (§18.7-2):\n%s' % _lines_with(readme, 'gui')
     assert 'timeout' in bullet and '到点停 · 可恢复' in bullet, \
         'PROTOCOL §4.2 `restorable` must list the timeout-stopped runs too (§18.6):\n' + bullet
+
+
+def _sub(tmp_path, key, state, **more):
+    return dict({'run': str(tmp_path / 'runs' / ('fleet-' + key)), 'title': key, 'state': state, 'slot': 'worker-1',
+                 'workers': 1, 'outcome': None if state == 'running' else 'completed'}, **more)
+
+
+def test_mixed_finished_and_running_subfleets_running_ones_come_first(tmp_path, monkeypatch):
+    """Fourteen finished sub-fleets created before six running ones (one with a finished and a running child): the
+    running ones come first in creation order, each with its own sub-fleets (running first there too), then the
+    finished ones newest first; the 16-card cap never hides a running one."""
+    tree = {'M%d' % i: _sub(tmp_path, 'M%d' % i, 'returned' if i % 2 else 'failed') for i in range(14)}
+    for i in range(14, 20):
+        tree['M%d' % i] = _sub(tmp_path, 'M%d' % i, 'running')
+    tree['M15']['subfleets'] = {'M15.1': _sub(tmp_path, 'M15.1', 'returned'),
+                                'M15.2': _sub(tmp_path, 'M15.2', 'running')}
+    monkeypatch.setattr(subfleet, 'tree', lambda cfg: tree)
+    p = fleetmux_sidebar.payload(FakeFleet(run_dir(tmp_path)))
+    titles = [x['title'] for x in p['fleets']]
+    assert titles[1:9] == ['M14', 'M15', 'M15.2', 'M15.1', 'M16', 'M17', 'M18', 'M19'], titles
+    assert titles[9:] == ['M13', 'M12', 'M11', 'M10', 'M9', 'M8', 'M7'], titles
+    assert len(p['fleets']) == 16 and p['fleets'][0]['id'] == RUN and p['current'] == RUN
+    assert all(x['state'] == 'running' for x in p['fleets'][1:9] if x['title'] != 'M15.1')
+
+
+def test_all_running_subfleets_keep_creation_order(tmp_path, monkeypatch):
+    tree = {'M%d' % i: _sub(tmp_path, 'M%d' % i, 'running') for i in range(20)}
+    tree['M1']['subfleets'] = {'M1.1': _sub(tmp_path, 'M1.1', 'running')}
+    monkeypatch.setattr(subfleet, 'tree', lambda cfg: tree)
+    p = fleetmux_sidebar.payload(FakeFleet(run_dir(tmp_path)))
+    assert [x['title'] for x in p['fleets'][1:]] == ['M0', 'M1', 'M1.1'] + ['M%d' % i for i in range(2, 14)]
+
+
+def test_child_cards_carry_close_only_while_closeable(tmp_path, monkeypatch):
+    """Section 19 "Closing a sub-fleet from the sidebar": only a running direct child with a stop path (a job whose row
+    is not being cancelled, a named or an attached sub-fleet not already going down) carries ``close``, which names it;
+    a stopping one is drawn ``stopping`` (no button); split children, grandchildren and finished ones carry none."""
+    run = run_dir(tmp_path)
+
+    def child(key, state, **rec):
+        d = run / 'sub' / key
+        d.mkdir(parents=True)
+        (d / 'subfleet.json').write_text(json.dumps(dict({'task_id': key, 'state': state, 'created': 1.0}, **rec)))
+        return _sub(tmp_path, key, state, run=str(d))
+    tree = {'M0': child('M0', 'running', job='job-0000000000'),
+            'M1': child('M1', 'running', job='job-1111111111'),
+            'ops': child('ops', 'running', named=True, name='ops'),
+            'docs': child('docs', 'running', named=True, name='docs'),
+            'M2': child('M2', 'running'),
+            'M3': child('M3', 'stopping', job='job-3333333333'),
+            'M4': child('M4', 'returned', job='job-4444444444')}
+    grand = run / 'sub' / 'M0' / 'sub' / 'M0.1'
+    grand.mkdir(parents=True)
+    (grand / 'subfleet.json').write_text(json.dumps({'task_id': 'M0.1', 'state': 'running', 'job': 'job-0000000000'}))
+    tree['M0']['subfleets'] = {'M0.1': _sub(tmp_path, 'M0.1', 'running', run=str(grand))}
+    monkeypatch.setattr(subfleet, 'tree', lambda cfg: tree)
+    monkeypatch.setattr(named_subfleet, 'ops', lambda f, name, kind, approved=False: [('r', {})] if name == 'docs' else [])
+    monkeypatch.setattr(named_subfleet, 'attached', lambda f: {})
+
+    class JobFleet(FakeFleet):
+        def job_state(self):
+            return {'job-0000000000': {'state': 'running'}, 'job-1111111111': {'state': 'running', 'cancel': {'by': 'x'}},
+                    'job-3333333333': {'state': 'running', 'cancel': {'by': 'x'}}}
+    cards = {c['title']: c for c in fleetmux_sidebar.payload(JobFleet(run))['fleets']}
+    assert set(k for k, c in cards.items() if 'close' in c) == {'M0', 'ops'}, cards
+    assert 'M0' in cards['M0']['close']['title'] and 'job-0000000000' in cards['M0']['close']['title']
+    assert 'ops' in cards['ops']['close']['title'] and 'subfleet down' in cards['ops']['close']['body']
+    assert cards['M3']['state'] == 'stopping' and cards['M4']['state'] == 'reclaimed'
+    assert 'close' not in cards['M0.1'] and 'close' not in cards['M2']

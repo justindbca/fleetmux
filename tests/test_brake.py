@@ -132,12 +132,31 @@ def test_wall_action_takes_the_next_chain_model_and_stops_at_the_bottom():
     # 2026-11-11: the role's chain (fleet.yaml#discovery) replaced same_cli_downgrade as the wall decision
     pool = [{'cli': 'claude', 'model': 'opus', 'account': 'claude', 'scope': 'model_pool'}]
     assert brake.wall_action('claude', 'opus', [('claude', 'sonnet')], pool) == {
-        'action': 'switch', 'cli': 'claude', 'from': 'opus', 'to_cli': 'claude', 'to': 'sonnet', 'skipped': []}
+        'action': 'switch', 'cli': 'claude', 'from': 'opus', 'to_cli': 'claude', 'to': 'sonnet', 'skipped': [],
+        'skipped_rows': []}
     assert brake.wall_action('claude', 'sonnet', [], pool)['action'] == 'stop'  # bottom of the chain
     account = [dict(pool[0], scope='account')]
     stop = brake.wall_action('claude', 'opus', [('claude', 'sonnet')], account)
     assert stop['action'] == 'stop' and stop['skipped'] == ['claude:sonnet (account wall)'] and 'reset' in stop['advice']
 
+
+
+def test_wall_action_also_returns_the_skipped_entries_as_rows():
+    # job-model-chain: job_chain reads why each entry was skipped without parsing the 'cli:model (why)' strings
+    walls = [{'cli': 'claude', 'model': 'opus', 'account': 'claude', 'scope': 'account'},
+             {'cli': 'pi', 'model': 'openai-codex/gpt-6.1-sol', 'account': 'pi:openai-codex', 'scope': 'model_pool'}]
+    below = [('claude', 'sonnet'), ('pi', 'openai-codex/gpt-6.1-sol'), ('opencode', 'x/flash'), ('pi', 'wb/ds')]
+    refuse = lambda c, m: 'not verified' if c == 'opencode' else None  # noqa: E731
+    action = brake.wall_action('claude', 'opus', below, walls, refuse)
+    assert action['skipped'] == ['claude:sonnet (account wall)', 'pi:openai-codex/gpt-6.1-sol (model-pool wall)',
+                                 'opencode:x/flash (not verified)']  # unchanged
+    assert action['skipped_rows'] == [
+        {'cli': 'claude', 'model': 'sonnet', 'reason': 'account wall'},
+        {'cli': 'pi', 'model': 'openai-codex/gpt-6.1-sol', 'reason': 'model-pool wall'},
+        {'cli': 'opencode', 'model': 'x/flash', 'reason': 'not verified'}]
+    stop = brake.wall_action('claude', 'opus', below[:1], walls)
+    assert stop['action'] == 'stop' and stop['skipped_rows'] == [{'cli': 'claude', 'model': 'sonnet',
+                                                                   'reason': 'account wall'}]
 
 # ------------------------------------------------------------------ budget card (pure)
 @pytest.mark.parametrize('raw, error', [

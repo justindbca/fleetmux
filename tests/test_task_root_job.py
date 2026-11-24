@@ -15,6 +15,9 @@ from test_service_split import finish_child, queued_to
 from test_subfleet import given, hook, no_launch, start_tree, step, tree  # noqa: F401  (tree: fixture)
 from fleetmux import fleet, remote, runtime_v2, subfleet
 
+# §58 model chains: these tests are about jobs, not models; tests/test_job_model_chain.py covers the chains
+pytestmark = pytest.mark.usefixtures('job_chains_as_before')
+
 ART = [{'path': 'report.md', 'contains': ['Conclusion']}]
 
 

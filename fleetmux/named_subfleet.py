@@ -37,9 +37,10 @@ import json
 import re
 import shlex
 import time
+import uuid
 from pathlib import Path
 
-from fleetmux import applet_host, awake, roster, subfleet
+from fleetmux import applet_host, awake, job_chain, roster, subfleet
 
 OPS = ('subfleet.up', 'subfleet.down', 'subfleet.attach', 'subfleet.detach')
 HASH = 'fx:subfleet:'
@@ -92,6 +93,25 @@ def reserved(f, slot, attached_only=False):
 
 def state(f, name):
     return f.r.hgetall(HASH + name)
+
+
+def waiting_rows(r):
+    """{name: {state, blocked | waiting}} of the declared sub-fleets that carry a reason (``status``): a roster entry's
+    ``fx:subfleet:<name>`` blocked, an attached one's record ``waiting``. Read-only, no daemon contact; a sub-fleet
+    that is not up has no subfleet.json record, so ``subfleet.tree`` cannot show it."""
+    out = {}
+    for key in r.scan_iter(HASH + '*'):
+        name = key[len(HASH):]
+        if name == 'opq' or name.startswith('op:') or r.type(key) != 'hash':
+            continue
+        h = r.hgetall(key)
+        if h.get('blocked'):
+            out[name] = {'state': h.get('state') or 'down', 'blocked': h['blocked']}
+    raw = r.get(ATTACHED)
+    for name, rec in (json.loads(raw) if raw else {}).items():
+        if rec.get('waiting'):
+            out[name] = {'state': 'attached', 'waiting': rec['waiting']}
+    return out
 
 
 def live(f):
@@ -191,6 +211,30 @@ def request(f, spec):
         return rid
     ask(f, rid, op, name, spec.get('reason') or '')
     return rid
+
+
+def sidebar_down(f, name, attached=False):
+    """fleetmux sidebar (design section 19 "Closing a sub-fleet from the sidebar"): the user confirmed the close box of
+    named sub-fleet ``name``. That confirmation is the approval: the down is recorded approved at once (never put to
+    the root supervisor) with one audit record, and the tick runs it like any approved down (``op_down``). An attached
+    child goes through :func:`detach`. The program gate still applies (an autostart child is refused). Returns '' or
+    the refusal reason."""
+    rid = 'sidebar-' + uuid.uuid4().hex[:12]
+    reason = 'closed from the fleetmux sidebar'
+    if attached:
+        detach(f, rid, {'id': rid, 'op': 'subfleet.detach', 'name': name, 'reason': reason})
+        f.log('subfleet.sidebar_down', id=rid, name=name, how='detach', approved_by='user (fleetmux sidebar)')
+        return ''
+    verdict = gate(f, 'down', name)
+    if verdict is not None:
+        status, fields = verdict
+        return '' if status == 'ok' else (fields.get('reason') or status)
+    now = time.time()
+    f.r.hset(OP + rid, mapping={'op': 'down', 'name': name, 'reason': reason, 'status': 'approved', 'created': now,
+                                'approved_at': now})
+    f.r.rpush(OPQ, rid)
+    f.log('subfleet.sidebar_down', id=rid, name=name, how='down', approved_by='user (fleetmux sidebar)')
+    return ''
 
 
 def ask(f, rid, op, name, reason):
@@ -311,9 +355,11 @@ def added_launch(f, slot):
     from fleetmux import profile_launch
     rec = next((r for r in attached(f).values() if r.get('hot_slot') == slot), None)
     model = ((rec or {}).get('entry') or {}).get('supervisor_model')
-    if model:  # the shape Fleet.spawn reads (profile_id, role_text, overrides), as a wall switch writes it
-        launch = {'profile_id': 'supervisor-model', 'role_text': '',
-                  'overrides': {'worker_cli': 'claude', 'worker_model': model}}
+    picked = ((rec or {}).get('supervisor_pick') or {}).get('model')  # §29: the supervisor chain's pick
+    if model or picked:  # the shape Fleet.spawn reads (profile_id, role_text, overrides), as a wall switch writes it
+        # a chain pick has no card: profile_id '' so model_usage counts the model it runs (as a job's pick, §58)
+        launch = {'profile_id': 'supervisor-model' if model else '', 'role_text': '',
+                  'overrides': {'worker_cli': 'claude', 'worker_model': model or picked}}
         f.setf(slot, runtime_launch=profile_launch.encode_launch(launch))
 
 
@@ -341,18 +387,31 @@ def attach(f, rid, spec):
     if problem:
         raise ValueError(problem)
     name = spec['name']
+    from fleetmux import restart_state
+    recs = attached(f)
+    if name in recs and recs[name].get('restored') and not str(spec.get('id', '')).startswith('restore-'):
+        # section 60: the root restored this attached child after a restart; the same start again gets its address
+        restart_state.clear_cancel(f.cfg, name)
+        f.log('subfleet.attach', id=recs[name]['id'], name=name, result='already restored')
+        return recs[name]['id']
     clash = name_clash(f, name)
     if clash:
         raise ValueError(clash)
     entry = attach_entry(f, name, spec)
     problem = attach_problem(f, entry)
+    if not problem and not entry.get('supervisor_model'):  # D28: the chain must have a Claude entry on this machine
+        problem = chain_problem(name, _registry(f))
     if problem:
         raise ValueError(problem)
     before = declared(f)
     recs = attached(f)
     now = time.time()
-    recs[name] = {'entry': entry, 'id': rid, 'created': now, 'hot_slot': '', 'waiting': ''}
+    recs[name] = {'entry': entry, 'id': rid, 'created': now, 'hot_slot': '', 'waiting': '',
+                  'spec': {k: v for k, v in spec.items() if k not in ('id', 'op')}}  # section 60: restore options
     save_attached(f, recs)
+    if not rid.startswith('restore-'):  # the operator attached it again: an earlier cancel no longer holds
+        restart_state.clear_cancel(f.cfg, name)
+    restart_state.write(f, 'attach')  # section 60: on disk now, not only at the next timer (never raises)
     redeclared(f, before)
     f.r.hset(OP + rid, mapping={'op': 'up', 'name': name, 'reason': spec.get('reason') or 'attached by start',
                                 'status': 'approved', 'created': now, 'approved_at': now})
@@ -369,6 +428,8 @@ def detach(f, rid, spec):
         raise ValueError(name + ' is not an attached sub-fleet of this fleet')
     rec = recs.pop(name)
     save_attached(f, recs)
+    from fleetmux import restart_state
+    restart_state.write_cancel(f.cfg, name, how='detach')  # section 60: the next start does not bring it back
     f.r.hset(DETACHED, mapping={name: rec.get('hot_slot') or ''})
     # No drain here (inside the request event): the tick drains a running child no longer declared (op_down).
     f.log('subfleet.declared', name=name, result='detached' + ('; draining' if name in live(f) else ''))
@@ -379,12 +440,25 @@ def detach(f, rid, spec):
                                 'status': 'approved', 'created': now, 'approved_at': now})
     f.r.rpush(OPQ, rid)
     f.log('subfleet.detach', id=rid, name=name)
+    restart_state.write(f, 'detach')  # section 60: on disk now, not only at the next timer (never raises)
     return rid
 
 
-def free_for(f, slot, entry):
+def same_model(have, want):
+    """D30: ``have`` runs ``want`` when both are the same string or sit at the same place of discovery.supervisor
+    (claude-opus-5-5 and opus count as one), as job_chain.runs_pick compares a pick."""
+    if have == want:
+        return True
+    from fleetmux import discover, fleet_config
+    chain = list((fleet_config.block('discovery') or {}).get('supervisor') or [])
+    at = discover.first_match(chain, want)
+    return at is not None and discover.first_match(chain, have) == at
+
+
+def free_for(f, slot, entry, pick=None):
     """'' when ``slot`` can supervise ``entry`` now: an idle Claude worker no sub-fleet, job, lease, split or
-    request holds (subfleet.check with ready=False gives the limits and card reasons), else the reason."""
+    request holds (subfleet.check with ready=False gives the limits and card reasons), else the reason.
+    ``pick`` (an entry without supervisor_model): the slot must already run the supervisor chain's pick."""
     fleet = _fleet()
     if fleet.agent_cli(f.runtime_cfg(slot), slot) != 'claude':
         return 'not an official Claude Code worker'
@@ -392,8 +466,10 @@ def free_for(f, slot, entry):
         return 'supervises sub-fleet ' + reserved(f, slot)
     if f.agent(slot).get('state') != 'idle':
         return 'not idle'
-    if entry.get('supervisor_model') and slot_model(f, slot) != entry['supervisor_model']:
+    if entry.get('supervisor_model') and not same_model(slot_model(f, slot), entry['supervisor_model']):
         return 'runs model ' + slot_model(f, slot) + ', not the asked supervisor model ' + entry['supervisor_model']
+    if pick and pick.get('entry') and not job_chain.runs_pick(pick, pick['chain'], 'claude', slot_model(f, slot)):
+        return 'runs model ' + slot_model(f, slot) + ', not the supervisor chain pick claude:' + pick['entry']['model']
     busy = f.job_slot_busy(slot) if hasattr(f, 'job_slot_busy') else ''
     if busy:
         return busy
@@ -426,9 +502,20 @@ def attach_tick(f):
             continue
         if slot and (slot in f.active_workers() or name in live(f)):
             continue
+        pick = None
+        if not entry.get('supervisor_model'):  # Q2 (a): a worker already on the chain's pick, else one added on it
+            registry = _registry(f)
+            pick = chain_pick(f, '', registry)
+            if pick['entry'] is None:
+                waiting = chain_problem(name, registry) or CHAIN_WAIT + 'no usable entry now: ' + pick['reason']
+                if rec.get('waiting') != waiting:
+                    rec['waiting'] = waiting
+                    f.log('subfleet.attach_wait', name=name, reason=waiting[:500])
+                    dirty = True
+                continue
         slot, why = '', []
         for w in sorted(f.active_workers(), key=lambda w: f.agent(w).get('state') != 'idle'):
-            reason = free_for(f, w, entry)
+            reason = free_for(f, w, entry, pick)
             if not reason:
                 slot = w
                 break
@@ -454,6 +541,9 @@ def attach_tick(f):
                 continue
             f.r.hset(applet_ops.USED, mapping={slot: 'subfleet ' + name})  # never given out again in this run
             rec['hot_slot'] = slot
+            if pick:  # added_launch starts it on the pick
+                rec['supervisor_pick'] = {'model': pick['entry']['model'],
+                                          'trace': job_chain.trace(pick, pick['source'])}
             f.log('subfleet.worker_added', name=name, slot=slot)
         entry['supervisor_slot'], rec['waiting'] = slot, ''
         if slot in f.workers:  # an added worker gets it when it is created (Fleet.init_worker): no agent hash before
@@ -640,6 +730,82 @@ def rotation_gate(f, slot):
     return False
 
 
+CHAIN_WAIT = 'supervisor chain: '  # a wait reason from the chain (walls, quota, a rotation): carried into op answers
+
+
+def _registry(f):
+    from fleetmux.agent_registry import AgentRegistry
+    return AgentRegistry(f.cfg.get('agent_registry') or None)
+
+
+def chain_pick(f, slot, registry):
+    """job_chain.subfleet_supervisor with this run's walls and each model's quota for ``slot`` (Fleet.card_gate;
+    '' = a worker not added yet)."""
+    def refused(c, m):
+        card = f.job_model_card(c, m, registry)
+        gate = f.card_gate(slot, card, registry) if card else None
+        return gate[1] if gate else None
+    return job_chain.subfleet_supervisor(f.walled(), registry=registry, refused=refused)
+
+
+def chain_problem(name, registry):
+    """Why no Claude entry of discovery.supervisor can ever supervise sub-fleet ``name`` on this machine (walls and
+    quota left out), else ''. Such an up is refused (D28); a pick blocked only by walls or quota waits."""
+    static = job_chain.subfleet_supervisor((), registry=registry)
+    if static['entry'] is None:
+        return 'no usable supervisor for sub-fleet ' + name + ' on fleet.yaml#discovery.supervisor: ' + static['reason']
+    return ''
+
+
+def explicit_source(f, slot, entry):
+    """'entry' (its supervisor_model), 'card' (a card on the slot's root roster row) or '' (the chain decides)."""
+    if entry.get('supervisor_model'):
+        return 'entry'
+    return 'card' if (f.cfg.get('worker_profiles') or {}).get(slot) else ''
+
+
+def supervisor_choice(f, slot, entry):
+    """§29 supervisor model (user 2026-11-22: every sub-fleet walks the supervisor chain in order). Returns
+    ('ok', trace) when ``slot`` may supervise as it runs now, ('wait', why) while walls or quota block every entry
+    or while the slot rotates to the pick, ('refused', why) when no Claude entry of the chain can ever supervise
+    here (D28: never the default model).
+
+    Explicit: the entry's ``supervisor_model`` (an attached child) or a card on the slot's root roster row: kept, no
+    chain. Else job_chain.subfleet_supervisor over discovery.supervisor; a slot that already runs the pick is adopted
+    in place, any other rotates to it first (the §44 split_launch path: finish_rotation / RuntimeV2.respawn put it
+    into the next generation). The slot keeps that model after the child goes down."""
+    fleet = _fleet()
+    cfg = f.runtime_cfg(slot)
+    cli, model = fleet.agent_cli(cfg, slot), fleet.claude_model(cfg, slot)
+    source = explicit_source(f, slot, entry)
+    if source:
+        card = (f.cfg.get('worker_profiles') or {}).get(slot) if source == 'card' else None
+        return 'ok', {'cli': cli, 'model': model, 'source': source, 'profile': card, 'skipped': [], 'switched': []}
+    from fleetmux.agent_registry import AgentRegistryError
+    try:
+        registry = _registry(f)
+    except (AgentRegistryError, OSError, ValueError) as exc:
+        return 'refused', 'cannot read agent cards: ' + str(exc)
+    pick = chain_pick(f, slot, registry)
+    trace = job_chain.trace(pick, pick['source'])
+    if pick['entry'] is None:
+        problem = chain_problem(entry['name'], registry)
+        return ('refused', problem) if problem else ('wait', CHAIN_WAIT + 'no usable entry now: ' + pick['reason'])
+    if job_chain.runs_pick(pick, pick['chain'], cli, model):
+        return 'ok', trace
+    to = pick['entry']['model']
+    launch, why = f.split_supervisor_launch(slot, pick['profile'], None if pick['profile'] else to)
+    if why:
+        return 'wait', CHAIN_WAIT + why
+    from fleetmux import profile_launch  # §44 stores the encoded launch: finish_rotation copies it into runtime_launch
+    f.setf(slot, split_launch=json.dumps({'launch': profile_launch.encode_launch(launch)}))
+    f.r.hset(HASH + entry['name'], mapping={'model_chain': json.dumps({'supervisor': trace}, ensure_ascii=False)})
+    f.log('subfleet.supervisor_rotate', name=entry['name'], slot=slot, frm=cli + ':' + model, to='claude:' + to,
+          skipped=len(trace['skipped']))
+    f.start_rotation(slot, *f.usage(slot))
+    return 'wait', CHAIN_WAIT + slot + ' is rotating to claude:' + to + ' first'
+
+
 def try_up(f, entry, goal=''):
     """('started', rec) | ('wait', why) | ('refused', why). Spawns only when the slot is idle / READY."""
     name, slot = entry['name'], entry['supervisor_slot']
@@ -655,6 +821,9 @@ def try_up(f, entry, goal=''):
     busy = subfleet.check(f, slot, name, workers, ready=True, named=entry)
     if busy:
         return 'wait', busy
+    status, trace = supervisor_choice(f, slot, entry)
+    if status != 'ok':
+        return status, trace
     if not rotation_gate(f, slot):
         return 'wait', slot + ' is rotating to a fresh session first'
     if subfleet.tmux_slot(f.cfg, slot) and subfleet.parent_view(f, slot, f.agent(slot).get('pane')) is None:
@@ -663,14 +832,18 @@ def try_up(f, entry, goal=''):
         f.log('subfleet.view_fallback', name=name, slot=slot,
               reason='slot not yet in fleet tmux; dual display from next generation')
     try:
-        rec = subfleet.spawn_child(f, slot, name, goal or ('Named sub-fleet ' + name), workers, named=entry)
+        rec = subfleet.spawn_child(f, slot, name, goal or ('Named sub-fleet ' + name), workers,
+                                   named=dict(entry, model_chain={'supervisor': trace}))
     except subfleet.Refused as exc:
         return 'refused', str(exc)
     cfg = _fleet().load(Path(rec['run']) / 'config.json')
     f.setf(slot, delegated_gen=f.agent(slot).get('generation') or '0')
     f.r.hset(HASH + name, mapping={'state': 'starting', 'slot': slot, 'run_dir': rec['run'],
                                    'redis_socket': cfg['redis_socket'], 'started_at': time.time(), 'up_at': '',
-                                   'drain_since': '', 'drain_reason': '', 'crashloop': '', 'blocked': ''})
+                                   'drain_since': '', 'drain_reason': '', 'crashloop': '', 'blocked': '',
+                                   'model_chain': json.dumps({'supervisor': trace}, ensure_ascii=False)})
+    f.log('subfleet.supervisor_pick', name=name, slot=slot, model=trace['cli'] + ':' + trace['model'],
+          source=trace['source'], skipped=len(trace['skipped']))
     return 'started', rec
 
 
@@ -788,10 +961,15 @@ def op_up(f, rid, op, now):
             finish(f, rid, 'timeout', {'reason': 'child not READY'})
         return  # starting / draining: wait for READY or for the down to finish
     result = try_up(f, entry, op.get('reason') or '')
+    if result[0] == 'wait' and result[1].startswith(CHAIN_WAIT) and result[1] != state(f, name).get('blocked'):
+        f.r.hset(HASH + name, mapping={'blocked': result[1]})  # D28: a chain wait is kept with the sub-fleet
+        f.log('subfleet.up_wait', id=rid, name=name, reason=result[1][:500])
     if result[0] == 'refused':
         finish(f, rid, 'rejected', {'reason': 'program: ' + result[1]})
     elif result[0] == 'wait' and now - float(op.get('approved_at') or now) >= SLOT_WAIT:
-        finish(f, rid, 'timeout', {'reason': 'slot busy'})
+        # Q4: a wait the supervisor chain caused says why (walls, quota, a rotation that did not finish)
+        finish(f, rid, 'timeout', {'reason': 'slot busy' + (': ' + result[1] if result[1].startswith(CHAIN_WAIT)
+                                                            else '')})
 
 
 def op_down(f, rid, op, now):

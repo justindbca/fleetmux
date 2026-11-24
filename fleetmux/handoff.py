@@ -59,7 +59,8 @@ SUBFLEET_RETURN_PROMPT = DUMP_PROMPT.replace(
 SPLIT_PROMPT = DUMP_PROMPT.replace(
     'Context is almost full ({used}/{window}). ',
     'The supervisor approved splitting <task>: a new session of this slot (on the model the supervisor picked, or '
-    'the same model when none was picked) takes over and becomes the supervisor of sub-fleet <task>. Write what it '
+    'on the model the program picked from the supervisor chain) takes over and becomes the supervisor of sub-fleet '
+    '<task>. Write what it '
     'needs: what is done, the approved split and what remains of each piece. ')
 
 

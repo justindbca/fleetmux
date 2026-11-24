@@ -15,8 +15,17 @@ import time
 from pathlib import Path
 
 from fleetmux import terminal_theme
+from fleetmux.i18n import t
 
 SNAPSHOT_LIMIT = 1_500_000  # chars kept per screen snapshot (the tail; scrollback can be huge)
+
+
+def labels():
+    """The page's fixed texts in the interface language (ui.language, docs/design.md §63); ``{x}`` filled by the page."""
+    return {'jumping': t('history.jumping', 'Switching to that workspace...'),
+            'parent': t('history.parent', '<- back to the parent fleet'),
+            'show': t('history.show_in_sidebar', 'Show in the sidebar: {title}'),
+            'children': t('history.children', 'Sub-fleets ({n}):')}
 
 
 def page_path(run_dir):
@@ -70,7 +79,7 @@ def write_page(run_dir, slots, links=None):
         data.append({'slot': slot, 'title': title, 'live': live, 'gens': gens, 'cards': cards})
     links = links or {}
     blob = json.dumps({'run': str(run_dir), 'updated': time.time(), 'slots': data,
-                       'parent': links.get('parent'), 'children': links.get('children') or []},
+                       'parent': links.get('parent'), 'children': links.get('children') or [], 'L': labels()},
                       ensure_ascii=False)
     blob = blob.replace('<', '\\u003c')  # no </script>, <!-- or <script inside the script block
     theme_css = terminal_theme.css(terminal_theme.read(run_dir) or {})
@@ -139,12 +148,13 @@ function fleets(){  // a click asks this fleet's daemon to switch to the other f
   const a=(href,rel,text,tip)=>`<a href="${q(href)}" data-rel="${rel}" title="${q(tip||'')}">${q(text)}</a>`;
   const p=DATA.parent,kids=DATA.children||[];
   const going=new URLSearchParams(location.search).has('fleet-jump');
-  $('fleets').innerHTML=(going?'<span class="muted">正在切到对应工作区…</span>':'')+
-    (p?a(p.url,'parent','← 回到父 fleet'+(p.task_id?' '+p.task_id:''),'切到侧栏：'+p.title)
+  const L=DATA.L,show=t=>L.show.replace('{title}',t);
+  $('fleets').innerHTML=(going?'<span class="muted">'+esc(L.jumping)+'</span>':'')+
+    (p?a(p.url,'parent',L.parent+(p.task_id?' '+p.task_id:''),show(p.title))
       +`<span class="muted">${q(p.title)}</span>`:'')+
-    (kids.length?`<span class="muted">子 fleet ${kids.length}：</span>`+kids.map(c=>a(c.url,'child',c.task_id+
+    (kids.length?'<span class="muted">'+esc(L.children.replace('{n}',kids.length))+'</span>'+kids.map(c=>a(c.url,'child',c.task_id+
       (c.attempt>1?' #'+c.attempt:'')+' · '+(c.state||'?')+(c.outcome&&c.outcome!==c.state?' ('+c.outcome+')':'')+' · '+(c.slot||''),
-      '切到侧栏：'+c.title)).join(''):'');
+      show(c.title))).join(''):'');
 }
 function render(){
   $('agents').innerHTML=DATA.slots.map(s=>`<button data-a="${s.slot}" class="${s.slot===st.agent&&!st.q?'on':''}">${s.title||s.slot}

@@ -15,6 +15,8 @@ ARG RUST_IMAGE=rust:1-slim-trixie
 FROM ${RUST_IMAGE} AS rust
 WORKDIR /src
 COPY rust/ rust/
+# the zh-Hans string table the terminal embeds at build time (include_str!, docs/design.md §63)
+COPY fleetmux/locales/ fleetmux/locales/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/rust/target \
     cd rust && cargo build --release --locked -p fleetmux && install -D target/release/fleetmux /out/fleetmux

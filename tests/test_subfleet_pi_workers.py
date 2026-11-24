@@ -9,6 +9,7 @@ from test_runtime_v2_planning import plan, settle  # noqa: F401  (fixture)
 from test_fresh_dispatch import worked
 from test_fleet import fx  # noqa: F401  (fixture)
 from test_subfleet import ask, result, supervisor_answers, svc, write_roster  # noqa: F401  (fixture)
+from test_named_subfleet_chain import named_chain_as_before  # noqa: F401  (fixture)
 from fleetmux import fleet, named_subfleet, roster, runtime_v2, subfleet
 
 PI = '    worker_cli: pi\n    pi_model: workbuddy-ds/workbuddy-ai/deepseek-v4.1-flash-sg\n'
@@ -70,6 +71,7 @@ def pi_parent(t, allow=True):
     t.f.cfg.update(pi=str(binary), pi_agent_dir=str(agent), allow_unsandboxed_pi=allow)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains: the slot keeps its model
 def test_named_pi_child_starts_with_pi_workers_and_its_own_pi_home(svc):
     t, f = svc, svc.f
     pi_parent(t)

@@ -706,8 +706,8 @@ def test_broken_card_file_is_advisor_unavailable_not_a_daemon_exit(afx, monkeypa
 
 
 # ------------------------------------------------------------------ P2-9: advisor respawns pass Fleet.card_gate
-def test_advisor_respawn_waits_for_a_model_ticket_then_switches(afx):
-    """fable max_concurrent 1: the first slot switches, the second waits queued (no re-advice) and
+def test_advisor_respawn_waits_for_a_model_ticket_then_switches(afx, fable_capped):
+    """fable max_concurrent 1 (a stubbed card, D24): the first slot switches, the second waits queued (no re-advice) and
     switches once the first slot's fable generation is gone."""
     f = afx
     from fleetmux.agent_registry import AgentRegistry
@@ -762,7 +762,7 @@ def test_advisor_respawn_to_a_card_for_another_host_blocks_the_task(afx, monkeyp
     assert f.task()['status'] == 'blocked' and f.mgr.killed == []  # no silent swap, old runtime kept
 
 
-def test_v2_held_first_generation_keeps_holding_while_the_model_is_full(v2adv2):
+def test_v2_held_first_generation_keeps_holding_while_the_model_is_full(v2adv2, fable_capped):
     from test_v2_codex_claude import answer_turn, submit
     f = v2adv2
     f.advisor_runner = Runner({'model': 'fable', 'effort': 'high', 'domains': []})

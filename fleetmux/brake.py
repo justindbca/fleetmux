@@ -197,39 +197,73 @@ def describe(found):
 _TABLE = {}
 
 
+SAFEGUARDS = 'safeguards'  # walls class: the CLI's safeguards refusal of one message (user 2026-11-23, design section 23)
+SAFEGUARDS_KEYS = ('safeguards', 'safeguards_screen', 'safeguards_prefer', 'safeguards_error_types')
+
+
 def wall_table(path=None):
-    """The walls block compiled, cached by stamp."""
+    """The walls block compiled, cached by stamp. A block (e.g. the operator's private one) that lacks one of
+    SAFEGUARDS_KEYS takes the shipped value; a key present but empty turns that part off."""
     stamp = fleet_config.stamp(path)
     cached = _TABLE.get(str(path))
     if cached and cached[0] == stamp:
         return cached[1]
     raw = fleet_config.block('walls', path) or {}
+    missing = [k for k in SAFEGUARDS_KEYS if k not in raw]
+    if missing:
+        shipped = fleet_config.block('walls', fleet_config.SHIPPED) or {}
+        raw = dict(raw, **{k: shipped.get(k) for k in missing})
     table = {'account': [re.compile(p, re.I) for p in raw.get('account') or []],
              'model_pool': [re.compile(p, re.I) for p in raw.get('model_pool') or []],
              'notices': [re.compile(p, re.I) for p in raw.get('notices') or []],
+             SAFEGUARDS: [re.compile(p, re.I) for p in raw.get(SAFEGUARDS) or []],
+             'safeguards_screen': [re.compile(p, re.I) for p in raw.get('safeguards_screen') or []],
+             'safeguards_prefer': [str(p) for p in raw.get('safeguards_prefer') or []],
+             'safeguards_error_types': [str(p) for p in raw.get('safeguards_error_types') or []],
              'same_cli_downgrade': dict(raw.get('same_cli_downgrade') or {}),
              'aliases': dict(raw.get('aliases') or {}), 'default': dict(raw.get('default') or {})}
     _TABLE[str(path)] = (stamp, table)
     return table
 
 
-def classify_wall(text, table=None):
+def classify_wall(text, table=None, safeguards=None):
     """None, or {'scope': 'account' | 'model_pool', 'line': <matched line>}. Account wins.
-    A usage reminder line (walls.notices, e.g. "You've used 78% of your weekly limit") is never a wall (§48.4)."""
+    A usage reminder line (walls.notices, e.g. "You've used 78% of your weekly limit") is never a wall (§48.4).
+    ``safeguards``: whether ``text`` may hold the CLI's safeguards refusal (walls.safeguards, design section 23):
+    None = not looked for (a turn text is the model's own output, so the sentence there is a quote); 'cli' = CLI-owned
+    text (StopFailure error fields, the transcript's API-error row); 'screen' = a screen, where the line must also
+    match walls.safeguards_screen (the CLI's own error line, not a pasted report). A hit is
+    {'scope': 'model_pool', 'kind': 'safeguards', 'line'}, checked after account and before model_pool."""
     table = table or wall_table()
     lines = [x.strip() for x in (text or '').splitlines() if x.strip()]
+    if safeguards == 'screen':  # the anchors read the line as the screen shows it (indent, glyph)
+        raw = [x.rstrip() for x in (text or '').splitlines() if x.strip()]
     lines = [x for x in lines if not any(p.search(x) for p in table.get('notices') or [])]
-    for scope in ('account', 'model_pool'):
-        for line in lines:
-            if any(p.search(line) for p in table[scope]):
-                return {'scope': scope, 'line': line[:300]}
+    for line in lines:
+        if any(p.search(line) for p in table['account']):
+            return {'scope': 'account', 'line': line[:300]}
+    if safeguards in ('cli', 'screen'):
+        for line in (raw if safeguards == 'screen' else lines):
+            if (any(p.search(line) for p in table.get(SAFEGUARDS) or [])
+                    and (safeguards == 'cli' or any(p.search(line) for p in table.get('safeguards_screen') or []))):
+                return {'scope': 'model_pool', 'kind': SAFEGUARDS, 'line': line.strip()[:300]}
+    for line in lines:
+        if any(p.search(line) for p in table['model_pool']):
+            return {'scope': 'model_pool', 'line': line[:300]}
     return None
 
 
 def screen_wall(screen, lines=GATE_TAIL, table=None):
-    """Wall on the bottom of a live screen (watchdog gate, E before F), or None."""
+    """Wall on the bottom of a live screen (watchdog gate, E before F), or None. The safeguards class counts only
+    on the CLI's own error line (walls.safeguards_screen)."""
     rows = (screen or '').rstrip().splitlines()
-    return classify_wall('\n'.join(rows[-lines:]), table)
+    return classify_wall('\n'.join(rows[-lines:]), table, safeguards='screen')
+
+
+def preferred(model, patterns):
+    """Does ``model`` match one of ``patterns`` (walls.safeguards_prefer, the discovery.only_via pattern form)?"""
+    from fleetmux import discover
+    return any(discover.matches(p, model or '') for p in patterns or ())
 
 
 def account(cli, model):
@@ -240,21 +274,28 @@ def account(cli, model):
     return cli
 
 
-def wall_action(cli, model, below, walled=(), refused=None):
+def wall_action(cli, model, below, walled=(), refused=None, prefer=None):
     """What the brake decides for a wall (user 2026-11-11): the first usable model further down the role's chain,
     or stop. ``below``: [(cli, model)] after the walled one; ``walled``: this run's wall records ({cli, model,
     account, scope}; an account record skips every model of that account, any other only its own model);
-    ``refused(cli, model)``: why the pair table refuses that model here, or None."""
+    ``refused(cli, model)``: why the pair table refuses that model here, or None. ``skipped`` lists the passed-over
+    entries as 'cli:model (why)'; ``skipped_rows`` lists the same as {cli, model, reason} (job_chain reads them).
+    ``prefer(cli, model)``: those entries are tried first, then the others, each group in the given order (a
+    safeguards wall passes the whole chain and the OpenAI family test, design section 23)."""
+    if prefer:
+        below = [e for e in below if prefer(*e)] + [e for e in below if not prefer(*e)]
     dead = {w.get('account') for w in walled if w.get('scope') == 'account'}
     spent = {(w.get('cli'), w.get('model')): w.get('scope') for w in walled if w.get('scope') != 'account'}
-    skipped = []
+    skipped, rows = [], []
     for c, m in below:
         why = ('account wall' if account(c, m) in dead
                else {'model_pool': 'model-pool wall'}.get(spent[(c, m)], spent[(c, m)]) if (c, m) in spent
                else refused(c, m) if refused else None)
         if not why:
-            return {'action': 'switch', 'cli': cli, 'from': model, 'to_cli': c, 'to': m, 'skipped': skipped}
+            return {'action': 'switch', 'cli': cli, 'from': model, 'to_cli': c, 'to': m, 'skipped': skipped,
+                    'skipped_rows': rows}
         skipped.append(c + ':' + m + ' (' + why + ')')
-    return {'action': 'stop', 'cli': cli, 'from': model, 'skipped': skipped,
+        rows.append({'cli': c, 'model': m, 'reason': why})
+    return {'action': 'stop', 'cli': cli, 'from': model, 'skipped': skipped, 'skipped_rows': rows,
             'advice': ('no usable model left below this one on the chain (fleet.yaml#discovery): '
                        'wait for the reset or restart the slot by hand')}

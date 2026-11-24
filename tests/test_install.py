@@ -2,6 +2,7 @@
 local release tree (FLEETMUX_RELEASE_BASE=file://...), Python from uv; no GitHub access."""
 import os
 import shutil
+import signal
 import subprocess
 import tarfile
 from pathlib import Path
@@ -26,11 +27,22 @@ def source_tarball(path):
 
 
 def run(tmp_path, **env):
-    full = dict(os.environ, HOME=str(tmp_path / 'home'), FLEETMUX_VERSION=VERSION,
+    # UV_PYTHON_DOWNLOADS=never: the Python comes from the host. A host without it fails in seconds with
+    # "uv cannot provide Python", instead of downloading CPython from GitHub into the temp HOME.
+    full = dict(os.environ, HOME=str(tmp_path / 'home'), FLEETMUX_VERSION=VERSION, UV_PYTHON_DOWNLOADS='never',
                 FLEETMUX_RELEASES=str(tmp_path / 'releases'), FLEETMUX_BIN_DIR=str(tmp_path / 'bin'), **env)
     full.pop('DISPLAY', None)
     full.pop('WAYLAND_DISPLAY', None)
-    return subprocess.run(['bash', str(SCRIPT)], env=full, capture_output=True, text=True, timeout=600)
+    # Own process group: a timeout kills install.sh and its uv / curl children, not only bash.
+    proc = subprocess.Popen(['bash', str(SCRIPT)], env=full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=600)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
 def test_a_failed_install_removes_its_release_dir_and_links_nothing(tmp_path):

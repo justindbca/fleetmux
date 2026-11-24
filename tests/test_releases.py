@@ -170,6 +170,12 @@ class _NoRedis:
     def hgetall(self, key):
         return {}
 
+    def scan_iter(self, pattern=None):  # status lists declared sub-fleets that wait (named_subfleet.waiting_rows)
+        return iter(())
+
+    def get(self, key):
+        return None
+
     def close(self):
         pass
 
