@@ -18,6 +18,8 @@ from test_subfleet import (WorldMgr, drive, given, hook, spawn_m0, step, stop_ch
 from test_subfleet_named_tmux import adopt_view_child, service_tree
 from fleetmux import fleet, named_subfleet, subfleet
 
+pytestmark = pytest.mark.usefixtures('job_chains_as_before')  # named supervisors keep the slot's model
+
 
 def tmux_session_alive(self, sid):
     w = self.w

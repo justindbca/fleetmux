@@ -223,6 +223,7 @@ def root(tmp_path, monkeypatch):
     cache = tmp_path / 'discovered.yaml'
     probe_cache(cache)
     monkeypatch.setenv(discover.CACHE_ENV, str(cache))
+    monkeypatch.setattr(fleet.Fleet, 'preflight_profile', lambda self, launch, **kw: None)  # no claude binary here
     gen = svc_fixture.__wrapped__(tmp_path, monkeypatch)
     t = next(gen)
     t.cache = cache

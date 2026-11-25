@@ -12841,11 +12841,11 @@ def main(argv=None):
         result = discover.run()
         discover.save(result)
         from fleetmux import i18n  # §63: the interface language in effect, and the template in the private file
-        status, where = i18n.ensure_template()
+        tpl_status, where = i18n.ensure_template()  # not `status`: that name is the status() command in main()
         result = dict(result, ui_language=i18n.language_info(),
-                      ui_template={'status': status, 'path': str(where) if where else None})
+                      ui_template={'status': tpl_status, 'path': str(where) if where else None})
         print(json.dumps(result, ensure_ascii=False, indent=1) if args.json
-              else discover.render(result) + '\n' + i18n.render_setup(result['ui_language'], status, where))
+              else discover.render(result) + '\n' + i18n.render_setup(result['ui_language'], tpl_status, where))
         return
     if args.cmd == 'gui':  # §18.2: a window on the resumable runs; no config.json, nothing pinned
         discover.ensure()  # §52: first open

@@ -620,8 +620,9 @@ def test_no_dispatch_to_a_slot_while_its_approved_split_hands_over(cf, ok_check,
     assert not [x for x in inbox(cf, 'worker-1') if 'extra.md' in x]
 
 
-def test_worker_report_board_marks_the_slot_of_an_approved_split(cf, ok_check):
+def test_worker_report_board_marks_the_slot_of_an_approved_split(cf, ok_check, monkeypatch):
     """缺陷 4: the task-mode [worker report] tail shows the held split on the slot's line (worker_board)."""
+    monkeypatch.setattr(fleet.Fleet, 'preflight_profile', lambda self, launch, cli_change_ok=False: None)
     plain_m0(cf)
     approve(cf)
     status = cf.escalation_state()['M0']['status']

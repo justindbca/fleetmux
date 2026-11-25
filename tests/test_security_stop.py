@@ -643,7 +643,9 @@ def test_tick_table_appends_security_after_channels(monkeypatch):
     for attr, name in (('roster_tick', 'roster'), ('advisor_tick', 'advisor'), ('write_result', 'result'),
                        ('sync_contract_files', 'contracts'), ('escalation_tick', 'escalations'),
                        ('waiting_tick', 'waiting'), ('relay_notices', 'notices'), ('apply_vetoes', 'vetoes'),
-                       ('channel_tick', 'channels'), ('security_tick', 'security'), ('job_tick', 'jobs')):
+                       ('channel_tick', 'channels'), ('security_tick', 'security'), ('job_tick', 'jobs'),
+                       ('sync_tree_files', 'tree'), ('tree_summary_tick', 'tree_summary'), ('decompose_flush', 'decompose_params'),
+                       ('tree_overrun_tick', 'tree_overrun'), ('history_tick', 'history')):  # §62 tree, history pane
         setattr(f, attr, boom(name))
     monkeypatch.setattr(lifecycle_close, 'tick', boom('lifecycle'))
     monkeypatch.setattr(subfleet, 'tick', boom('subfleet'))
@@ -662,7 +664,8 @@ def test_tick_table_appends_security_after_channels(monkeypatch):
     errors = [d for kind, d in logged if kind == 'tick.error']
     for d in errors:
         assert 'segment ' + d['part'] in d['error'], d
-    parts = [d['part'] for d in errors if d['part'] != 'jobs']  # §58 jobs segment: pinned in test_channel_actor_supervise
+    parts = [d['part'] for d in errors
+             if d['part'] not in ('jobs', 'tree', 'tree_summary', 'decompose_params', 'tree_overrun', 'history')]  # §58 jobs segment: pinned in test_channel_actor_supervise
     assert parts[:12] == OLD_PARTS
     assert parts[12:14] == ['channels', 'security'] and parts.count('security') == 1
 

@@ -68,6 +68,7 @@ def _run_self(backend, ok, why=''):
     return SimpleNamespace(mgr=mgr, cfg=cfg, v2=None, stopping=True, start_all=lambda: started.append(1),
                            capture_terminal_theme=lambda: None, wall_chains_load=lambda: None,  # §23 chains -> Redis
                            builtin_applets=lambda: None,  # relay.enabled: the built-in relay applet (off here)
+                           tree_restore=lambda: None, decompose_load=lambda: None,  # §62 start steps
                            r=FakeRedis(),  # run() loads the fleet-superpowers hot blocks into Redis
                            quota_source=lambda: Path(__file__).parent / 'no-such-quota.json',  # nothing to ingest
                            log=lambda kind, **data: logged.append((kind, data))), started, logged

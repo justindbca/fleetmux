@@ -28,6 +28,7 @@ CHANNEL = 'channel adapters and the actor run on wall time (remote services, inj
 SECURITY = 'confirmation nonces and tickets expire in real time on purpose: a sleep only voids them (fail closed)'
 WATCHDOG = 'watchdog-style stall window on busy_since; the daemon gap floors it (act_floor, section 24); open'
 
+TREE = ('section 62 tree accounts: block minutes and session minutes are wall time; an overrun note is one message to the supervisor and fails nothing; a sleep inside a block inflates its measured minutes; open')
 DEMO = ('section 61 `fleetmux demo`: a one-off foreground run of a scripted fleet in a temp home; its waits are '
           'seconds long and end with the command (no daemon deadline across a sleep)')
 
@@ -109,6 +110,11 @@ ALLOWED = {
     'fleetmux/watchdog.py::answer_user': SECURITY,
     'fleetmux/watchdog.py::revive_summary': DISPLAY,
     'fleetmux/watchdog.py::tick': TTL + ' (check cadence)',
+    'fleetmux/decompose.py::params_flush': TTL + ' (section 62 write-back of the decompose block)',
+    'fleetmux/fleet.py::history_tick': TTL + ' (section 2 history pane check cadence)',
+    'fleetmux/fleet.py::tree_collected': TREE,
+    'fleetmux/fleet.py::tree_overrun_tick': TREE,
+    'fleetmux/fleet.py::tree_reported': TREE,
 }
 
 
