@@ -8,7 +8,7 @@ on:
 jobs:
   pytest:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 120  # the full suite takes about 75 min on a hosted macOS runner
     # Hosted macOS arm64 runners are often out of capacity: the job is never picked up and GitHub marks it
     # failed with no test run (10-28 runs 40682419373 / 40697835435). The run's status follows Linux; macOS
     # results still show per job, and the full suite runs on a Mac before every merge.
@@ -79,7 +79,7 @@ jobs:
   # (design §7.3) skip themselves when `wezterm-mux-server` is absent, like the real-Redis tests.
   pytest-linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

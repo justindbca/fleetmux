@@ -560,7 +560,7 @@ def test_closed_client_tab_is_reattached_with_its_registry_entry(world):
     assert new and w.parent.owns(new) and wait(lambda: len(clients(w, 'ops-a-g0')) == 1)
     entry = w.parent._meta()['surfaces'][new]
     assert entry['tmux_role'] == 'owner' and entry['output_file'] == str(out) and entry['label'] == 'fx-ops-a'
-    assert sid not in w.parent._meta()['surfaces'] and w.parent.has_cli_process(new, ('claude',))
+    assert sid not in w.parent._meta()['surfaces'] and wait(lambda: w.parent.has_cli_process(new, ('claude',)))
     assert w.parent.kill_pane(new) and 'ops-a-g0' not in cm.tmux_sessions(w.sock)  # still the owner
     assert w.parent.reattach_client(new, peer.pane_id) is None  # the session is gone: nothing to reattach
 
