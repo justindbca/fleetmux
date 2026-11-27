@@ -919,6 +919,9 @@ def child_config(f, slot, task_id, workers, rec_dir, sid, info, redis_cfg, name,
                                    and getattr(f, 'v2', None) is not None and f.v2.hooked(slot)),
                       'info': info, 'parent_workspace': f.mgr.workspace_id() if hasattr(f.mgr, 'workspace_id') else None})
     cfg.update(fleetmux_binding(f.cfg, task_id))
+    # the switch baseline's shape (fleetmux/baseline.py): `job` / `named` may be inherited from the parent's keys
+    cfg['baseline_shape'] = ('job' if job else 'attached' if named and named.get('attached') else 'named' if named
+                             else 'split')
     return cfg
 
 
@@ -1350,7 +1353,8 @@ def redis_up(cfg):
     return Path(cfg['redis_socket']).exists()
 
 
-def shutdown_redis(cfg):
+def shutdown_redis(cfg, save=False):
+    """SHUTDOWN of the fleet's private Redis (``save``: SHUTDOWN SAVE, as `fleetmux upgrade` takes a fleet down)."""
     if not redis_up(cfg):
         return
     import redis
@@ -1361,7 +1365,7 @@ def shutdown_redis(cfg):
     client = redis.Redis(unix_socket_path=str(redis_runtime.validate_socket(cfg)), socket_timeout=5,
                          socket_connect_timeout=3, retry=Retry(NoBackoff(), 0))
     try:
-        client.shutdown()
+        client.shutdown(save=True) if save else client.shutdown()
     except Exception:
         pass  # redis closes the socket while acknowledging shutdown
     finally:
@@ -1423,6 +1427,8 @@ def tick(f):
         if rec['state'] == 'stopping' and not fleet.daemon_running(d):
             collect(f, d, notify=running)
     watch_children(f)
+    from fleetmux import heal
+    heal.tick(f)  # §67: heal items, own-slot / up watches, reopens in progress, a child's lift after a readopt
 
 
 # ------------------------------------------------------------------ parent tick: is each sub-fleet moving? (R3b)
@@ -1551,12 +1557,14 @@ def report_stuck(f, d, rec, facts, reasons):
     text = ('[sub-fleet stuck] sub-fleet ' + str(rec.get('task_id') or Path(d).name) + ' (' + str(d) + '): '
             + '; '.join(reasons) + '. Facts: ' + detail + '. Its own daemon may be down or stuck, so it may not '
             'report this itself. Look at it (`fleetmux status --config ' + str(Path(d) / 'config.json') + '`, its '
-            'panes); resume it, or stop it if it cannot go on.')
+            'panes); resume it, or stop it if it cannot go on. To give it a new supervisor session (§67), add this '
+            'to your next decision: "heal": [{"subfleet": "' + str(rec.get('name') or rec.get('task_id') or Path(d).name)
+            + '", "reopen": "stay"}]')
     marked = bool(rec.get('attention'))  # §24: its supervisor already answered BLOCKED: a human must look
     f.log('subfleet.stuck', level='error', task=rec.get('task_id'), reasons=reasons, facts=detail,
           attention=marked)
-    if f.running() and not marked:
-        f.queue('supervisor', text)
+    from fleetmux import heal
+    text = heal.tell(f, text, send=f.running() and not marked)  # section 67: no quoted CLI wall line (a pause reason)
     if not f.cfg.get('parent_config') and lifecycle_close.managed(f):
         from fleetmux import lifecycle
         try:
@@ -1586,6 +1594,13 @@ def delegated_lost(f, slot, why):
         cfg = child_config_or_fail(f, d, rec)
         if cfg is None:
             continue
+        from fleetmux import heal
+        task = rec.get('name') or rec.get('task_id')
+        auto = bool(rec.get('named') and rec.get('autostart'))
+        heal.notify(f, 'sub:' + str(task), 'lost', '[sub-fleet supervisor dead] sub-fleet ' + str(task) + ' (' + str(d)
+                    + '): the session of its supervisor ' + f.label(slot) + ' is gone (' + why + '); the sub-fleet is '
+                    'taken down and ' + f.label(slot) + ' gets its next generation'
+                    + ('; this autostart sub-fleet comes up again by itself.' if auto else '.'))  # §67
         if rec.get('named'):
             from fleetmux import named_subfleet
             named_subfleet.stop_child(f, d, rec, cfg, 'down (' + why + ')')
@@ -1674,7 +1689,20 @@ def collect(f, child_run, notify=True):
     # role-change prompt, its next generation takes the returned session's place (CLI-argument prompt).
     # §48: a returned Claude pane is never typed into, hook channel or not: it takes the hooked branches below.
     hooked = returned and f.v2 is not None and (f.v2.hooked(slot) or fleet.is_claude(f.runtime_cfg(slot), slot))
-    if back and hooked:
+    reopen = bool(rec.get('heal_reopen')) and f.v2 is not None
+    if reopen:
+        # §67: the parent supervisor reopens this sub-fleet's supervisor: the slot's next generation now, on the model
+        # it chose (split_launch), then heal.progress_reopens hands the same suspended sub-fleet to it
+        from fleetmux import heal
+        prompt = heal.collected(f, rec)
+        if returned:
+            f.mgr.kill_pane(ph)
+            f.setf(slot, pane=rec['pane'], state='idle')
+        else:
+            f.setf(slot, pane=ph or rec['pane'], state='idle')
+        f.v2.respawn([slot], True, prompt=prompt)
+        f.log('subfleet.slot_respawned', task=rec['task_id'], slot=slot, heal=True)
+    elif back and hooked:
         # §29 (user 10-14): the returned session writes a handoff note (design §4 rotation on its own hook
         # channel: the delivery waits in its mailbox, the session's rewake fallback hands it over), then the
         # next generation of the slot reads it. Untaken / timed out: the daemon's skeleton note instead.
@@ -1723,6 +1751,12 @@ def collect(f, child_run, notify=True):
         f.v2.respawn([slot], True, prompt=task_return_prompt(rec))
         f.log('subfleet.slot_respawned', task=rec['task_id'], slot=slot)
     final = (child_result(child_run) or {}).get('status')
+    if reopen and final in (None, 'suspended'):
+        rec.update(state='suspended', finished=time.time())
+        save_record(child_run, rec)
+        f.refresh_history()
+        f.log('subfleet.suspended', task=rec['task_id'], slot=slot, reason=rec.get('reason', ''), heal=True)
+        return rec  # §67: no result, no notice; heal.progress_reopens hands it on
     if rec.get('job') and rec.get('outcome') == 'suspended' and final in (None, 'suspended'):
         # section 58 "Restart": the job sub-fleet is suspended (its task still runs in its Redis AOF): no result, the root
         # hands it to a fresh slot when it runs again (Fleet.job_start -> readopt_child)
@@ -1768,7 +1802,8 @@ def collect(f, child_run, notify=True):
     split_line = f.split_finished(rec, child_run) if f.service or job else ''
     if notify and f.running():
         extra = split_line + f.escalation_finished(rec, ok)
-        f.queue('supervisor', '[Sub-fleet ' + rec['task_id'] + ' ' + ('completed' if ok else 'failed') + '] '
+        from fleetmux import heal
+        heal.tell(f, '[Sub-fleet ' + rec['task_id'] + ' ' + ('completed' if ok else 'failed') + '] '
                 + supervised_by + ' ran sub-fleet ' + rec['task_id'] + ' (attempt ' + str(rec.get('attempt', 1))
                 + '): ' + (rec.get('reason') or rec.get('outcome') or '') + '. ' + f.label(slot)
                 + ' is a worker again' + ('' if returned and not hooked else ' (new generation: the delegated session was '
@@ -1912,7 +1947,7 @@ def suspend_dead(f, d, rec, why):
     f.job_suspended(rec['job'], rec['task_id'], d, why)
 
 
-def readopt_child(f, slot, task_id, job, launch=None):
+def readopt_child(f, slot, task_id, job, launch=None, adopt_extra=None):
     """section 58 "Restart": hand the suspended sub-fleet of job ``job['id']`` (``job['resume_run']``: the same run dir,
     config, Redis AOF and workspace) to ``slot``'s live session, the way spawn_child delegates a slot, and relaunch
     its daemon with ``--resume``; the child adopts the new session as its supervisor (``adopt.readopt``,
@@ -1962,7 +1997,8 @@ def readopt_child(f, slot, task_id, job, launch=None):
                             label=f.label(slot), thread=info_now.get('thread') or '', readopt=True,
                             hook=bool(f.cfg.get('adopted_supervisor_hook_delivery') is True
                                       and getattr(f, 'v2', None) is not None and f.v2.hooked(slot)),
-                            parent_workspace=f.mgr.workspace_id() if hasattr(f.mgr, 'workspace_id') else None)
+                            parent_workspace=f.mgr.workspace_id() if hasattr(f.mgr, 'workspace_id') else None,
+                            **(adopt_extra or {}))  # §67 heal: heal_lift
         placeholder, released = parent_attach_view(f, slot, sid, task_id, rec.get('title') or task_id)
         rec['placeholder'], rec['view'] = placeholder, int(bool(released.get('tmux_session')))
         f.setf(slot, state='delegated', pane=placeholder or sid, delegated_pane=sid, delegated_task=task_id,
@@ -1982,7 +2018,8 @@ def readopt_child(f, slot, task_id, job, launch=None):
             f.mgr.kill_pane(placeholder)
         raise Refused('sub-fleet ' + task_id + ' could not be handed on: ' + str(exc)) from exc
     rec.update(state='running', slot=slot, pane=sid, generation=int(info_now.get('generation') or 0),
-               resumed=int(rec.get('resumed') or 0) + 1, launched=time.time(), outcome='', reason='', finished=None)
+               resumed=int(rec.get('resumed') or 0) + 1, launched=time.time(), outcome='', reason='', finished=None,
+               heal_reopen=0)
     save_record(rec_dir, rec)
     f.refresh_history()
     f.log('subfleet.readopted', task=task_id, slot=slot, run=str(rec_dir), suspended_s=round(gap))
@@ -2000,6 +2037,11 @@ def readopt_prepare(f):
     if f.v2 is not None:  # the old session's generation-0 hook state: never handed to the new one
         k = f.v2.hook_keys('supervisor', 0)
         f.r.delete(k['mailbox'], k['bind'], k['rearmed'])
+        # The bus still registers the old session at generation 0: the new session (also generation 0) could not
+        # register over it ('old_generation'). Mark the old registration as older, so it is replaced on READY.
+        lease = f.v2.bus.lease_key('supervisor')
+        if f.r.hget(lease, 'generation') is not None:
+            f.r.hset(lease, 'generation', -1)
 
 
 def readopt_supervisor(f):
@@ -2023,7 +2065,9 @@ def readopt_supervisor(f):
         f.mgr.rename(view, 'fx-' + f.cfg.get('tab_prefix', '') + fleet.SUPERVISOR_LABEL)
     history.write_page(f.run_dir, f.history_slots(), f.history_links())
     prompt = ('Your role changed. You are now ' + fleet.SUPERVISOR_LABEL + ' of sub-fleet ' + f.cfg['task_id']
-              + ' (workers: ' + ', '.join(f.workers) + '), which resumes after its root fleet restarted. The files '
+              + ' (workers: ' + ', '.join(f.workers) + '), which resumes after '
+              + ('its parent fleet reopened its supervisor' if adopt.get('heal_lift') else 'its root fleet restarted')
+              + '. The files '
               'AGENTS.md / CLAUDE.md in your current directory were replaced with the supervisor rules: read AGENTS.md '
               'now and follow it from now on. The daemon sends where the task stands next. In this turn do no task '
               'work: your final reply must be exactly READY.')
@@ -2161,6 +2205,10 @@ def reopen_parent_views(f):
             continue
         if hasattr(f.mgr, '_tag'):
             f.mgr._tag(new, tmux_role='owner', type='worker')  # as the first tab: its retirement ends the session
+        if peer == f.agent('supervisor').get('pane'):
+            # No worker tab was live yet (every worker lent to a sub-fleet): the peer was the supervisor and the new tab
+            # joined its group. A worker tab belongs to the workers group (place_right_of moves it there).
+            f.mgr.place_right_of(new, peer)
         f.mgr.rename(new, 'fx-' + f.cfg.get('tab_prefix', '') + f.label(slot))
         f.setf(slot, pane=new, delegated_pane=new)
         repoint(f, slot, old, new)

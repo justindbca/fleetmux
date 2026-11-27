@@ -596,7 +596,8 @@ def test_all_running_subfleets_keep_creation_order(tmp_path, monkeypatch):
 def test_child_cards_carry_close_only_while_closeable(tmp_path, monkeypatch):
     """Section 19 "Closing a sub-fleet from the sidebar": only a running direct child with a stop path (a job whose row
     is not being cancelled, a named or an attached sub-fleet not already going down) carries ``close``, which names it;
-    a stopping one is drawn ``stopping`` (no button); split children, grandchildren and finished ones carry none."""
+    a stopping one is drawn ``stopping`` (no button); split children and grandchildren carry none. A finished direct
+    job child carries the dismiss one instead (section 19 "Dismissing a finished sub-fleet card")."""
     run = run_dir(tmp_path)
 
     def child(key, state, **rec):
@@ -624,7 +625,9 @@ def test_child_cards_carry_close_only_while_closeable(tmp_path, monkeypatch):
             return {'job-0000000000': {'state': 'running'}, 'job-1111111111': {'state': 'running', 'cancel': {'by': 'x'}},
                     'job-3333333333': {'state': 'running', 'cancel': {'by': 'x'}}}
     cards = {c['title']: c for c in fleetmux_sidebar.payload(JobFleet(run))['fleets']}
-    assert set(k for k, c in cards.items() if 'close' in c) == {'M0', 'ops'}, cards
+    assert set(k for k, c in cards.items() if 'close' in c) == {'M0', 'ops', 'M4'}, cards
+    assert cards['M0']['close']['action'] == 'stop' and cards['ops']['close']['action'] == 'stop'
+    assert cards['M4']['close']['action'] == 'dismiss'
     assert 'M0' in cards['M0']['close']['title'] and 'job-0000000000' in cards['M0']['close']['title']
     assert 'ops' in cards['ops']['close']['title'] and 'subfleet down' in cards['ops']['close']['body']
     assert cards['M3']['state'] == 'stopping' and cards['M4']['state'] == 'reclaimed'

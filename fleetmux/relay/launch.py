@@ -57,7 +57,7 @@ def render(spec, *, job, seg, epoch, worktree, task_branch, deploy_branch, queue
     d = spec['deliver']
     deliver = {'repo': str(worktree), 'feature_branch': task_branch, 'deploy_branch': deploy_branch,
                'test_cmd': ['/usr/bin/env', 'RELAY_PYTHON=' + str(relay_python)] + list(d['test_cmd']),
-               'queue': str(queue)}
+               'queue': str(queue), 'via': 'queue'}   # the relay reads 'delivered' from the queue file
     if 'test_timeout_s' in d:
         deliver['test_timeout_s'] = d['test_timeout_s']
     out = {'name': sub_fleet_name(job, seg, epoch), 'goal': goal, 'lifecycle': 'dev_task', 'deliver': deliver}

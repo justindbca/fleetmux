@@ -4,7 +4,7 @@
 #   $FLEETMUX_CONFIG, else ~/.fleetmux/fleet.yaml   (never part of this repository)
 # A top-level block there replaces the shipped block as a whole (no deep merge). Only these blocks may
 # be overridden there: accounts, tools, walls, lifecycle_modes, pi_context, daemon_watch, fresh_dispatch,
-# discovery, remote, job_subfleet, gui, bare, relay, handoff (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
+# discovery, remote, job_subfleet, gui, bare, relay, handoff, deliver, ... (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
 # watchdog_prompts (the dialog whitelist), models, profiles and capability_matrix change only here,
 # through a reviewed commit.
 #
@@ -25,6 +25,7 @@
 #   gui                the root fleet daemon keeps its `fleetmux gui` window open               (gui_keep.py)
 #   bare               the root fleet bare `fleetmux` starts when none runs                   (open_window.py)
 #   relay              multi-machine relay development through one git hub                       (relay/params.py)
+#   deliver            how a dev_task gate hands its work on: local rollout or queue file   (lifecycle_deliver.py)
 
 cli_pairs:
   # Transport v2 supervisor_cli x worker_cli x mode table (read by fleetmux/cli_pairs.py).
@@ -215,6 +216,21 @@ walls:
     - "^\\s*\u23bf\\s+API Error:.{0,80}?safeguards flagged this message"
   safeguards_prefer: [gpt]
   safeguards_error_types: [invalid_request]
+  # How a fleet delivery is drawn on a pane (docs/design.md section 67, "Delivered text on a screen"). A wall line
+  # quoted inside a delivered block is not the CLI's own line and never trips the brake; the CLI's own wall row
+  # after the block always does (the position rule of section 67 is unchanged). Per shape: `head` opens a block,
+  # every following non-empty row at `body_indent` or right of it is delivered text, and the block ends at the
+  # first row left of it or matching `cli_row` (a row the CLI draws itself). A row whose wall match starts near its
+  # beginning counts as the CLI's own. Shipped: the demo / scripted actor only. Claude Code is not measured: a
+  # live capture shows the tail of a delivered text drawn at column 2, but not the head row or the block end, so
+  # it has no row yet; Codex, opencode and pi are not measured either (no row: every wall line on their screens
+  # counts, as before, including one quoted in a delivery). A private walls block without this key gets the
+  # shipped value; [] turns it off.
+  delivery_screen:
+    - name: demo
+      head: "^\u25c0 "
+      body_indent: 2
+      cli_row: "^\\s*[\u23bf\u23fa\u25b6\u25c0\u273b\u25a0\u2022\u276f\u2500\u2594]"
   # Same CLI one tier down (2026-09-20). Codex gpt-5.6-* names are copied as-is: v1 design §91
   # flags them as stale; fix them here when the Codex catalogue is confirmed. Not read by the wall decision since
   # 2026-11-11 (the discovery chain replaced it); kept as the copy of the operator's cli_tier_map.yaml.
@@ -996,3 +1012,32 @@ decompose:
 # The private ~/.fleetmux/fleet.yaml may set its own `ui:` block; applies at the next start / server restart.
 ui:
   language: system
+
+# Release drift (docs/design.md section 56): the root daemon compares the release of every process of its run (root
+# daemon, sub-fleet daemons, applets, fleetmux server) with the installed one (~/fleetmux-current) and switches the run
+# to it when the drift outlived the grace, the installed release passes its self-check, no blackout window is open and
+# no worker is in a turn. The switch continues the same run (<fleet home>/start.sh --resume with FLEETMUX_REL); a
+# failed check goes back to the old release. Each key is validated on its own; a bad value keeps its default. The
+# private fleet.yaml may set its own block (e.g. blackout windows), which replaces this one as a whole.
+release_drift:
+  enabled: true              # master switch of the automatic switch (false: no compare, no switch)
+  check_interval_s: 600      # s between two compares
+  grace_s: 900               # s the drift must last (since the daemon first saw it) before a switch
+  idle_wait_s: 600           # s to wait for every worker to be idle; then the switch waits for the next compare
+  blackout: []               # windows without a switch, "HH:MM-HH:MM" (an end before the start runs past midnight)
+  timezone: ''               # IANA zone of the blackout windows ('' = this machine's zone)
+  max_failures: 2            # failed switches to one installed release after which the daemon only reports
+  stop_wait_s: 240           # s the switch waits for the daemons to exit after SIGTERM (applets end first)
+  verify_s: 300              # s the switch waits for every process of the run to be up on the new release
+
+# dev_task delivery (docs/design.md section 70). `via` is how a passing dev_task gate hands its work on:
+#   rollout  rebase the feature branch onto the newest deploy branch, run test_cmd on that sha, and submit it to the
+#            local rollout (the kind: git target of the same repository in the registry below, through the
+#            registry's site.client); done when the rollout answers with a request id. The deploy branch is not moved.
+#   queue    the older way: fast-forward the deploy branch and append a pending_approval row to deliver.queue.
+# A job spec's own deliver.via wins over this default (the relay writes via: queue). The registry is the first of:
+# $ROLLOUT_TARGETS, then the first existing file of `registries`. The private fleet.yaml may set its own block.
+deliver:
+  via: rollout
+  registries: [~/.fleetmux/rollout-targets.yaml, ~/rollout-site/registry.yaml]
+  submit_timeout_s: 600      # s the submit client may run before the delivery is reported blocked

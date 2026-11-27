@@ -1278,7 +1278,11 @@ pub(crate) fn close_box(side: &mut sidebar::Side) {
 /// box, [`open_confirm`]), or another child request still waits for the daemon's answer.
 pub(crate) fn open_child_box(side: &mut sidebar::Side, j: usize) -> Result<(), (&'static str, &'static str)> {
     let card = side.data.as_ref().and_then(|d| d.fleets.get(j)).cloned();
-    let Some(e) = card.filter(|e| j > 0 && e.page.as_deref().is_some_and(|p| !p.is_empty())) else {
+    // A finished card the daemon may dismiss needs no `page`: an older attempt of a task carries none.
+    let child = |e: &sidebar::Entry| {
+        e.page.as_deref().is_some_and(|p| !p.is_empty()) || sidebar::dismissable(side, e)
+    };
+    let Some(e) = card.filter(|e| j > 0 && child(e)) else {
         return Err(CHILD_CLOSE_NOTICE);
     };
     if !sidebar::closeable(side, &e) {
@@ -1294,21 +1298,24 @@ pub(crate) fn open_child_box(side: &mut sidebar::Side, j: usize) -> Result<(), (
 }
 
 /// `y` in a child card's box (design section 19): write the root-only kv `child_stop`
-/// `{"v":1,"state":"requested","id","page","at"}` for the root daemon, hide that card's `×` until it answers and
-/// close the box. False (nothing written) when no child box is open.
+/// `{"v":1,"state":"requested","id","page","at","action"}` for the root daemon (`action`: the card's `close.action`,
+/// `"stop"` when it names none), hide that card's `×` until it answers and close the box. False (nothing written)
+/// when no child box is open.
 pub(crate) fn confirm_child(side: &mut sidebar::Side, kv: &mut BTreeMap<String, String>, at: u64) -> bool {
     let Some(id) = side.close_child.clone() else {
         return false;
     };
-    let page = side
-        .data
-        .as_ref()
-        .and_then(|d| d.fleets.iter().find(|e| e.id == id))
-        .and_then(|e| e.page.clone())
-        .unwrap_or_default();
+    let card = side.data.as_ref().and_then(|d| d.fleets.iter().find(|e| e.id == id));
+    let page = card.and_then(|e| e.page.clone()).unwrap_or_default();
+    let action = card
+        .and_then(|e| e.close.as_ref())
+        .map(|c| c.action.clone())
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| "stop".to_string());
     kv.insert(
         "child_stop".to_string(),
-        serde_json::json!({"v": 1, "state": "requested", "id": id, "page": page, "at": at}).to_string(),
+        serde_json::json!({"v": 1, "state": "requested", "id": id, "page": page, "at": at, "action": action})
+            .to_string(),
     );
     side.child_stop = sidebar::ChildStop::Requested(id);
     close_box(side);
@@ -1342,12 +1349,36 @@ pub(crate) fn sync_child_stop(state: &mut State) {
     if state.side.child_stop == stop {
         return;
     }
-    match &stop {
-        sidebar::ChildStop::Accepted(_, note) => {
+    // "Dismissing a finished sub-fleet card": the daemon's answer says `action: "dismiss"`.
+    let dismiss = state
+        .kv
+        .get("child_stop")
+        .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+        .is_some_and(|v| v.get("action").and_then(|a| a.as_str()) == Some("dismiss"));
+    match (&stop, dismiss) {
+        (sidebar::ChildStop::Accepted(_, note), true) => {
+            let lang = state.side.lang;
+            let text = if note.is_empty() {
+                tr(lang, "notice.child_dismissed", "Removed from the sidebar")
+            } else {
+                tr_fmt(lang, "notice.child_dismissed_note", "Removed from the sidebar: {note}", &[("note", note)])
+            };
+            notice(state, &text);
+        }
+        (sidebar::ChildStop::Refused(_, reason), true) => {
+            let text = tr_fmt(
+                state.side.lang,
+                "notice.child_dismiss_refused",
+                "Removal from the sidebar refused: {reason}",
+                &[("reason", reason)],
+            );
+            notice(state, &text);
+        }
+        (sidebar::ChildStop::Accepted(_, note), false) => {
             let text = if note.is_empty() { "子 fleet 正在关闭".to_string() } else { format!("子 fleet 正在关闭：{note}") };
             notice(state, &text);
         }
-        sidebar::ChildStop::Refused(_, reason) => notice(state, &format!("关闭子 fleet 被拒：{reason}")),
+        (sidebar::ChildStop::Refused(_, reason), false) => notice(state, &format!("关闭子 fleet 被拒：{reason}")),
         _ => {}
     }
     state.side.child_stop = stop;
@@ -2751,7 +2782,7 @@ mod tests {
         open_child_box(&mut side, 1).expect("the box opens again");
         assert!(confirm_child(&mut side, &mut kv, 5));
         let v: serde_json::Value = serde_json::from_str(&kv["child_stop"]).expect("child_stop is JSON");
-        assert_eq!(v, serde_json::json!({"v": 1, "state": "requested", "id": "c", "page": "M0", "at": 5}));
+        assert_eq!(v, serde_json::json!({"v": 1, "state": "requested", "id": "c", "page": "M0", "at": 5, "action": "stop"}));
         assert!(!side.confirm && side.close_child.is_none());
         assert_eq!(side.child_stop, sidebar::ChildStop::Requested("c".to_string()));
         let card = side.data.as_ref().expect("data").fleets[1].clone();
@@ -2774,5 +2805,27 @@ mod tests {
         assert_eq!(open_child_box(&mut side, 1), Ok(()));
         assert_eq!(parse_child_stop("not json"), sidebar::ChildStop::None);
         assert_eq!(open_child_box(&mut side, 0), Err(CHILD_CLOSE_NOTICE), "the root card keeps its own box");
+    }
+
+    /// Design section 19 "Dismissing a finished sub-fleet card": a reclaimed card with a dismiss `close` opens its
+    /// box even without a `page` (an older attempt of a task carries none); `y` writes `child_stop` with
+    /// `"action":"dismiss"` and an empty `page`. A running child card without a `page` still has no box of its own.
+    #[test]
+    fn child_dismiss_works_for_a_finished_card_without_a_page() {
+        let json = r#"{"v":1,"current":"r","fleets":[{"id":"r","title":"r","state":"running","line1":"a","line2":"b","page":""},{"id":"M0","title":"M0","state":"reclaimed","line1":"a","line2":"b","close":{"title":"从侧栏拿掉子 fleet「M0」？","body":"记录保留","action":"dismiss"}},{"id":"M1","title":"M1","state":"running","line1":"a","line2":"b","close":{"title":"t","body":"b","action":"stop"}}]}"#;
+        let mut side = sidebar::Side {
+            data: Some(sidebar::parse(json).expect("cards parse")),
+            ..sidebar::Side::default()
+        };
+        let mut kv = BTreeMap::new();
+        assert_eq!(open_child_box(&mut side, 2), Err(CHILD_CLOSE_NOTICE), "a running child without a page");
+        assert_eq!(open_child_box(&mut side, 1), Ok(()));
+        close_box(&mut side);
+        assert!(kv.is_empty());
+        open_child_box(&mut side, 1).expect("the box opens again");
+        assert!(confirm_child(&mut side, &mut kv, 9));
+        let v: serde_json::Value = serde_json::from_str(&kv["child_stop"]).expect("child_stop is JSON");
+        assert_eq!(v, serde_json::json!({"v": 1, "state": "requested", "id": "M0", "page": "", "at": 9, "action": "dismiss"}));
+        assert_eq!(side.child_stop, sidebar::ChildStop::Requested("M0".to_string()));
     }
 }

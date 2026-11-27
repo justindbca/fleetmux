@@ -232,7 +232,7 @@ def _lease_idle(f, slot):
 
 
 def service_tick(f, policy, now):
-    from fleetmux import lifecycle_close as close
+    from fleetmux import lifecycle_close as close, named_subfleet
     from fleetmux.fleet import REQQ
     minutes = policy.get('worker_idle_reclaim_min')
     paused = f.paused()
@@ -242,7 +242,9 @@ def service_tick(f, policy, now):
         info = f.agent(slot)
         pending = f.v2.bus.pending(slot)
         if info.get('state') == 'reclaimed':
-            if (pending or queued) and not paused:  # work arrived for a reclaimed worker: its next generation starts
+            # a job never wakes the supervisor slot of a declared sub-fleet (fleet.job_slot_busy would refuse it)
+            if (pending or (queued and not named_subfleet.reserved(f, slot))) and not paused:
+                # work arrived for a reclaimed worker: its next generation starts
                 f.log('lifecycle.respawn', slot=slot, pending=len(pending), jobs=queued)
                 f.v2.respawn([slot], True)
                 queued -= not pending

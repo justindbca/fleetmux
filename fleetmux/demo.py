@@ -398,9 +398,16 @@ def shutdown_redis(sock):
 
 
 def stop_terminal_server(world, runtime):
-    """One fleetmux server of this demo (``runtime`` = its runtime directory): `server.shutdown` with ``force``
-    through its own control socket (every pane's process group is killed, PROTOCOL.md §4.16); without an answering
-    socket, `fleetmux reap`, which signals only the process groups that server recorded (start time checked)."""
+    """One fleetmux server of this demo (``runtime`` = its runtime directory): see ``stop_server``."""
+    stop_server(Path(runtime), world.paths['fleetmux'], world.env())
+
+
+def stop_server(runtime, binary, env=None):
+    """One fleetmux server (``runtime`` = its runtime directory): `server.shutdown` with ``force`` through its own
+    control socket (every pane's process group is killed, PROTOCOL.md §4.16); without an answering socket,
+    `<binary> reap`, which signals only the process groups that server recorded (start time checked). Shared by the
+    demo's clean-up and `fleetmux upgrade` (fleetmux/upgrade.py)."""
+    runtime = Path(runtime)
     sock = runtime / 'ctl.sock'
     if sock.exists():
         import socket
@@ -420,8 +427,7 @@ def stop_terminal_server(world, runtime):
             time.sleep(0.2)
     if (runtime / 'panes.json').exists():
         try:
-            subprocess.run([world.paths['fleetmux'], 'reap', '--runtime', str(runtime)], env=world.env(),
-                           capture_output=True, timeout=30)
+            subprocess.run([binary, 'reap', '--runtime', str(runtime)], env=env, capture_output=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             pass
 

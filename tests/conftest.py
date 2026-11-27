@@ -13,7 +13,9 @@ every test. A real hook blocks waiting for the next delivery, which an in-proces
 so tests/hook_sim.py stands in for that wait only (see its docstring). A module that runs the real
 hook command in subprocesses sets ``HOOK_CHANNEL = True`` and gets no stand-in.
 """
+import json
 import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -24,8 +26,31 @@ import hook_sim  # noqa: E402
 from fleetmux import cmux_manager, codex_queue, fleet  # noqa: E402
 from fleetmux import fleet_config, gui_keep, home_migrate  # noqa: E402
 
+# Skip policy (tests/skip_policy.py): a skip outside tests/skip_allowlist.yaml fails the run, in every run.
+pytest_plugins = ('skip_policy',)
+PI_PACKAGE = '@earendil-works/pi-coding-agent'
+
+
+def pi_package(which=shutil.which):
+    """The installed Pi package directory, found from the ``pi`` command (a link into the package), else None."""
+    found = which('pi')
+    if not found:
+        return None
+    for parent in Path(found).resolve().parents:
+        try:
+            if json.loads((parent / 'package.json').read_text()).get('name') == PI_PACKAGE:
+                return parent
+        except (OSError, ValueError, AttributeError):
+            continue
+    return None
+
 
 def pytest_configure(config):
+    # The Pi contract tests read FLEETMUX_PI_ROOT at import; unset, it is the package the `pi` command runs.
+    if not os.environ.get('FLEETMUX_PI_ROOT'):
+        pkg = pi_package()
+        if pkg is not None:
+            os.environ['FLEETMUX_PI_ROOT'] = str(pkg)
     # The fleet-superpowers inventory never resolves to ~/.fleetmux for the whole session, also between tests,
     # in threads and in subprocesses: a per-test monkeypatch restores this value, never "unset".
     import tempfile
@@ -35,6 +60,15 @@ def pytest_configure(config):
     fleet_superpowers.OLD_QUOTA = guard / 'no-quota.json'
     config.addinivalue_line('markers', 'real_uappend: the audit chain may call the real chflags (UF_APPEND) in this '
                                        'test; the test must clear the flag (chflags nouappend) before it ends')
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_release(monkeypatch):
+    """Release drift (docs/design.md section 56): a root fleet's tick never sees this machine's ~/fleetmux-current,
+    so no test compares against, self-checks or switches to a real installed release. A test that needs one gives
+    ``release_drift.tick`` its own ``Ops``."""
+    from fleetmux import release_drift
+    monkeypatch.setattr(release_drift.Ops, 'installed_dir', lambda self: None)
 
 
 @pytest.fixture(autouse=True)
@@ -190,6 +224,19 @@ def ui_language_zh(_isolation_mp):
     _isolation_mp.setattr(i18n, 'ensure_template', guarded)
     yield
     i18n.pin(None)  # a run's pin (pin_paths) never leaks into the next test
+
+
+@pytest.fixture(autouse=True)
+def isolated_claude_json(_isolation_mp, tmp_path):
+    """No test reads or writes the operator's ~/.claude.json. ``fleet.CLAUDE_JSON`` is bound at import, and
+    ``fleet.trust_claude_dir`` (every Claude slot started in-process: ``actor``, ``Fleet.spawn``, ``spawn_advisor``)
+    reads it and writes it, with ``.fleet.lock`` / ``.fleet-tmp`` beside it (
+    tests/test_advisor.py's held-actor case added a trust entry to the real file). It points at a per-test file in
+    a per-test directory (created; the file is not, as on a machine without one). On ``_isolation_mp``: a test that
+    sets its own with monkeypatch runs after this and wins. Checked by tests/test_suite_isolation.py."""
+    where = tmp_path / 'claude-json-isolated'
+    where.mkdir()
+    _isolation_mp.setattr(fleet, 'CLAUDE_JSON', where / '.claude.json')
 
 
 @pytest.fixture(autouse=True)

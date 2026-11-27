@@ -158,14 +158,14 @@ def test_safeguards_record_is_model_pool_with_reason_and_skips_only_that_model(t
     assert json.loads(f.agent('worker-1')['wall'])['kind'] == 'safeguards'
 
 
-def test_subfleet_supervisor_safeguards_skips_openai_as_not_claude_and_takes_fable(tmp_path):
+def test_subfleet_supervisor_safeguards_stops_and_the_parent_decides(tmp_path):
+    # docs/design.md section 67: a sub-fleet's supervisor never walks a chain in its own daemon, whatever the wall kind
+    # and generation; it stops and the parent fleet's supervisor reopens it (heal). It used to switch to fable here.
     f = make(tmp_path, {'goal': 'x'}, worker_cli='claude')
     f.cfg['parent_config'] = str(tmp_path / 'parent.json')  # a child-owned (not adopted) sub-fleet supervisor
-    assert not f.wall_chained('supervisor') and f.wall_chained('supervisor', 'safeguards')
+    assert not f.wall_chained('supervisor') and not f.wall_chained('supervisor', 'safeguards')
     act = f.wall_decide('supervisor', opus_supervisor(f), safeguards())
-    assert (act['action'], act['to_cli'], act['to']) == ('switch', 'claude', 'fable')
-    not_claude = job_chain.NOT_CLAUDE.format(cli='pi')
-    assert act['skipped'] == ['pi:' + ASTRA + ' (' + not_claude + ')', 'pi:' + SOL + ' (' + not_claude + ')']
+    assert act['action'] == 'stop' and 'safeguards' in act['advice'] and 'parent fleet decides' in act['advice']
 
 
 def test_adopted_subfleet_supervisor_safeguards_stops_with_the_reason(tmp_path):

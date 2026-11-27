@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/proto", "crates/term", "crates/layout", "crates/app", "crates/probe", "crates/web"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.99"
@@ -14,9 +14,9 @@ repository = "https://github.com/justindbca/fleetmux"
 homepage = "https://github.com/justindbca/fleetmux"
 
 [workspace.dependencies]
-fleetmux-proto = { path = "crates/proto", version = "0.5.0" }
-fleetmux-term = { path = "crates/term", version = "0.5.0" }
-fleetmux-layout = { path = "crates/layout", version = "0.5.0" }
+fleetmux-proto = { path = "crates/proto", version = "0.6.0" }
+fleetmux-term = { path = "crates/term", version = "0.6.0" }
+fleetmux-layout = { path = "crates/layout", version = "0.6.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 alacritty_terminal = "0.26"

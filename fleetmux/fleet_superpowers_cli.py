@@ -220,6 +220,39 @@ register('save', 'write a workflows entry here', _save_args, cmd_save)
 register('check', 'validate the whole file', _check_args, cmd_check)
 
 
+# -- baseline check -------------------------------------------------------------------------------------
+
+def _baseline_args(p):
+    p.add_argument('action', choices=['check'], help='check: read-only; the baseline block hash, the workflows loaded '
+                   'into each running fleet and the deviations their daemons report')
+    p.add_argument('--before', metavar='HASH', help='fail (exit 1) when the block hash is not this one (taken before a '
+                   'release switch)')
+    p.add_argument('--before-report', metavar='FILE', help='the --json output taken before: also fail on a new '
+                   'deviation or a workflow no longer loaded')
+    p.add_argument('--json', action='store_true', help='print the report as JSON')
+
+
+def cmd_baseline(args):
+    from . import baseline_check
+    report = baseline_check.upgrade_report()
+    before = None
+    if args.before_report:
+        try:
+            before = json.loads(Path(args.before_report).read_text() or 'null')
+        except (OSError, ValueError) as exc:
+            raise fs.InventoryError('--before-report unreadable: ' + str(exc)) from exc
+    problems = baseline_check.upgrade_problems(args.before, before if isinstance(before, dict) else None, report)
+    if args.json:
+        print(json.dumps(dict(report, problems=problems), indent=2, sort_keys=True))
+    else:
+        print(baseline_check.upgrade_text(report, problems))
+    return 1 if problems else 0
+
+
+register('baseline', 'the switch baseline: `baseline check [--before HASH]` (read-only; before and after a '
+         'release switch)', _baseline_args, cmd_baseline)
+
+
 def _extensions():
     for name in EXTENSIONS:
         try:

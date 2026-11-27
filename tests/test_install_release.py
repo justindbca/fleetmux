@@ -83,6 +83,11 @@ if [ "$1" = "-c" ]; then
 fi
 [ -n "$FAKE_PY_LOG" ] && printf 'PATH=%s ARGS=%s\\n' "$PATH" "$*" >> "$FAKE_PY_LOG"
 case "$*" in
+  *"superpowers baseline check"*--before*)
+    echo "baseline check after the switch"; exit "${FAKE_BASELINE_RC:-0}" ;;
+  *"superpowers baseline check --json"*)
+    printf '{"hash": "%s", "path": "x", "fleets": [], "problems": []}\\n' "${FAKE_BASELINE_HASH:-abc123}"
+    exit "${FAKE_BASELINE_BEFORE_RC:-0}" ;;
   *pytest*)
     if [ "${FAKE_TEST_RC:-0}" = 0 ]; then echo "3 passed";
     else echo "collected 3 items";
@@ -596,3 +601,65 @@ def test_a_nested_releases_root_is_created_and_only_the_leaf_is_atomic(world):
     assert 'release exists, not touched' in done.stderr
     assert (rel / 'marker').read_text() == 'keep me\n'
     assert (rel / '.venv' / 'bin' / 'python').exists()
+
+
+# -- the switch baseline (fleet-superpowers.yaml) is never touched by an install ----------------------------------
+
+def inventory(world):
+    path = world['tmp'] / 'superpowers' / 'fleet-superpowers.yaml'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('machines:\n  box-a:\n    source: self\nbaseline:\n  version: 1\n  machines:\n    box-a:\n'
+                    '      root_service: {supervisor_split: true}\n')
+    return path
+
+
+def baseline_calls(world):
+    return [line.split(' ARGS=', 1)[1] for line in logged(world) if 'superpowers baseline check' in line]
+
+
+def test_activate_checks_the_baseline_before_and_after_the_switch_and_leaves_the_inventory(world):
+    make_python(world['bin'])
+    built = make_bin_dir(world['tmp'] / 'built')
+    path = inventory(world)
+    data, stamp = path.read_bytes(), path.stat().st_mtime_ns
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--activate'],
+               env_extra={'FLEETMUX_SUPERPOWERS': str(path)})
+    assert done.returncode == 0, done.stderr
+    assert path.read_bytes() == data and path.stat().st_mtime_ns == stamp
+    first, second = baseline_calls(world)
+    assert first.endswith('superpowers baseline check --json')
+    assert '--before abc123' in second and '--before-report ' in second
+    assert (world['home'] / 'fleetmux-current').is_symlink()
+
+
+def test_install_without_activate_runs_no_baseline_check_and_leaves_the_inventory(world):
+    make_python(world['bin'])
+    path = inventory(world)
+    data = path.read_bytes()
+    done = run(world, [APP_SHA, world['tarball']], env_extra={'FLEETMUX_SUPERPOWERS': str(path)})
+    assert done.returncode == 0, done.stderr
+    assert path.read_bytes() == data and baseline_calls(world) == []
+
+
+def test_a_failed_baseline_check_after_the_switch_puts_current_back(world):
+    make_python(world['bin'])
+    current = world['home'] / 'fleetmux-current'
+    old = world['tmp'] / 'old-release'
+    old.mkdir()
+    current.symlink_to(old)
+    built = make_bin_dir(world['tmp'] / 'built')
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--activate'],
+               env_extra={'FAKE_BASELINE_RC': '1'})
+    assert done.returncode != 0
+    assert 'baseline' in done.stderr
+    assert Path(os.readlink(current)) == old  # the previous release is current again
+    assert not release(world).exists()  # the failed release is removed as on every failed install
+
+
+def test_a_failed_baseline_check_before_the_switch_moves_nothing(world):
+    make_python(world['bin'])
+    built = make_bin_dir(world['tmp'] / 'built')
+    done = run(world, [APP_SHA, world['tarball'], '--bin-dir', built, '--activate'],
+               env_extra={'FAKE_BASELINE_BEFORE_RC': '1'})
+    assert done.returncode != 0 and 'baseline' in done.stderr
+    assert not (world['home'] / 'fleetmux-current').exists()

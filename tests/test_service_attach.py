@@ -243,5 +243,6 @@ def test_names_of_the_sub_fleet_store_keys_are_refused(root, name):
     assert answer['status'] == 'rejected' and 'reserved' in answer['reason']
 
 
-def test_a_job_may_still_take_a_roster_declared_slot(svc):
-    assert svc.f.job_slot_busy('worker-1') == ''  # ops on worker-1 is down: unchanged for roster entries
+def test_a_job_never_takes_a_roster_declared_slot_also_while_its_sub_fleet_is_down(svc):
+    # ops on worker-1 is down: the slot stays reserved for it (brief idle-reclaim 4.4; tests/test_job_slot_named.py)
+    assert svc.f.job_slot_busy('worker-1') == 'supervisor slot of named sub-fleet ops'

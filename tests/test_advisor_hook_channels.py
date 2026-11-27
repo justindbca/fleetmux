@@ -97,7 +97,7 @@ def test_respawn_lets_a_waiting_old_hook_go_and_its_late_stop_never_settles(afx)
     info = f.agent('worker-1')
     assert int(info['generation']) == old_gen + 1 and info['state'] == 'starting'
     assert not alive()  # the waiting hook lets go on its next poll: nothing is handed to the old session
-    text, entry = claude_hook.wait(f.r, k, old_gen, thread, time.monotonic() + 5, alive, accept, poll=1)
+    text, entry = claude_hook.wait(f.r, k, old_gen, thread, claude_hook.clock() + 5, alive, accept, poll=1)
     assert (text, entry) == (None, None)
     # The successor's mailbox is keyed by its own generation: the old hook can never read it.
     assert claude_hook.keys('fx', 'worker-1', old_gen + 1)['mailbox'] != k_old['mailbox']

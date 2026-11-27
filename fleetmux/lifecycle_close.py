@@ -317,7 +317,12 @@ def closing_text(f, closing, res, stopped):
     if not stopped:
         return head + '停机未确认：工作区与 Redis 保留，需要人工检查。run: ' + f.cfg['run']
     delivery = res.get('delivery') or {}
-    if res.get('status') == 'completed' and delivery.get('ok'):
+    if res.get('status') == 'completed' and delivery.get('ok') and delivery.get('rollout'):
+        got = delivery['rollout']
+        body = t('lifecycle.close.rollout', 'done: {sha} handed to the local rollout (target {target}, request '
+                 '{rid}, {status}); not merged yet', sha=str(delivery.get('sha', ''))[:12], target=got.get('target', ''),
+                 rid=got.get('request_id', ''), status=got.get('status', ''))
+    elif res.get('status') == 'completed' and delivery.get('ok'):
         q = delivery.get('queue_entry') or {}
         body = ('完成：' + str(delivery.get('sha', ''))[:12] + ' 已合入 ' + str(q.get('deploy_branch', ''))
                 + '，已入队待批（未上线）')
@@ -471,7 +476,8 @@ def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=None):
     ``subtree`` (card ids of this run's sub-fleets, :func:`subtree_card_ids`): each of those cards that still reads
     running / paused / stopping becomes ``reclaimed`` / ``已收回 · 随根关闭`` / ``只读，可看记录`` - the tree was
     closed with its root (brief-m4 §9 defect A). A card already reclaimed and every card outside the tree keep
-    their text; the next daemon push after ↺ rebuilds the tree cards from the records."""
+    their text; the next daemon push after ↺ rebuilds the tree cards from the records. Every card of the tree loses
+    its ``close`` (design section 19): no daemon is left to answer a stop or a dismiss."""
     line1 = t(*CLOSED_LINE1) if line1 is None else line1
     get, put = getattr(mgr, 'kv_get', None), getattr(mgr, '_kv_set', None)
     if get is None or put is None:
@@ -489,6 +495,8 @@ def mark_sidebar_closed(mgr, run_id, subtree=(), state='closed', line1=None):
             changed = True
         elif isinstance(card, dict) and card.get('id') in subtree and card.get('state') in LIVE_CARD_STATES:
             card.update(state='reclaimed', line1=t(*TREE_CLOSED_LINE1), line2=t(*TREE_CLOSED_LINE2))
+            changed = True
+        if isinstance(card, dict) and card.get('id') in subtree and card.pop('close', None) is not None:
             changed = True
     if changed:
         put('sidebar', json.dumps(data, ensure_ascii=False, separators=(',', ':')))

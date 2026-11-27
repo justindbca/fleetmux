@@ -1002,9 +1002,16 @@ class Watchdog:
 
     # ------------------------------------------------------------ frozen: kill + next generation
     def rotate(self, slot, why, screen, reason=None):
-        """Kill this fleet's own frozen session and start the next generation in its place."""
+        """Kill this fleet's own frozen session and start the next generation in its place.
+
+        ``reason='unarmed'`` (RuntimeV2.hook_wake): the session sits idle with no Stop hook left while a delivery
+        waits. The worker or the direct supervisor resumes its own Claude session (claude --resume) and the untaken
+        message goes back in front of its queue with no attempt used; an untaken handoff is offered again once the
+        resumed session is READY (``handoff_again``; a resume that never says READY falls back to the skeleton
+        note, RuntimeV2.resume_fallback)."""
         from fleetmux import history, subfleet
         from fleetmux.fleet import NAMES, SUPERVISOR_LABEL
+        from fleetmux.runtime_v2 import UNARMED_RESUME
         f, rt = self.f, self.rt
         info = f.agent(slot)
         if session_env.route_closed(f, slot, info):
@@ -1044,7 +1051,10 @@ class Watchdog:
         # §43: an official Claude worker first continues its own session (claude --resume) and gets the cancelled
         # work again (lost-slot rules: attempt-capped, replay false never). A resumed generation that freezes
         # again, a missing transcript, or work that may not be replayed: the fresh successor below, as before.
-        thread = (rt.resumable(slot, info) if slot in f.workers and not is_midturn and rt.redeliverable(slot, msg)
+        unarmed = reason == 'unarmed' and not is_midturn
+        handoff = unarmed and ((msg.get('body') or {}).get('purpose') == 'handoff' or bool(info.get('handoff_id')))
+        thread = (rt.resumable(slot, info) if unarmed and (slot in f.workers or slot == 'supervisor') else
+                  rt.resumable(slot, info) if slot in f.workers and not is_midturn and rt.redeliverable(slot, msg)
                   else '')
         hid = msg['midturn_id'] if is_midturn else 'frozen-' + uuid.uuid4().hex[:8]
         note = f.run_dir / 'handoffs' / (slot + '-g' + str(generation) + '-' + hid + '.md')
@@ -1080,7 +1090,8 @@ class Watchdog:
         if slot != 'supervisor':
             f.r.hset(NAMES, mapping={label: slot})
         try:
-            new = f.spawn(slot, rt.resume_prompt(slot, 'it froze: ' + why).format(label=label) if thread else
+            new = f.spawn(slot, (rt.resume_prompt(slot, why if unarmed else 'it froze: ' + why).format(label=label)
+                                 + (' ' + revive.pop('text') if revive and unarmed else '')) if thread else
                           '[Same-task takeover] You are ' + label + ' (taking over from ' + prev + ', which '
                           + ('was held (' + why + ') and was stopped by the daemon' if reason in ('regen', 'requeue') else
                              'froze and was stopped') + '). Read the handoff note ' + str(note) + '. In this turn only read '
@@ -1097,7 +1108,15 @@ class Watchdog:
         if is_midturn:
             rt.transaction('midturn-kill-' + msg['midturn_id'], lambda: rt.midturn_split(
                 slot, msg, msg, retired=True, note=str(note), previous=prev))
-        if thread:  # queued before the gate opens; the successor gets it after its READY (pump: idle only)
+        if thread and unarmed:
+            f.r.delete(rt.hook_keys(slot, generation)['mailbox'])  # the untaken entry: its generation is gone
+            if handoff:  # offered again after the resumed session's READY (RuntimeV2.offer_handoff_again)
+                f.setf(slot, handoff_again=str(generation + 1))
+            elif msg.get('message_id'):  # the same message in front again, same attempt: it never ran
+                rt.transaction('unarmed-requeue-' + uuid.uuid4().hex, lambda: rt.requeue_after_stop_failure(
+                    slot, {'message_id': msg['message_id']}, msg, int(msg.get('replay') or 1), time.time(),
+                    lead=UNARMED_RESUME))
+        elif thread:  # queued before the gate opens; the successor gets it after its READY (pump: idle only)
             rt.redeliver(slot, msg, 'after the session of ' + prev + ' froze')
         elif reason == 'requeue':
             self.requeue_after_retire(slot, prev, label, why, msg)
@@ -1115,7 +1134,8 @@ class Watchdog:
                    held_alert_at='', held_tried='', hold_pause='')
         f.setf(slot, launch_ready=1, retired_pane='')
         history.record(f.run_dir, slot=slot, label=prev, generation=generation, handoff='' if thread else str(note),
-                       snapshot=str(snapshot), source='midturn' if is_midturn else 'frozen-resume' if thread
+                       snapshot=str(snapshot), source='midturn' if is_midturn else 'unarmed-resume' if thread and unarmed
+                       else 'frozen-resume' if thread
                        else 'regen' if reason == 'regen' else 'requeue' if reason == 'requeue' else 'frozen',
                        timed_out=True)
         f.refresh_history()

@@ -9,7 +9,8 @@
 # on the login shell's PATH like fleet discovery, then in the directories ~/fleetmux-current's installed.json recorded;
 # the log and rows are kept in $RELEASES/.logs; nothing is installed or upgraded) ->
 # optional full test suite (fail = stop; its log is kept OUTSIDE the release dir) -> private Redis runtime dirs
-# owner-only (700; start refuses anything else) -> optional: point ~/fleetmux-current at it. A failed install
+# owner-only (700; start refuses anything else) -> optional: point ~/fleetmux-current at it, with the read-only
+# switch baseline check before and after (a failure puts current back). A failed install
 # removes only the release dir this run created (CREATED is set by the successful mkdir), so a retry starts clean
 # and an existing release/current is never touched.
 #
@@ -33,6 +34,11 @@
 #                 only `fleetmux` (+ SHA256SUMS, manifest.json); fleetmux-web is neither required nor installed
 #                 (deps.yaml marks it desktop-only) and installed.json records it as null.
 # Releases root: $FLEETMUX_RELEASES, else ~/fleetmux-releases. --activate points ~/fleetmux-current at the release.
+# Version index (with --bin-dir): installed.json records the release tree's version (rust/Cargo.toml
+#                 [workspace.package] version, null when absent) and, once the release is ready, $RELEASES/versions/<v>
+#                 is pointed at ../<sha> (replaced atomically; a later install of the same version takes it over). This
+#                 is what `fleetmux upgrade --to version:<v>` and rollout's {version} commands resolve. A failed install
+#                 never moves it.
 #
 # --tool-sha SHA  the installer-tool commit doing this install (env FLEETMUX_TOOL_SHA); defaults to the git
 #                 HEAD of the checkout this script lives in. This is a DIFFERENT identity from <sha>: <sha> is
@@ -201,6 +207,34 @@ print('PATH=' + shlex.quote(rel + '/bin') + ':$PATH ' + entry + ' --help')
 PY
 }
 
+# The release tree's version: rust/Cargo.toml [workspace.package] version (the key rollout tags from); empty when the
+# tree has none or it is not a plain version name (it becomes a path component of the index).
+release_version() {
+  [ -f rust/Cargo.toml ] || return 0
+  "$PY" - rust/Cargo.toml <<'PY'
+import re, sys, tomllib
+try:
+    with open(sys.argv[1], 'rb') as fh:
+        v = tomllib.load(fh).get('workspace', {}).get('package', {}).get('version')
+except (OSError, ValueError):
+    v = None
+if isinstance(v, str) and re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._+-]*', v) and v not in ('.', '..'):
+    print(v)
+PY
+}
+
+# $RELEASES/versions/<v> -> ../<sha>, replaced atomically (a temp link renamed over it: no `mv -T` on macOS).
+write_version_index() {
+  mkdir -p "$RELEASES/versions"
+  "$PY" - "$RELEASES/versions" "$VERSION" "$SHA" <<'PY'
+import os, sys
+d, version, sha = sys.argv[1:4]
+tmp = os.path.join(d, '.%s.new.%d' % (version, os.getpid()))
+os.symlink('../' + sha, tmp)
+os.replace(tmp, os.path.join(d, version))
+PY
+}
+
 # installed.json is written by json.dump (every value escaped) and then re-parsed: a --tool-sha with a quote used to
 # produce invalid JSON while the install still exited 0.
 write_installed_json() {
@@ -212,10 +246,10 @@ write_installed_json() {
     "$(hash_of "$HERE/install_release.sh")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PY" \
     "$(hash_of "$TARBALL")" "$(hash_of bin/manifest.json)" "$(hash_of bin/SHA256SUMS)" \
     "$fmux_sha" "$(wc -c < bin/fleetmux | tr -d ' ')" \
-    "$web_sha" "$web_bytes" "$(start_command)" "$DEPS_JSON" <<'PY'
+    "$web_sha" "$web_bytes" "$(start_command)" "$DEPS_JSON" "$VERSION" <<'PY'
 import json, sys
 (out, release_sha, source_sha, tool_sha, installer_sha, installed_at, python, tarball_sha, manifest_sha,
- sums_sha, fmux_sha, fmux_bytes, web_sha, web_bytes, start_command, deps_json) = sys.argv[1:17]
+ sums_sha, fmux_sha, fmux_bytes, web_sha, web_bytes, start_command, deps_json, version) = sys.argv[1:18]
 try:  # the dependency rows with the absolute path of each program (absent from an older release's check_deps.py)
     with open(deps_json, encoding='utf-8') as fh:
         dependencies = json.load(fh)
@@ -224,6 +258,7 @@ except (OSError, ValueError):
 doc = {
     'release_sha': release_sha,
     'source_sha': source_sha,
+    'version': version or None,  # the release tree's own version; the key of $RELEASES/versions/<v>
     'tool_sha': tool_sha or None,
     'installer': 'scripts/install_release.sh',
     'installer_sha256': installer_sha,
@@ -325,7 +360,8 @@ FLEETMUX_DEPS_JSON="$DEPS_JSON" .venv/bin/python scripts/check_deps.py 2>&1 | te
   || { echo "deps.yaml not satisfied on this machine: not releasing (install or upgrade the FAIL items yourself;" \
             "fleetmux changes nothing on the machine); log: $DEPS_LOG" >&2; exit 1; }
 echo "dependency check log: $DEPS_LOG"
-if [ -n "$BIN_DIR" ]; then write_installed_json; fi
+VERSION=
+if [ -n "$BIN_DIR" ]; then VERSION="$(release_version)"; write_installed_json; fi
 if [ "$TEST" = 1 ]; then
   # The log lives outside the release dir: a failed install removes $REL, and the whole point of the log is to show
   # why the failing Linux run failed on a machine the operator cannot attach a debugger to.
@@ -340,10 +376,44 @@ fi
 # The suite (and any earlier run) may have created these with default permissions; start refuses them.
 mkdir -p .runtime/redis && chmod 700 .runtime .runtime/redis
 if [ "$ACTIVATE" = 1 ]; then
+  # The switch baseline (docs/design.md, "Switch baseline") lives in fleet-superpowers.yaml, never in a release: the
+  # read-only `superpowers baseline check` (this release's code) runs before and after current moves. A changed block
+  # hash, a new deviation in a running fleet or a workflow no longer loaded fails the install and puts current back.
+  BASELINE_BEFORE="$RELEASES/.logs/$SHA-$(date -u +%Y%m%dT%H%M%SZ)-$$-baseline-before.json"
+  .venv/bin/python -m fleetmux.fleet superpowers baseline check --json > "$BASELINE_BEFORE" \
+    || { echo "baseline check failed before the switch: current not moved; report: $BASELINE_BEFORE" >&2; exit 1; }
+  BASELINE_HASH="$("$PY" - "$BASELINE_BEFORE" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as fh:
+    print(json.load(fh)['hash'])
+PY
+)" || { echo "baseline check before the switch printed no report: current not moved; $BASELINE_BEFORE" >&2; exit 1; }
+  echo "baseline before the switch: hash $BASELINE_HASH (report: $BASELINE_BEFORE)"
   OLD="$(readlink "$HOME/fleetmux-current" 2>/dev/null || echo none)"
   ln -sfn "$REL" "$HOME/fleetmux-current"
   echo "current: $OLD -> $(readlink "$HOME/fleetmux-current")"
+  if ! .venv/bin/python -m fleetmux.fleet superpowers baseline check --before "$BASELINE_HASH" \
+       --before-report "$BASELINE_BEFORE"; then
+    if [ "$OLD" = none ]; then rm -f "$HOME/fleetmux-current"; else ln -sfn "$OLD" "$HOME/fleetmux-current"; fi
+    echo "baseline check failed after the switch (block hash changed, a new deviation, or a workflow no longer" \
+         "loaded): current put back to $OLD; not releasing" >&2
+    exit 1
+  fi
 fi
 READY=1
 echo "release ready: $REL"
+if [ -n "$BIN_DIR" ] && [ -n "$VERSION" ]; then
+  # Only now: a failed install (suite, baseline check) must never take the index from the release that has it.
+  write_version_index \
+    || { echo "release installed, but the version index could not be written: $RELEASES/versions/$VERSION" >&2; exit 1; }
+  echo "version index: $RELEASES/versions/$VERSION -> ../$SHA"
+elif [ -n "$BIN_DIR" ]; then
+  echo "no version index: the release tree has no rust/Cargo.toml [workspace.package] version"
+fi
 echo "start (release bin first on PATH): $(start_command)"
+if [ "$ACTIVATE" = 1 ]; then
+  # Design §56 "Release drift": the running fleets still on an older release, and when their daemons switch them.
+  # After READY=1 and never fatal: the release is installed and active whatever this prints.
+  .venv/bin/python -m fleetmux.release_drift activated \
+    || echo "could not list the running fleets on an older release (the release is installed and active)" >&2
+fi

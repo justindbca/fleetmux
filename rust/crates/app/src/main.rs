@@ -2,10 +2,12 @@
 //! M2.5 W0, `gui` by M2.6 W0). Final form (brief-m03 A-R3):
 //! it only dispatches; every subcommand lives in the library. Every other subcommand, and `gui` without
 //! `--runtime`, is a fleet command: `forward` execs the Python fleet CLI with it (docs/design.md §50). No arguments
-//! at all is `fleetmux gui`: the Python side shows this machine's root fleet window.
+//! at all is `fleetmux gui`: the Python side shows this machine's root fleet window. `scenario upgrade` (the
+//! upgrade scenario) also lives in the library.
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: fleetmux [--version | server | attach | reap | web | gui --runtime D | <fleet command>]";
+const USAGE: &str =
+    "usage: fleetmux [--version | server | attach | reap | web | gui --runtime D | scenario upgrade ... | <fleet command>]";
 const FLEET_HINT: &str = "fleet commands (start, task, request, status, stop, resume, pause, results, logs, \
 operator, subfleet, advisor, night, agents, plan, peer, chrome, gui, ...) run the Python fleet CLI: \
 fleetmux <command> --help; no arguments = fleetmux gui (open the root fleet's window)";
@@ -15,7 +17,7 @@ fn main() -> ExitCode {
     let first = raw.first().map(|a| a.to_str().unwrap_or(""));
     // The server / attach / reap / web / gui options are all UTF-8 (`std::env::args` would panic on anything
     // else); a lossy copy would point --runtime at another directory, so a bad argument is a usage error.
-    let own = matches!(first, Some("server" | "attach" | "reap" | "web"))
+    let own = matches!(first, Some("server" | "attach" | "reap" | "web" | "scenario"))
         || (first == Some("gui") && raw[1..].iter().any(|a| a == "--runtime"));
     if own && raw.iter().any(|a| a.to_str().is_none()) {
         eprintln!("fleetmux: arguments must be valid UTF-8\n{USAGE}");
@@ -43,6 +45,7 @@ fn main() -> ExitCode {
         Some("attach") => fleetmux::attach::run(&args()[1..]),
         Some("reap") => fleetmux::server::reap::run(&args()[1..]),
         Some("web") => fleetmux::server::boot::web(&args()[1..]),
+        Some("scenario") => fleetmux::scenario::run(&args()[1..]),
         Some("gui") if raw[1..].iter().any(|a| a == "--runtime") => {
             fleetmux::attach::gui::run(&args()[1..])
         }

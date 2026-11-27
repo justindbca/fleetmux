@@ -674,6 +674,20 @@ workflows:
     saved_on: [home, field]
 ```
 
+#### Normal start: the `baseline` block
+
+The inventory also holds the switch baseline (design.md section 69): `baseline.machines.<self>.<shape>` names the
+switches a normal start turns on for each fleet shape (`root_service`, `job`, `named`, `attached`, `split`), and
+`baseline.exceptions` lists the ones that run differently for a while, each with `reason` and `until`. Only people
+write it; `start` takes it for every flag not typed, every daemon checks its running switches against it, and a
+release install leaves it alone. Setting up a machine:
+
+1. `fleetmux superpowers refresh --name <machine>` once, so the file has this machine's `source: self` entry.
+2. Add `baseline:` with `version: 1` and a table per shape under `machines.<machine>` (the README section "Normal
+   start" has an example); drop the same flags from the machine's start scripts.
+3. `fleetmux superpowers baseline check` prints the block's hash and what each running fleet reports; a broken
+   block is named there and in the root's report, and nothing is checked until it is fixed.
+
 ### Remote worker
 
 The field fleet is the remote worker of the home fleet. Concretely:

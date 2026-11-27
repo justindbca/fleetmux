@@ -7,4 +7,5 @@ pub mod forward;
 pub mod i18n;
 pub mod paths;
 pub mod render;
+pub mod scenario;
 pub mod server;

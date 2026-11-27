@@ -51,7 +51,7 @@ import sys
 import time
 from pathlib import Path
 
-from fleetmux import awake
+from fleetmux import awake, releases
 
 KEY = 'fx:applet:'
 WAKE_GRACE_BEATS = 2  # a crash this many heartbeat periods (awake) after a wake is not counted
@@ -64,7 +64,7 @@ HELD_STATES = ('exited', 'crashloop', 'config_error')  # not started again until
 SETTINGS = {'crash_window_s': 3600, 'crash_max': 3, 'stale_copy_wait_s': 5, 'ctl_stale_s': 60,
             'kill_wait_s': 5}
 DETACHING = 'detaching'        # field of fx:applet:<name>: '1' while a detach runs (read by the lease gate)
-OWNER = 'host.json'            # owner record in the state directory: {"host", "run", "pid"}
+OWNER = 'host.json'            # owner record in the state directory: {"host", "run", "pid", "release"}
 DRAIN_REASONS = {'rotate': 'rotate'}  # parent drain cause -> host.draining reason; every other cause is 'down'
 NAME_RE = r'applet-[a-z][a-z0-9]*(-[a-z0-9]+)*-[0-9]+'
 
@@ -202,8 +202,12 @@ class Adopted:
         return self.code
 
 
-def adoptable(cfg, spec, h, now):
-    """None when the running copy can be adopted after ``daemon --resume`` (applets.md 2.3), else the reason."""
+def adoptable(cfg, spec, h, now, note=None):
+    """None when the running copy can be adopted after ``daemon --resume`` (applets.md 2.3), else the reason.
+
+    A copy of another release than this daemon's is not adopted (design.md section 56, "Release drift"): its
+    release is the owner record's ``release``, else the one its command line names. When either release cannot be
+    told it is adopted as before and ``note`` (a callable) gets one line saying so."""
     try:
         rec = json.loads(owner_path(cfg, spec).read_text())
     except (OSError, ValueError):
@@ -213,6 +217,11 @@ def adoptable(cfg, spec, h, now):
         return 'owner record of another run'
     if not _leads_session(pid):
         return 'process gone'
+    mine, theirs = releases.own(), rec.get('release') or releases.of_pid(pid)
+    if mine and theirs and not releases.same(mine, theirs):
+        return 'release ' + str(theirs) + ', this daemon runs release ' + str(mine)
+    if not (mine and theirs) and note:
+        note('release unknown (applet ' + str(theirs or '?') + ', daemon ' + str(mine or '?') + '): adopted')
     try:
         hb, started = awake.from_wall(float(h.get('hb_at') or 0)), float(h.get('started_at') or 0)
     except ValueError:
@@ -331,7 +340,8 @@ def _adopt(f, spec, now):
     run.held = h['state'] in HELD_STATES
     run.resume = h['state'] in ('starting', 'up', 'stalled')
     if run.resume:
-        why = adoptable(f.cfg, spec, h, now)
+        why = adoptable(f.cfg, spec, h, now, note=lambda text: _log(f, 'applet.release_unknown', applet=spec['name'],
+                                                                     reason=text))
         if why is None:
             pid = json.loads(owner_path(f.cfg, spec).read_text())['pid']
             run.proc, run.started_at, run.resume = Adopted(pid), float(h['started_at']), False
@@ -449,7 +459,7 @@ def start(f, run, now, s, reason):
              crashes=len(run.crashes), window_s=s['crash_window_s'])
         return False
     run.started_at, run.held = now, False
-    owner = {'host': f.cfg.get('name') or '', 'run': f.cfg['run'], 'pid': run.proc.pid}
+    owner = {'host': f.cfg.get('name') or '', 'run': f.cfg['run'], 'pid': run.proc.pid, 'release': releases.own()}
     for path, text in ((run_dir(f.cfg, name) / 'pid', str(run.proc.pid)),
                        (owner_path(f.cfg, spec), json.dumps(owner))):
         try:

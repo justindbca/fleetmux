@@ -397,6 +397,8 @@ def start_settings(args, service):
         elif key == 'worker_idle_reclaim_min' and value == 'off':
             value = None
         overrides[key] = value
+    from fleetmux import baseline  # the sub-fleet this start becomes takes the attached (service) / job baseline
+    baseline.apply_attach(typed, overrides, service, fleet=(getattr(args, 'name', None) or '').strip() or None)
     machine = sorted(k for k in typed if k in START_MACHINE)
     return overrides, typed.get('supervisor_model'), machine
 

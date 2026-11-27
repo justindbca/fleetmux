@@ -2644,3 +2644,40 @@ fn the_topbar_has_a_divider_above_the_placeholder_and_a_zoomed_bash_page() {
     // Unzoomed (the fleet card cancels the zoom), with a live pane the framed layout is back: the topbar `│` sits
     // on the boxes' left border column 34 again — covered by `topbar_is_row_0_and_the_groups_start_on_row_2`.
 }
+
+// ------------------------------ design section 19: dismissing a finished sub-fleet card ------------------------------
+
+/// The root card, a finished direct child the root daemon may dismiss (`close.action == "dismiss"`, no `page`: an
+/// older attempt) and a finished child without a `close` (a split child).
+const DISMISS_CARDS: &str = r#"{"v":1,"current":"fleet-root","fleets":[{"id":"fleet-root","title":"root-fleet","state":"running","line1":"运行中 · 监工+1 worker（0忙）","line2":"~/x","page":""},{"id":"M3","title":"M3-done","state":"reclaimed","line1":"已收回 · 结局 completed","line2":"只读，可看记录","close":{"title":"从侧栏拿掉子 fleet「M3-done」？","body":"只从侧栏拿掉这张卡片，记录保留。","action":"dismiss"}},{"id":"M4","title":"M4-split","state":"reclaimed","line1":"已收回 · 结局 completed","line2":"只读，可看记录"}]}"#;
+
+/// A finished card with a dismiss `close` draws `×`; clicking it opens its box naming the sub-fleet; `y` writes the
+/// root-only kv `child_stop` with `"action":"dismiss"` and the status line says the dismiss was requested. A finished
+/// card without a `close` has no `×`.
+#[test]
+fn a_finished_child_card_with_a_dismiss_close_has_a_close_and_y_writes_dismiss() {
+    let srv = Server::start();
+    page(&srv);
+    let mut v = Viewer::attach(&srv, W, H);
+    v.wait_text("W1-BODY", T);
+    set_kv(&srv, "sidebar", DISMISS_CARDS);
+    let screen = v.wait_text("M3-done", T);
+    assert_eq!(v.cell(6, 31).ch, '×', "the finished card has no × at (6,31):\n{screen}");
+    assert_ne!(v.cell(10, 31).ch, '×', "a finished card without close draws ×:\n{screen}");
+
+    v.input(&sgr_click(31, 6, 0));
+    let screen = v.wait_text("从侧栏拿掉子 fleet「M3-done」？", T);
+    assert!(screen.contains("[ 从侧栏拿掉 ]"), "the box lacks its confirm button:\n{screen}");
+    v.input(b"y");
+    let status = v.wait_status("已请求", T, |l| l.contains("已请求从侧栏拿掉"));
+    assert!(status.contains("已请求从侧栏拿掉"), "status line: {status:?}");
+    let got = srv.ok("kv.get", json!({ "key": "child_stop" }));
+    let text = got["value"].as_str().unwrap_or_else(|| panic!("`y` wrote no kv child_stop: {got}"));
+    let req: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("child_stop is not JSON ({e}): {text}"));
+    assert_eq!(req["state"], json!("requested"), "{text}");
+    assert_eq!(req["id"], json!("M3"), "{text}");
+    assert_eq!(req["action"], json!("dismiss"), "{text}");
+    assert!(srv.ok("kv.get", json!({ "key": "stop_request" }))["value"].is_null(), "the root was asked to stop");
+    v.wait_quiet(Duration::from_millis(300), T);
+    assert_ne!(v.cell(6, 31).ch, '×', "the requested card still draws ×:\n{}", v.text());
+}

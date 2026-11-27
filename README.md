@@ -630,7 +630,7 @@ over `ssh`. Closing a viewer never stops an agent.
   `fleetmux server` per fleet tree, one page per fleet): a card that carries `page` switches every viewer to that
   fleet's page — click it, or step onto it with `←` / `→` / `C-b (` / `C-b )` — and the highlighted card and the
   topbar follow the page shown; a reclaimed child fleet's page is a read-only record (`已收回 · 只读`, "reclaimed · read-only", over its
-  empty groups, its `history_view` tab below), and a running child card has a close button when the root daemon marks it closeable: a confirmation box names the sub-fleet; confirming cancels a job sub-fleet's job (its result is published failed with outcome `cancelled`) or takes a named sub-fleet down (`subfleet.down`; an attached one through `subfleet.detach`); a stopping, reclaimed or closed card, a split sub-fleet's card and a deeper level's card have none. A card without `page` (an older daemon) still only says
+  empty groups, its `history_view` tab below), and a running child card has a close button when the root daemon marks it closeable: a confirmation box names the sub-fleet; confirming cancels a job sub-fleet's job (its result is published failed with outcome `cancelled`) or takes a named sub-fleet down (`subfleet.down`; an attached one through `subfleet.detach`); a finished direct child card (its record `returned` or `failed`) has a close button too: confirming only drops the card from the sidebar, recorded in the run's `sidebar_dismissed.json` (it stays dropped after a daemon restart or a resume; its run directory, `result.json`, workspace and records are kept; delete its entry there to bring it back); a stopping, suspended, down, detached or closed card, a split sub-fleet's card and a deeper level's card have none. A card without `page` (an older daemon) still only says
   `切换 fleet：S3 开放` ("switch fleet: available in S3"). In `fleetmux gui` and the M2.5 window a sub-fleet link of `history.html` switches the page
   the same way (the server does it, so it works with the child daemon gone). With a sidebar the cells start on row 1
   (their tab row) and the cards on row 2; the topbar has no background of its own. A card's `×` (running / paused
@@ -821,7 +821,8 @@ fleetmux result job-0123456789 --wait 60
 echo '{"goal": "Implement the export command", "name": "export-cmd", "lifecycle": "dev_task",
        "roster": "/abs/path/dev-roster.yaml", "roles": "/abs/path/roles",
        "deliver": {"repo": "/abs/path/repo", "feature_branch": "feat/export", "deploy_branch": "main",
-                   "test_cmd": ["pytest", "-q"], "queue": "/abs/path/queue.json"}}' \
+                   "test_cmd": ["pytest", "-q"], "brief": "/abs/path/brief.md",
+                   "rollout": {"verify": "scripts/rollout_check_merge.py"}}}' \
   | fleetmux task -
 ```
 
@@ -835,7 +836,10 @@ Rules:
 2. **Run a development fleet as a job.** `roster` (absolute path) gives the sub-fleet its workers, role files and
    cards. `roles` (absolute directory) adds `<agent>.md` rules, as `start --roles` does. `name` titles the sub-fleet.
    With `lifecycle: dev_task`, `deliver` is required and the sub-fleet runs the same delivery gate as
-   a root dev_task run; the gate record comes back in the result as `delivery`.
+   a root dev_task run; the gate record comes back in the result as `delivery`. By default
+   (`fleet.yaml#deliver.via: rollout`) the gate rebases onto the deploy branch, runs `test_cmd` and submits the sha
+   to the local rollout, and the record holds the request id; `"via": "queue"` with `"queue": <absolute path>` keeps
+   the older fast-forward and queue file (docs/design.md section 70).
 3. **Set defaults in one block.** `fleet.yaml#job_subfleet` (`workers: 2`, `supervisor_profile: null`,
    `worker_profiles: []`, `hours: 4`); override it in `~/.fleetmux/fleet.yaml`. A job's own keys win.
 4. **Expect a new worker, not a wait.** With no idle worker the program adds one worker row to the root roster;
@@ -964,6 +968,51 @@ alive is the supervisor's job inside the fleet (design §36), not an external ti
   supervisor gets one `[Daemon watchdog]` turn with the facts from the logs and runs the exact `start --resume`
   command its AGENTS.md names for this run. The daemon in turn restarts a frozen supervisor or one whose CLI
   exited, and briefs the next generation from the logs (`supervisor.revived`). No cron or launchd job is needed.
+
+## Normal start: the switch baseline
+
+Which feature switches a normal start turns on is written once per machine, in the `baseline` block of
+`~/.fleetmux/fleet-superpowers/fleet-superpowers.yaml` (the per-machine inventory; a release install never
+touches it). Design: docs/design.md section 69.
+
+```yaml
+baseline:
+  version: 1
+  check_every_s: 300
+  machines:
+    my-box:                      # this machine's `machines` entry (the one with `source: self`)
+      root_service: {advisor: true, supervisor_split: true, worker_idle_reclaim_min: 30}
+      job: {lease_reclaim: on}   # shapes: root_service, job, named, attached, split
+```
+
+- **Start scripts**: `start` of a root service fleet, and an attaching `start` (its sub-fleet's shape), takes
+  these values for every flag you do not type (`start --resume` writes the restart switches into the run), so a
+  start script no longer needs `--advisor`, `--supervisor-split`, `--worker-idle-reclaim-min`, `--lease-reclaim`, `--max-busy`,
+  `--worker-kit`, `--worker-domains` or `--kit-fleet`. A typed flag against the baseline still starts as typed
+  and prints `deviates from baseline`.
+- **Exceptions**: to run one switch differently for a while, add a row with a reason and an until (a date is
+  valid through that whole day, local time of the machine):
+
+  ```yaml
+    exceptions:
+      - {machine: my-box, shape: root_service, switch: worker_idle_reclaim_min, value: off,
+         reason: "<why>", until: <YYYY-MM-DD>}
+  ```
+
+- **The check**: every daemon compares its running switches with the baseline every `check_every_s`. The
+  advisor is set back at once (`restored`). A restart switch is only reported, with the command that
+  approves the restart: `fleetmux answer --config <config.json> baseline:<switch> approve`, run by you from
+  your own terminal (the program never restarts by itself; `reject` only silences that report). The approved
+  restart is the existing `start --resume`: live worker sessions are kept, the supervisor starts a new
+  generation (the root supervisor always does; a sub-fleet keeps an adopted supervisor whose session still runs).
+  Against a fleet that has ended, `answer` says so and exits 2. Reports go to
+  the root supervisor and your channels; a sub-fleet's go to its parent's supervisor and on to you. Each
+  deviation is reported once, and once more when it is back to normal. `fleetmux status` shows nothing new;
+  the reports are in the channels, the supervisor's queue and the audit log (`fleetmux logs`, events
+  `baseline.*`).
+- **Before and after a release switch**: `fleetmux superpowers baseline check` prints the block's hash, the
+  workflows loaded into each running fleet and the open deviations; `--before <hash>` fails when the block
+  changed. `scripts/install_release.sh --activate` runs it around the switch.
 
 ## Interface contracts (task spec `"contracts": true`)
 

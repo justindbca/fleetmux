@@ -4,12 +4,13 @@ Three releases can differ on one machine:
 
 * **CLI**: the code of this process (``own``).
 * **Installed**: the release ``~/fleetmux-current`` points at (``installed``); ``install_release.sh --activate``
-  moves the link, nothing restarts a fleet.
+  moves the link; each root daemon then switches its run to it by itself (``release_drift``, design section 56).
 * **Running**: the code a run's daemon runs (``running``). The daemon writes it to ``<run>/release`` at every
   start and resume (``record``); for a daemon started before that file existed, it is the release directory in
   the run config's ``python`` path, else unknown (None).
 
-A release is the directory name under ``fleetmux-releases``, else the checkout's short commit (``release_of``).
+A release is the directory name under ``fleetmux-releases`` or under the releases root ``$FLEETMUX_RELEASES``
+(any name), else the checkout's short commit (``release_of``).
 ``same`` treats two commit shas where one is a prefix of the other as one release.
 """
 import fcntl
@@ -28,10 +29,30 @@ _own = []
 _warned = set()
 
 
+def _in_root(path):
+    """The first part of ``path`` below the releases root ``$FLEETMUX_RELEASES`` (compared as given and with its
+    directories resolved), else None. The installer allows a root of any name, also a nested one."""
+    env = os.environ.get('FLEETMUX_RELEASES')
+    if not env or not path:
+        return None
+    root = Path(env).expanduser()
+    path = Path(path)
+    for r in (root, Path(os.path.realpath(root))):
+        for p in (path, Path(os.path.realpath(path.parent)) / path.name):
+            try:
+                parts = p.relative_to(r).parts
+            except ValueError:
+                continue
+            if parts and parts[0] not in ('.', '..', VERSIONS):
+                return parts[0]
+    return None
+
+
 def release_of(root=ROOT):
-    """The release of a code directory: its name under ``fleetmux-releases``, else the checkout's short commit."""
+    """The release of a code directory: its name under ``fleetmux-releases`` or ``$FLEETMUX_RELEASES``, else the
+    checkout's short commit."""
     root = Path(root)
-    if root.parent.name == 'fleetmux-releases':
+    if root.parent.name == 'fleetmux-releases' or _in_root(root) == root.name:
         return root.name
     try:
         out = subprocess.run(['git', '-C', str(root), 'rev-parse', '--short', 'HEAD'], capture_output=True,
@@ -68,9 +89,67 @@ def installed(link=None):
 
 
 def from_python(python):
-    """The release directory in an interpreter path ``.../fleetmux-releases/<release>/...``, else None."""
+    """The release directory in an interpreter path ``.../fleetmux-releases/<release>/...`` or
+    ``$FLEETMUX_RELEASES/<release>/...``, else None."""
     parts = Path(python or '').parts
-    return parts[parts.index('fleetmux-releases') + 1] if 'fleetmux-releases' in parts[:-1] else None
+    if 'fleetmux-releases' in parts[:-1]:
+        return parts[parts.index('fleetmux-releases') + 1]
+    return _in_root(python)
+
+
+def cmdline(pid):
+    """The argv of process ``pid`` (Linux: exact; elsewhere ``ps -ww`` split on blanks), None when unreadable."""
+    try:
+        if sys.platform.startswith('linux'):
+            raw = Path('/proc/%d/cmdline' % int(pid)).read_bytes()
+            return [a.decode('utf-8', 'replace') for a in raw.split(b'\0') if a] or None
+        out = subprocess.run(['ps', '-ww', '-p', str(int(pid)), '-o', 'command='], capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return out.stdout.split() if out.returncode == 0 and out.stdout.strip() else None
+
+
+LAUNCHER = '__PYVENV_LAUNCHER__'
+
+
+def launcher_in(ps_env):
+    """``__PYVENV_LAUNCHER__`` in ``ps -wwE -o command=`` output (the command line followed by the start
+    environment), else None. The value runs up to the next environment word (`` NAME=``) or the end of the line:
+    a venv path may hold blanks (a home directory with a blank in its name)."""
+    found = re.search(r'(?:^|\s)' + LAUNCHER + r'=(.*?)(?=\s+[A-Za-z_][A-Za-z0-9_]*=|\s*$)', ps_env or '', re.M)
+    return found.group(1) or None if found else None
+
+
+def launcher(pid):
+    """The venv python that started process ``pid`` on macOS: a venv made from a framework Python re-executes the
+    framework's ``.../Python.app/Contents/MacOS/Python``, so ``ps`` shows that path as argv[0] and the venv's python
+    is only in the start environment, as ``__PYVENV_LAUNCHER__``. None on Linux (a venv python keeps its own path
+    as argv[0]), when unreadable or when there is none."""
+    if sys.platform.startswith('linux'):
+        return None
+    try:
+        out = subprocess.run(['ps', '-wwE', '-p', str(int(pid)), '-o', 'command='], capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return launcher_in(out.stdout) if out.returncode == 0 else None
+
+
+def of_argv(argv):
+    """The release of a process from its argv: the first ``.../fleetmux-releases/<release>/...`` or
+    ``$FLEETMUX_RELEASES/<release>/...`` path in it."""
+    for part in argv or ():
+        found = from_python(part)
+        if found:
+            return found
+    return None
+
+
+def of_pid(pid):
+    """The release process ``pid`` runs (its interpreter, script or binary under the releases root), else
+    None (gone, unreadable, or a checkout)."""
+    return of_argv(cmdline(pid))
 
 
 def running(cfg):
@@ -156,3 +235,45 @@ def warn_cli(cfg, stream=None, alive=None):
         'its usual start command to run %s, or use ~/fleetmux-releases/%s/bin/fleetmux\n'
         % (mine, run, run_release, mine, run_release))
     return True
+
+
+# ------------------------------------------------------------------ a release named by its version
+VERSION_PREFIX = 'version:'
+VERSIONS = 'versions'  # $FLEETMUX_RELEASES/versions/<v> -> ../<sha>, kept by the installer
+VERSION_NAME = re.compile(r'[0-9A-Za-z][0-9A-Za-z._+-]*\Z')
+
+
+def releases_root():
+    """Where releases are installed: $FLEETMUX_RELEASES, else ~/fleetmux-releases."""
+    return Path(os.environ.get('FLEETMUX_RELEASES') or Path.home() / 'fleetmux-releases').expanduser()
+
+
+def resolve(value):
+    """The release directory a ``version:<v>`` value names, None for any other value (a directory or a sha is the
+    caller's own business). The installer's side of the interface (scripts/install_release.sh): it writes
+    ``"version"`` into ``<release>/bin/installed.json`` and points ``<releases root>/versions/<v>`` at ``../<sha>``.
+    The link must lead to a directory right under the releases root whose installed.json names the same version.
+    Raises ValueError with the reason."""
+    import json
+    value = str(value)
+    if not value.startswith(VERSION_PREFIX):
+        return None
+    version = value[len(VERSION_PREFIX):]
+    if not VERSION_NAME.match(version) or version in ('.', '..'):
+        raise ValueError('version %r: not a version name' % version)
+    root = releases_root()
+    link = root / VERSIONS / version
+    if not link.is_dir():
+        raise ValueError('version %s: no release, %s does not lead to a directory' % (version, link))
+    target = link.resolve()
+    if target.parent != root.resolve():
+        raise ValueError('version %s: %s leads to %s, not a release under %s' % (version, link, target, root))
+    meta = target / 'bin' / 'installed.json'
+    try:
+        recorded = json.loads(meta.read_text()).get('version')
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ValueError('version %s: %s cannot be read (%s)' % (version, meta, exc)) from exc
+    if recorded != version:
+        raise ValueError('version %s: %s leads to %s, whose installed.json says version %s'
+                         % (version, link, target, recorded))
+    return target

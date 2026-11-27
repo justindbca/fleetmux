@@ -9,7 +9,9 @@
 //! may carry a sixth key `page` (a string, the fleet page it shows; [`Entry::page`]). A child card may also carry
 //! its own `close` object (the same two strings; [`Entry::close`], design section 19 "Closing a sub-fleet from the
 //! sidebar"): the root daemon sends it only for a running sub-fleet it can stop, and only then does that card get a
-//! `×`, whose box writes the root-only kv `child_stop` (`server/view.rs`). Anything
+//! `×`, whose box writes the root-only kv `child_stop` (`server/view.rs`). A card's `close` may name its `action`
+//! (`"stop"`, the default, or `"dismiss"`): a finished (`reclaimed`) card gets a `×` only with `"dismiss"`, and its
+//! box asks the root daemon to drop the card from the sidebar ("Dismissing a finished sub-fleet card"). Anything
 //! else is [`parse`]'s `Err` (one English sentence; the server logs it and draws no sidebar), unknown keys are
 //! ignored.
 //!
@@ -77,8 +79,9 @@ pub struct Entry {
     /// before.
     pub page: Option<String>,
     /// Design section 19: the optional per-card `close` object of a child card, the texts of its close box. The root
-    /// daemon sends it only for a running direct child it can stop (a job, a named or an attached sub-fleet); a child
-    /// card with a `page` and without it has no `×`.
+    /// daemon sends it only for a running direct child it can stop (a job, a named or an attached sub-fleet), or with
+    /// `action: "dismiss"` for a finished one it may drop from the sidebar; a child card with a `page` and without it
+    /// has no `×`.
     pub close: Option<Close>,
 }
 
@@ -111,6 +114,9 @@ impl ChildStop {
 pub struct Close {
     pub title: String,
     pub body: String,
+    /// Design section 19: what a child card's box asks the root daemon for, `"stop"` or `"dismiss"`; empty when the
+    /// daemon sent none (the stop, as before).
+    pub action: String,
 }
 
 /// The parsed kv `sidebar` value: the fleet whose card is highlighted, the cards in display order and the close
@@ -361,6 +367,11 @@ const MODAL_CONFIRM: &str = "[ Close fleet ]"; // modal.fleet.confirm
 const MODAL_CONFIRM_CHILD: &str = "[ Close sub-fleet ]"; // modal.child.confirm
 const MODAL_TITLE_CHILD: &str = "Close sub-fleet \"{title}\"?"; // modal.child.title
 const MODAL_BODY_CHILD: &str = "Stops this sub-fleet. The run log is kept."; // modal.child.body
+/// Design section 19 "Dismissing a finished sub-fleet card": the confirm button and the default texts of its box.
+const MODAL_CONFIRM_DISMISS: &str = "[ Remove from sidebar ]"; // modal.dismiss.confirm
+const MODAL_TITLE_DISMISS: &str = "Remove {id} from the sidebar: {title}?"; // modal.dismiss.title (the id first)
+const MODAL_BODY_DISMISS: &str =
+    "Only removes this card from the sidebar; the run directory, run log and workspace are kept."; // modal.dismiss.body
 /// The default title (wrapped around the first card's title) and body, used when kv `sidebar` has no `close`
 /// (plan §11.1).
 const MODAL_TITLE: &str = "Close the whole fleet \"{title}\"?"; // close.title (the same key as Python's)
@@ -449,7 +460,8 @@ pub fn parse(json: &str) -> Result<Data, String> {
 }
 
 /// A `close` object (the top-level one or a card's, `at` names it in the error): two optional strings of at most
-/// 400 characters each; a missing one stays empty (the box then shows the default text).
+/// 400 characters each; a missing one stays empty (the box then shows the default text). A card's optional `action`
+/// is a string too (only `"dismiss"` gives a finished card its `×`, [`closeable`]).
 fn parse_close(value: &serde_json::Value, at: &str) -> Result<Close, String> {
     let o = value
         .as_object()
@@ -467,6 +479,7 @@ fn parse_close(value: &serde_json::Value, at: &str) -> Result<Close, String> {
     Ok(Close {
         title: field("title")?,
         body: field("body")?,
+        action: field("action")?,
     })
 }
 
@@ -864,11 +877,35 @@ fn card_title_w(sb: u16) -> u16 {
 /// Design section 19 "Closing a sub-fleet from the sidebar": a child fleet's card that carries a `page` gets one
 /// only when the root daemon sent it a `close` object (a running direct child it can stop) and no request for it is
 /// out ([`Side::child_stop`]). The root card (`page` `""` or none) keeps its own as before.
+///
+/// "Dismissing a finished sub-fleet card": a `reclaimed` card gets one only when its `close` says
+/// `action: "dismiss"` (with or without a `page`) and no request for it is out.
 pub(crate) fn closeable(side: &Side, e: &Entry) -> bool {
-    side.stop == Stop::None
+    (side.stop == Stop::None
         && matches!(e.state.as_str(), "running" | "paused")
         && (e.page.as_deref().is_none_or(str::is_empty)
-            || (e.close.is_some() && !side.child_stop.pending_for(&e.id)))
+            || (e.close.is_some() && !side.child_stop.pending_for(&e.id))))
+        || dismissable(side, e)
+}
+
+/// Design section 19: a finished child card the root daemon may drop from the sidebar ([`closeable`]'s own branch).
+pub(crate) fn dismissable(side: &Side, e: &Entry) -> bool {
+    side.stop == Stop::None
+        && e.state == "reclaimed"
+        && e.close.as_ref().is_some_and(|c| c.action == "dismiss")
+        && !side.child_stop.pending_for(&e.id)
+}
+
+/// Whether the child request in flight ([`Side::child_stop`]) is a dismiss: its card's `close` says so.
+pub fn child_request_dismisses(side: &Side) -> bool {
+    let ChildStop::Requested(id) = &side.child_stop else {
+        return false;
+    };
+    side.data
+        .as_ref()
+        .and_then(|d| d.fleets.iter().find(|e| &e.id == id))
+        .and_then(|e| e.close.as_ref())
+        .is_some_and(|c| c.action == "dismiss")
 }
 
 /// Whether a card is a fleet the sidebar closed (plan §13.3 / §13.6-1): its first row shows `↺` instead of `×`.
@@ -1168,8 +1205,12 @@ fn bash_close_name(side: &Side) -> Option<String> {
 fn modal_confirm_label(side: &Side) -> String {
     if bash_close_name(side).is_some() {
         tr(side.lang, "modal.bash.confirm", MODAL_CONFIRM_BASH)
-    } else if close_child_card(side).is_some() {
-        tr(side.lang, "modal.child.confirm", MODAL_CONFIRM_CHILD)
+    } else if let Some(e) = close_child_card(side) {
+        if e.close.as_ref().is_some_and(|c| c.action == "dismiss") {
+            tr(side.lang, "modal.dismiss.confirm", MODAL_CONFIRM_DISMISS)
+        } else {
+            tr(side.lang, "modal.child.confirm", MODAL_CONFIRM_CHILD)
+        }
     } else {
         tr(side.lang, "modal.fleet.confirm", MODAL_CONFIRM)
     }
@@ -1195,10 +1236,22 @@ pub fn modal_text(side: &Side) -> (String, String) {
     if let Some(e) = close_child_card(side) {
         let given = |s: Option<&String>| s.filter(|s| !s.is_empty()).cloned();
         let close = e.close.as_ref();
+        let dismiss = close.is_some_and(|c| c.action == "dismiss");
+        let lang = side.lang;
+        let (title, body) = if dismiss {
+            (
+                tr_fmt(lang, "modal.dismiss.title", MODAL_TITLE_DISMISS, &[("id", &e.id), ("title", &e.title)]),
+                tr(lang, "modal.dismiss.body", MODAL_BODY_DISMISS),
+            )
+        } else {
+            (
+                tr_fmt(lang, "modal.child.title", MODAL_TITLE_CHILD, &[("title", &e.title)]),
+                tr(lang, "modal.child.body", MODAL_BODY_CHILD),
+            )
+        };
         return (
-            given(close.map(|c| &c.title))
-                .unwrap_or_else(|| tr_fmt(side.lang, "modal.child.title", MODAL_TITLE_CHILD, &[("title", &e.title)])),
-            given(close.map(|c| &c.body)).unwrap_or_else(|| tr(side.lang, "modal.child.body", MODAL_BODY_CHILD)),
+            given(close.map(|c| &c.title)).unwrap_or(title),
+            given(close.map(|c| &c.body)).unwrap_or(body),
         );
     }
     let data = side.data.as_ref();
@@ -3929,5 +3982,69 @@ mod tests {
         let mut s = shown(&doc("r", &[paged("r", "root", ""), paged("c", "child", "M0")]));
         s.close_child = Some("c".to_string());
         assert!(modal_text(&s).0.contains("child"), "{:?}", modal_text(&s));
+    }
+
+    fn dismissable(id: &str, title: &str, page: Option<&str>, state: &str, action: &str) -> String {
+        let page = page.map(|p| format!(r#","page":"{p}""#)).unwrap_or_default();
+        format!(
+            r#"{{"id":"{id}","title":"{title}","state":"{state}","line1":"已收回","line2":"只读"{page},"close":{{"title":"从侧栏拿掉子 fleet「{title}」？","body":"记录保留","action":"{action}"}}}}"#
+        )
+    }
+
+    /// Design section 19 "Dismissing a finished sub-fleet card": a `reclaimed` child card whose `close` carries
+    /// `action: "dismiss"` gets a `×` (with or without a `page`); a reclaimed card without one, or with any other
+    /// action, keeps none. A request out for it hides the `×` until the daemon answers. The `action` is parsed.
+    #[test]
+    fn reclaimed_child_with_a_dismiss_close_has_a_close_button() {
+        let mut s = shown(&doc(
+            "r",
+            &[
+                paged("r", "root", ""),
+                dismissable("d", "done", Some("M0"), "reclaimed", "dismiss"),
+                dismissable("o", "older", None, "reclaimed", "dismiss"),
+                dismissable("x", "stopwise", Some("M2"), "reclaimed", "stop"),
+                dismissable("q", "odd", Some("M3"), "reclaimed", "explode"),
+            ],
+        ));
+        let d = s.data.as_ref().expect("cards");
+        assert_eq!(d.fleets[1].close.as_ref().map(|c| c.action.as_str()), Some("dismiss"));
+        assert_eq!(d.fleets[3].close.as_ref().map(|c| c.action.as_str()), Some("stop"));
+        let mut b = buf();
+        draw(&mut b, &s, SIDEBAR_W, 59, 2);
+        assert_eq!(b[(31, 6)].symbol(), "×", "finished child {:?}", row_text(&b, 6, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 6), SideHit::Close(1));
+        assert_eq!(b[(31, 10)].symbol(), "×", "finished child without a page {:?}", row_text(&b, 10, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 10), SideHit::Close(2));
+        assert_eq!(b[(31, 14)].symbol(), " ", "a reclaimed card with a stop close {:?}", row_text(&b, 14, 33));
+        assert_eq!(hit(&s, SIDEBAR_W, 59, 2, 31, 14), SideHit::Pick(3));
+        assert_eq!(b[(31, 18)].symbol(), " ", "an unknown action {:?}", row_text(&b, 18, 33));
+        s.child_stop = ChildStop::Requested("d".to_string());
+        let mut b = buf();
+        draw(&mut b, &s, SIDEBAR_W, 59, 2);
+        assert_eq!(b[(31, 6)].symbol(), " ", "requested {:?}", row_text(&b, 6, 33));
+        assert_eq!(b[(31, 2)].symbol(), "×", "the root keeps its own");
+    }
+
+    /// The dismiss box takes the daemon's texts and its own confirm button; its default texts say the records stay.
+    #[test]
+    fn the_dismiss_box_has_its_own_button() {
+        let mut s = shown(&doc("r", &[paged("r", "root", ""), dismissable("d", "done", None, "reclaimed", "dismiss")]));
+        s.close_child = Some("d".to_string());
+        assert_eq!(modal_text(&s).0, "从侧栏拿掉子 fleet「done」？");
+        assert_eq!(modal_confirm_label(&s), "[ 从侧栏拿掉 ]");
+        let mut s = shown(&doc(
+            "r",
+            &[paged("r", "root", ""), dismissable("d", "done", None, "reclaimed", "dismiss").replace(
+                r#""title":"从侧栏拿掉子 fleet「done」？","body":"记录保留","#,
+                "",
+            )],
+        ));
+        s.close_child = Some("d".to_string());
+        let (title, body) = modal_text(&s);
+        assert_eq!(title, "从侧栏拿掉 d：done？", "the default title names the card id first");
+        assert!(body.contains("保留"), "{body}");
+        let mut s = shown(&doc("r", &[paged("r", "root", ""), paged_close("c", "child", "M0", "running")]));
+        s.close_child = Some("c".to_string());
+        assert_eq!(modal_confirm_label(&s), "[ 关闭子 fleet ]", "a stop box keeps its button");
     }
 }

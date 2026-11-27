@@ -17,10 +17,22 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          # 3.12 on PATH for tests/test_script_stdlib_shadow.py; the last one listed (3.14) stays the default python
+          python-version: |
+            3.12
+            3.14
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+      - name: Install the Pi package deps.yaml pins (the Pi / TS contract tests run against it)
+        run: |
+          pi_version=$(grep -E '^ +pi: [{]npm: "@earendil-works/pi-coding-agent"' deps.yaml | sed -E 's/.*version: "([^"]+)".*/\1/')
+          test -n "$pi_version" || { echo 'deps.yaml: agent_installs.pi.version not found' >&2; exit 1; }
+          npm install -g "@earendil-works/pi-coding-agent@$pi_version"
+          pi --version
+      - uses: astral-sh/setup-uv@v10.4.0  # tests/test_install.py: uv provides the Python of deps.yaml
+        with:
+          enable-cache: false  # no Actions cache needed; with it on, a run that leaves the uv cache empty fails
       - name: Install redis-server, tmux, and the e2e TUIs (vim / less ship with macOS)
         run: |
           brew install redis tmux htop
@@ -71,7 +83,7 @@ jobs:
           FLEETMUX_REAL_BIN: ${{ github.workspace }}/rust/target/debug/fleetmux
         run: |
           echo "FLEETMUX_GATE=$FLEETMUX_GATE"
-          python -m pytest -q tests
+          python -m pytest -q -rs tests
 
   # Linux is the other supported host (incl. Windows via WSL2, design §0 / §8). Same suite, same
   # tests: a test that cannot run here is skipped in the test itself (skipif + reason), never
@@ -84,14 +96,26 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          # 3.12 on PATH for tests/test_script_stdlib_shadow.py; the last one listed (3.14) stays the default python
+          python-version: |
+            3.12
+            3.14
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+      - name: Install the Pi package deps.yaml pins (the Pi / TS contract tests run against it)
+        run: |
+          pi_version=$(grep -E '^ +pi: [{]npm: "@earendil-works/pi-coding-agent"' deps.yaml | sed -E 's/.*version: "([^"]+)".*/\1/')
+          test -n "$pi_version" || { echo 'deps.yaml: agent_installs.pi.version not found' >&2; exit 1; }
+          npm install -g "@earendil-works/pi-coding-agent@$pi_version"
+          pi --version
+      - uses: astral-sh/setup-uv@v10.4.0  # tests/test_install.py: uv provides the Python of deps.yaml
+        with:
+          enable-cache: false  # no Actions cache needed; with it on, a run that leaves the uv cache empty fails
       - name: Install redis-server, tmux, and the helpers the suite shells out to
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends redis-server tmux procps passwd coreutils vim less htop \
+          sudo apt-get install -y --no-install-recommends redis-server tmux procps passwd coreutils vim less htop zsh \
             libwebkit2gtk-4.1-dev xvfb  # crates/web (wry) needs webkit2gtk to build; xvfb for its window tests
       - name: Install package
         run: |
@@ -151,4 +175,4 @@ jobs:
           FLEETMUX_REAL_BIN: ${{ github.workspace }}/rust/target/debug/fleetmux
         run: |
           echo "FLEETMUX_GATE=$FLEETMUX_GATE"
-          python -m pytest -q tests
+          python -m pytest -q -rs tests

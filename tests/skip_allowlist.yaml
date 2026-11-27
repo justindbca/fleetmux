@@ -1,0 +1,135 @@
+# Skips that do not fail a run (tests/skip_policy.py). One entry per allowed skip:
+#   file:   the test file, or the file whose code calls skip (repo-relative)
+#   reason: a substring of the skip reason
+#   why:    why this is a real skip and not a missing dependency (required; an entry without it is refused)
+# Never listed here: a skip because a program, package or build output is missing (redis-server, tmux, node, uv, zsh,
+# the real fleetmux binary, the installed Pi package, Python 3.12 ...) or because a milestone is not in the gate.
+# Install the dependency instead; such a skip fails the run.
+# One exception, a decision of the user, not of a reviewer: the @milestone(4)
+# tests are not run in this delivery, so their skip "M4 not in gate" is listed below, one entry per file that applies
+# milestone(4). M4 is not run and is not accepted by this delivery. No other milestone is ever listed;
+# tests/test_skip_policy.py checks that the entries match exactly the files that call milestone(4).
+
+# -- retired by design: the fleet never types into a Claude input box (docs/design.md section 48)
+- file: tests/test_subfleet_named_tmux.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_clear_after_result_redis.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_clear_after_result.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_claude_editor_runtime.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_claude_editor_review_repro.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_claude_supervisor_hook_edges.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_claude_editor_send.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_subfleet_tmux.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_subfleet.py
+  reason: "fleet never types into a Claude input box"
+  why: retired with the typed Claude channel (design section 48); kept as the record of the old behaviour
+- file: tests/test_fresh_always.py
+  reason: "/clear channel is retired; start refuses --clear-after-result"
+  why: retired with the typed /clear channel (design section 48); start refuses --clear-after-result
+
+# -- optional backend / channel, not part of every install
+- file: tests/test_wezterm_mux.py
+  reason: "real WezTerm mux server integration"
+  why: "the WezTerm backend is optional (deps.yaml `when: wezterm`); a machine without it does not run that backend"
+- file: tests/test_channel_feishu.py
+  reason: "could not import 'lark_oapi'"
+  why: "the Feishu channel SDK is an optional channel dependency (deps.yaml `channel: feishu`)"
+
+# -- one of a pair always skips: the cap test for a build without feature C and the tests for a build with it
+- file: tests/test_night_switch.py
+  reason: "feature C (model cards) is not merged"
+  why: mutually exclusive with the "feature C is merged" case below; exactly one of them runs on a given build
+- file: tests/test_night_switch.py
+  reason: "feature C is merged: the cap is enforced"
+  why: mutually exclusive with the "not merged" case above; exactly one of them runs on a given build
+
+# -- deferred feature: the test file records where the work goes
+- file: tests/test_relay_budget_pause.py
+  reason: "deferred: the task time budget pause while the machine sleeps"
+  why: the budget pause waits for the awake-clock work; the module documents where the budget is computed today
+
+# -- structural: the case does not exist for that variant or state
+- file: tests/test_tabs_cli.py
+  reason: "the request log is a fake-server knob"
+  why: the request log exists only in the fake server; the real-binary variant of this one case has nothing to check
+- file: tests/test_codex_via_pi.py
+  reason: "pi+claude/task verified by a real smoke"
+  why: the case checks the unverified-pair refusal; once the pair table marks the pair verified there is no refusal
+
+# -- structural: an installed release is an extracted copy without git history, so main's skip baseline cannot be
+#    regenerated there to compare with the committed one (the plugin itself needs no git)
+- file: tests/test_skip_policy.py
+  reason: "the baseline revision is not in the git history of this tree"
+  why: scripts/install_release.sh --test runs the suite in the release directory, which has no .git
+
+# -- platform: the behaviour pinned exists on one platform only
+- file: tests/test_history_view.py
+  reason: "kqueue is only available on BSD/macOS"
+  why: kqueue is a BSD/macOS kernel interface; on Linux the poll path is the one in use and is tested
+- file: tests/test_terminal_theme.py
+  reason: "a Linux pty does not wait for unread output"
+  why: the blocking this case pins is macOS pty behaviour
+- file: tests/test_opencode_free_backend.mjs
+  reason: "macOS has sandbox-exec"
+  why: the case checks the refusal without sandbox-exec; macOS always has it, so it runs on Linux only
+- file: tests/test_opencode_free_backend.mjs
+  reason: "OpenCode bridge needs macOS sandbox-exec"
+  why: the bridge runs OpenCode under macOS sandbox-exec only; on Linux it refuses to start, checked by the case above
+
+# -- opt-in: the real Claude CLI side of the actor hook contract
+- file: tests/test_actor_hook_contract.py
+  reason: "opt-in: FLEETMUX_CONTRACT_REAL_CLAUDE is not set"
+  why: "the real side drives a logged-in Claude Code CLI (model calls, account quota), so it runs only when FLEETMUX_CONTRACT_REAL_CLAUDE names that CLI; the fake side of every case always runs. A visible skip by decision, never left uncollected"
+
+# -- opt-in: the cross-repository end-to-end test with rollout
+- file: tests/test_rollout_e2e.py
+  reason: "to an exported rollout checkout (git archive)"
+  why: "an optional cross-repository end-to-end test: it needs an exported checkout of the rollout repository named by FLEETMUX_ROLLOUT_E2E and is not run by default. The CI of the public repository has no such checkout. Not a missing program or package"
+
+# -- the user's decision: the @milestone(4) tests are not run in this delivery.
+#    Remove this block when M4 is run again (FLEETMUX_GATE=m4).
+- file: tests/test_applet_view.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_fleetmux_pages.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_fleetmux_tmux_view.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_drain_s_contract.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_e2e_hygiene.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_e2e_ops.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_fake_cli.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_profile_switch.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_m4_tmux_cleanup.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
+- file: tests/test_subfleet_fleetmux.py
+  reason: "M4 not in gate"
+  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"

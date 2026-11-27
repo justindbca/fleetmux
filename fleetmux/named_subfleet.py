@@ -731,6 +731,27 @@ def rotation_gate(f, slot):
 
 
 CHAIN_WAIT = 'supervisor chain: '  # a wait reason from the chain (walls, quota, a rotation): carried into op answers
+SLOT_WAKE = 'supervisor slot woken: '  # the up woke a reclaimed supervisor slot: carried into op answers likewise
+
+
+def woken_wait(f, slot, busy=''):
+    """The wait reason while the woken generation of a reclaimed supervisor slot is not READY (same text each
+    tick, so the autostart logs it once); a woken generation that is no longer starting adds its own reason."""
+    why = SLOT_WAKE + slot + ' was reclaimed; waiting for its next generation ' + f.label(slot) + ' to be READY'
+    return why if not busy or f.agent(slot).get('state') == 'starting' else why + ' (' + busy + ')'
+
+
+def wake_slot(f, name, slot):
+    """Idle reclaim (design section 68): the supervisor slot of a named sub-fleet that is to come up was
+    reclaimed. Its next generation starts once (the roster card unchanged, as lifecycle_hold.service_tick wakes a
+    worker for its message); the up goes on after READY, inside the op's SLOT_WAIT. A paused run wakes nobody."""
+    if f.paused():
+        return slot + ' was reclaimed; the run is paused, so it is not woken'
+    f.v2.respawn([slot], True)
+    gen = f.agent(slot).get('generation') or ''
+    f.r.hset(HASH + name, mapping={'slot_wake': gen})
+    f.log('subfleet.slot_wake', name=name, slot=slot, generation=gen)
+    return woken_wait(f, slot)
 
 
 def _registry(f):
@@ -818,9 +839,14 @@ def try_up(f, entry, goal=''):
     reason = subfleet.check(f, slot, name, workers, ready=False, named=entry)
     if reason:
         return 'refused', reason
+    if f.agent(slot).get('state') == 'reclaimed' and f.v2:
+        return 'wait', wake_slot(f, name, slot)
     busy = subfleet.check(f, slot, name, workers, ready=True, named=entry)
+    woke = state(f, name).get('slot_wake')
     if busy:
-        return 'wait', busy
+        return 'wait', woken_wait(f, slot, busy) if woke and woke == f.agent(slot).get('generation') else busy
+    if woke:
+        f.r.hset(HASH + name, mapping={'slot_wake': ''})
     status, trace = supervisor_choice(f, slot, entry)
     if status != 'ok':
         return status, trace
@@ -841,6 +867,7 @@ def try_up(f, entry, goal=''):
     f.r.hset(HASH + name, mapping={'state': 'starting', 'slot': slot, 'run_dir': rec['run'],
                                    'redis_socket': cfg['redis_socket'], 'started_at': time.time(), 'up_at': '',
                                    'drain_since': '', 'drain_reason': '', 'crashloop': '', 'blocked': '',
+                                   'slot_wake': '',
                                    'model_chain': json.dumps({'supervisor': trace}, ensure_ascii=False)})
     f.log('subfleet.supervisor_pick', name=name, slot=slot, model=trace['cli'] + ':' + trace['model'],
           source=trace['source'], skipped=len(trace['skipped']))
@@ -910,6 +937,8 @@ def tick(f):
             f.r.hset(HASH + name, mapping={'state': 'paused' if peek['paused'] else 'up', 'up_at': now})
             f.log('subfleet.up', name=name, slot=rec['slot'], redis_socket=cfg['redis_socket'], run_dir=str(d),
                   line=name + ': up via ' + f.label(rec['slot']) + ' since ' + since)
+            from fleetmux import heal
+            heal.up_done(f, name)  # §67: a [sub-fleet not up] told before gets its recovered line
         elif h.get('state') in ('up', 'paused'):
             want = 'paused' if peek['paused'] else 'up'
             if want != h['state']:
@@ -932,6 +961,9 @@ def tick(f):
         if (entry['autostart'] and name not in live(f) and state(f, name).get('crashloop') != '1'
                 and not ops(f, name, 'up', approved=True)):
             result = try_up(f, entry)
+            from fleetmux import heal
+            if result[0] == 'wait':
+                heal.up_waits(f, name, '', result[1])  # §67: told after heal.NOT_UP_AFTER s with the cause
             if result[0] == 'started':
                 f.log('subfleet.autostart', name=name, slot=entry['supervisor_slot'], run=result[1]['run'])
             elif result[1] != state(f, name).get('blocked'):  # each new reason once
@@ -961,15 +993,19 @@ def op_up(f, rid, op, now):
             finish(f, rid, 'timeout', {'reason': 'child not READY'})
         return  # starting / draining: wait for READY or for the down to finish
     result = try_up(f, entry, op.get('reason') or '')
-    if result[0] == 'wait' and result[1].startswith(CHAIN_WAIT) and result[1] != state(f, name).get('blocked'):
-        f.r.hset(HASH + name, mapping={'blocked': result[1]})  # D28: a chain wait is kept with the sub-fleet
+    from fleetmux import heal
+    if result[0] == 'wait':
+        heal.up_waits(f, name, rid, result[1])  # §67: the supervisor that approved it is told why after 600 s
+    carried = result[0] == 'wait' and result[1].startswith((CHAIN_WAIT, SLOT_WAKE))
+    if carried and result[1] != state(f, name).get('blocked'):
+        f.r.hset(HASH + name, mapping={'blocked': result[1]})  # D28: a chain wait (or a slot wake) is kept with it
         f.log('subfleet.up_wait', id=rid, name=name, reason=result[1][:500])
     if result[0] == 'refused':
         finish(f, rid, 'rejected', {'reason': 'program: ' + result[1]})
     elif result[0] == 'wait' and now - float(op.get('approved_at') or now) >= SLOT_WAIT:
-        # Q4: a wait the supervisor chain caused says why (walls, quota, a rotation that did not finish)
-        finish(f, rid, 'timeout', {'reason': 'slot busy' + (': ' + result[1] if result[1].startswith(CHAIN_WAIT)
-                                                            else '')})
+        # Q4: a wait the supervisor chain caused says why (walls, quota, a rotation that did not finish); so does
+        # the wake of a reclaimed supervisor slot whose next generation did not get READY
+        finish(f, rid, 'timeout', {'reason': 'slot busy' + (': ' + result[1] if carried else '')})
 
 
 def op_down(f, rid, op, now):

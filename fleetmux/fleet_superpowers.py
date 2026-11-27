@@ -7,6 +7,9 @@ test suite points it at a temporary path). Blocks: ``models``, ``machines``, ``q
 top-level ``hot`` mapping holds the write-back interval of the hot blocks (fleetmux/fleet_superpowers_hot.py) and
 the interval of the daemon refresh of this machine's entry (fleetmux/fleet_superpowers_refresh.py ``daemon_tick``).
 
+The top-level ``baseline`` block (the switch baseline, fleetmux/baseline.py) is written by people only: no code
+path writes it, and a broken baseline block never stops ``read()`` from returning the other blocks.
+
 Read side: every reader reads the file fresh, never creates it, and returns empty blocks when the file or a block
 is missing. A file that is not valid YAML, or a block of the wrong shape, raises ``InventoryError``. Every reader
 takes ``path`` to read another file instead of the default one.
@@ -109,11 +112,30 @@ def _parse(text, path):
     return data
 
 
+def _without_baseline(text, path):
+    """The file parsed without its ``baseline`` block, when that block alone is not valid YAML (the switch
+    baseline, fleetmux/baseline.py, reports its own error: a broken baseline never hides the other blocks).
+    Re-raises the original error when the file is broken elsewhere too."""
+    from . import baseline
+    own = baseline.block_text(text)
+    try:
+        if not own:
+            raise ValueError
+        data = _parse(text.replace(own, '', 1), path)
+    except (InventoryError, ValueError):
+        return _parse(text, path)  # raises the original error
+    return data
+
+
 def read(path=None):
     """The whole file as a dict. The four blocks are always present (``{}`` when missing or empty); other
     top-level keys are kept as they are."""
     path = Path(path) if path else file_path()
-    data = _parse(_load_text(path), path)
+    text = _load_text(path)
+    try:
+        data = _parse(text, path)
+    except InventoryError:
+        data = _without_baseline(text, path)
     out = {name: data.get(name) or {} for name in BLOCKS}
     for name in BLOCKS:
         if not isinstance(out[name], dict):

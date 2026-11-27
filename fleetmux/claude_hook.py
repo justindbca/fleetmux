@@ -29,13 +29,17 @@ Measured on Claude Code 2.1.280 (docs: claude-hook-report.md):
     interrupts the turn and kills the waiting hook, so the session stays idle (unarmed) until
     its next turn ends.
 
-Long idle: the hook waits up to ``hook_timeout(cfg)`` (default one day) without starting any turn.
-Shortly before that it hands Claude one tiny keepalive turn (``KEEPALIVE``) so the next Stop hook
-re-arms; that turn is never settled or reported.
+Long idle: Claude Code kills the hook at ``hook_timeout(cfg)`` (default one day) of wall time, sleep included.
+Halfway there (``deadline``) the hook hands Claude one tiny keepalive turn (``KEEPALIVE``) so the next Stop
+hook re-arms; that turn is never settled or reported. The deadline is measured on ``clock()``, which keeps
+counting while the machine sleeps (``time.monotonic`` stops on macOS), and re-checked every ``POLL`` seconds.
+A sleep that covers the whole second half of the timeout still loses the keepalive (nothing runs while asleep);
+the daemon then wakes the idle session when it delivers (RuntimeV2.hook_unarmed_tick).
 """
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime
 
@@ -69,7 +73,7 @@ FEEDBACK = 'Stop hook feedback:'
 KEEPALIVE = ('Fleet keepalive: there is no new instruction yet. Do no work and use no tools; '
              'reply exactly IDLE.')
 DEFAULT_TIMEOUT = 86400  # seconds; Node's timer limit is ~24.8 days, keep well below
-MARGIN = 120  # the hook answers this long before Claude Code's own timeout would kill it
+MARGIN_MIN = 3  # the keepalive comes at least this long before Claude Code's own timeout would kill it
 POLL = 5  # seconds per BLPOP; also the liveness re-check period
 ARMED_TTL = 3 * POLL
 BIND_TTL = 7 * 86400
@@ -105,8 +109,32 @@ def hook_timeout(cfg):
 
 
 def margin(cfg):
-    """How long before Claude Code's timeout the hook answers on its own (keepalive)."""
-    return min(MARGIN, max(3, hook_timeout(cfg) // 10))
+    """How long before Claude Code's timeout the hook answers on its own (keepalive): half the timeout, so a
+    machine that is awake at any moment of the second half sends it in time (a wake after a sleep finds the
+    deadline passed and answers at once, before Claude Code's overdue timer)."""
+    return max(MARGIN_MIN, hook_timeout(cfg) - hook_timeout(cfg) // 2)
+
+
+# Claude Code times its hooks on wall time and counts the time the machine slept. time.monotonic() does not on
+# macOS (mach_absolute_time, awake.py), so a deadline on it falls after the kill. These clocks count sleep and
+# never step with the wall clock (deliberately not the awake time of design section 35).
+_SLEEP_CLOCK = {'darwin': 'CLOCK_MONOTONIC', 'linux': 'CLOCK_BOOTTIME'}.get(sys.platform)
+
+
+def clock():
+    """Seconds on a clock that keeps counting while the machine sleeps (hook deadlines only, never stored)."""
+    which = getattr(time, _SLEEP_CLOCK, None) if _SLEEP_CLOCK else None
+    if which is not None:
+        try:
+            return time.clock_gettime(which)
+        except OSError:
+            pass
+    return time.time()
+
+
+def deadline(cfg, started):
+    """When a Stop / rewake hook started at ``started`` (``clock()``) hands Claude its keepalive."""
+    return started + hook_timeout(cfg) - margin(cfg)
 
 
 def keys(prefix, slot, generation):
@@ -372,14 +400,14 @@ def wait(r, k, generation, thread, deadline, alive, accept, poll=POLL, queue=Non
     try:
         if alive():  # a Stop of this generation fired: the operator turn it yielded to (if any) has ended
             r.delete(k['human'])
-        while time.monotonic() < deadline:
+        while clock() < deadline:  # re-checked every poll slice: a sleep never stretches one block
             if not alive():
                 return None, None
             if yielding(r, k, thread, queue):  # checked first: a line queued during the last turn
                 return None, None
             r.set(k['armed'], mark, ex=ARMED_TTL)
             r.delete(k['stopping'])
-            got = r.blpop([k['mailbox']], timeout=max(1, int(min(poll, deadline - time.monotonic()))))
+            got = r.blpop([k['mailbox']], timeout=max(1, int(min(poll, deadline - clock()))))
             if not got:
                 continue
             try:

@@ -281,7 +281,7 @@ def _absorb_report(f, hit, reason):
 
 
 # ------------------------------------------------------------------ push
-def push(f, text):
+def push(f, text, event=EVENT):
     """One notice for the user through the run's existing outbound path (never at a fleet with a parent): a managed
     root -> lifecycle_close.notify; otherwise notify_route.unmanaged_send (channels via RuntimeV2.channel_alarm, else
     counted in notify-undelivered.json). Returns a short status; never raises."""
@@ -295,9 +295,9 @@ def push(f, text):
                 policy = lifecycle.get_mode(f.cfg['lifecycle'])
             except (ValueError, KeyError, TypeError):
                 policy = {}
-            out = lifecycle_close.notify(f, EVENT, '[fleet ' + lifecycle_close.fleet_name(f) + '] ' + text, policy)
+            out = lifecycle_close.notify(f, event, '[fleet ' + lifecycle_close.fleet_name(f) + '] ' + text, policy)
             return ','.join(str(x.get('status')) for x in out) if isinstance(out, list) else 'sent'
-        return notify_route.unmanaged_send(f, EVENT, text) or 'counted'
+        return notify_route.unmanaged_send(f, event, text) or 'counted'
     except Exception as exc:  # noqa: BLE001  (a notice never takes the daemon down)
         f.log('blocked.push_failed', level='error', error=str(exc)[:300])
         return 'failed'
@@ -410,6 +410,9 @@ def user_answer(f, ev):
     through Fleet.escalation_apply. Returns the reply ({status: accepted | rejected, ...})."""
     key, decision = str(ev.get('key') or ''), str(ev.get('decision') or '')
     note = str(ev.get('note') or '').strip()[:2000]
+    from fleetmux import baseline_check
+    if key.startswith(baseline_check.KEY):  # the switch baseline's restart approval (only the user's)
+        return baseline_check.user_answer(f, ev)
     if not key.startswith(REPORT_KEY):
         return {'status': 'rejected', 'reason': 'only a report:<task>:<id> key that waits for you can be answered '
                                                 'here (got ' + key[:80] + ')'}
@@ -456,15 +459,36 @@ def caller_problem(cfg):
     return None
 
 
+def ancestors(cfg):
+    """The configs above a sub-fleet's config, nearest first (unreadable ones end the walk)."""
+    from fleetmux import fleet as legacy
+    out, seen, cur = [], set(), cfg
+    while cur.get('parent_config') and cur['parent_config'] not in seen:
+        seen.add(cur['parent_config'])
+        try:
+            cur = legacy.load(cur['parent_config'])
+        except (OSError, ValueError):
+            break
+        out.append(cur)
+    return out
+
+
 def answer_send(cfg, key, decision, note='', wait=30):
     """``fleetmux answer``: post the user's ruling to the run's daemon over the fleet bus and wait for its reply."""
     problem = caller_problem(cfg)
+    if not problem and str(key).startswith('baseline:'):  # only the user approves: no pane of any fleet above
+        problem = next((p for p in map(caller_problem, ancestors(cfg)) if p), None)
     if problem:
         return {'status': 'rejected', 'reason': problem}
     if cfg.get('transport_version') != 2:
         return {'status': 'rejected', 'reason': 'answer needs a transport v2 run (the fleet bus)'}
+    import redis
     from fleetmux import fleet as legacy, runtime_v2
-    r = legacy.connect(cfg)
+    try:
+        r = legacy.connect(cfg)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError, OSError) as exc:
+        return {'status': 'rejected', 'reason': 'the fleet of ' + str(cfg.get('run') or '?') + ' has ended (or its Redis '
+                'is down): its Redis cannot be reached (' + str(exc)[:200] + '), so nothing to answer'}
     try:
         bus = runtime_v2.bus_for(cfg, r)
         correlation = 'ui-' + uuid.uuid4().hex

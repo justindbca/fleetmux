@@ -396,7 +396,7 @@ from test_subfleet import adopt_by_hook, start_tree, stop_child_like_daemon  # n
 from fleetmux import applet_ops, lifecycle_deliver  # noqa: E402
 
 DELIVER = {'repo': '/abs/repo', 'feature_branch': 'feat/x', 'deploy_branch': 'main', 'test_cmd': ['true'],
-           'queue': '/abs/queue.json', 'review_file': 'review.json'}  # review_file: an older spec's key, ignored
+           'queue': '/abs/queue.json', 'review_file': 'review.json', 'via': 'queue'}  # review_file: an older spec's key, ignored
 
 
 def team(tmp_path, extra=''):

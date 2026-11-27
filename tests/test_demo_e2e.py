@@ -4,10 +4,11 @@ completed, everything cleaned up, nothing outside the demo's own directory touch
 The real product runs (start, task, daemon, v2 bus, Claude Stop-hook delivery, the artifact check, the audit stream);
 the terminal server is tests/fake_fleetmux.py (the protocol on real PTYs, no cargo build), the agents are the
 demo's scripted actors. The caller's FLEETMUX_HOME / FLEETMUX_STATE point at directories of this test, which must
-come out unchanged; the user's real ~/.claude.json and ~/.claude/projects must not name the demo's directory."""
+come out unchanged; the caller's ~/.claude.json and ~/.claude/projects must not name the demo's directory. The
+caller's HOME is a stand-in of this test with a synthetic Claude config (other projects only): the operator's
+real ~/.claude.json and ~/.claude/projects are never read."""
 import json
 import os
-import pwd
 import re
 import shutil
 import signal
@@ -20,7 +21,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_FLEETMUX = ROOT / 'tests' / 'fake_fleetmux.py'
-REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+SYNTHETIC_PROJECT = '/Users/someone/work/other-project'  # a project the stand-in Claude config already knows
 BANNER = 'scripted agents, no model calls — the acceptance is real fleetmux code'
 REASON = 'artifact not written: worker-1/test_slug.py'
 
@@ -35,17 +36,22 @@ def outer(tmp_path):
     only the demo's programs (redis-server, tmux, git; python3.14 for the fake terminal server) and /usr/bin:/bin,
     and the caller's fleet directories (stand-ins for a fleet already running here). All must come out unchanged."""
     fh, st, home, path = tmp_path / 'outer-home', tmp_path / 'outer-state', tmp_path / 'home', tmp_path / 'bin'
+    tmux_tmp = tmp_path / 'tmux-default'  # where a tmux server started without -S would put its socket
+    tmux_tmp.mkdir()
     (fh / 'runs').mkdir(parents=True)
     st.mkdir()
     home.mkdir()
     (home / '.zshrc').write_text('# stand-in\n')
+    seed_claude_config(home)
     path.mkdir()
     for name in ('redis-server', 'tmux', 'git', 'python3.14'):
         found = shutil.which(name)
         assert found, name + ' is needed by this test'
         (path / name).symlink_to(found)
     (fh / 'latest.json').write_text('{"run": "/somewhere/else"}\n')
+    # built, not inherited: no BASH_ENV / ENV / ZDOTDIR / XDG_CONFIG_HOME / TMUX reaches the demo
     env = {'HOME': str(home), 'PATH': str(path) + ':/usr/bin:/bin', 'SHELL': '/bin/sh', 'LANG': 'en_US.UTF-8',
+           'TMUX_TMPDIR': str(tmux_tmp),
            'TMPDIR': os.environ.get('TMPDIR', '/tmp'), 'USER': os.environ.get('USER', ''),
            'FLEETMUX_HOME': str(fh), 'FLEETMUX_STATE': str(st), 'FLEETMUX_BIN': str(FAKE_FLEETMUX),
            'FLEETMUX_DISCOVERY': 'off', 'PYTHONDONTWRITEBYTECODE': '1'}
@@ -61,15 +67,42 @@ def own_processes(root):
     return [line for line in out.splitlines() if str(root) in line and 'ps -U' not in line]
 
 
-def real_home_untouched_by(root):
-    claude_json = REAL_HOME / '.claude.json'
-    if claude_json.exists():
-        assert str(root) not in claude_json.read_text(errors='replace')
-    slug = re.sub(r'[^A-Za-z0-9]', '-', str(root))
-    projects = REAL_HOME / '.claude' / 'projects'
-    if projects.is_dir():
-        assert not [p for p in projects.iterdir() if slug in p.name]
+def seed_claude_config(home):
+    """A synthetic Claude Code config in the stand-in HOME, as a machine with one other project has it."""
+    (home / '.claude' / 'projects').mkdir(parents=True, exist_ok=True)
+    for p in (home / '.claude' / 'projects').iterdir():
+        p.rmdir()
+    (home / '.claude' / 'projects' / re.sub(r'[^A-Za-z0-9]', '-', SYNTHETIC_PROJECT)).mkdir()
+    (home / '.claude.json').write_text(json.dumps({'hasCompletedOnboarding': True, 'projects': {
+        SYNTHETIC_PROJECT: {'hasTrustDialogAccepted': True}}}, indent=2) + '\n')
 
+
+def operator_home_untouched_by(home, root):
+    """The caller's Claude config names nothing of the demo: no trust entry, no transcript directory."""
+    claude_json = home / '.claude.json'
+    assert claude_json.is_file()  # seeded by the fixture: the check below has something to look at
+    assert str(root) not in claude_json.read_text(errors='replace')
+    slug = re.sub(r'[^A-Za-z0-9]', '-', str(root))
+    projects = home / '.claude' / 'projects'
+    assert projects.is_dir()
+    assert not [p for p in projects.iterdir() if slug in p.name]
+
+
+
+def test_the_home_check_catches_a_demo_entry_in_the_synthetic_claude_config(tmp_path):
+    """Control for operator_home_untouched_by: it fails on a demo directory in claude.json or projects."""
+    home, root = tmp_path / 'home', Path('/tmp/fmxd-control')
+    seed_claude_config(home)
+    operator_home_untouched_by(home, root)
+    leaked = json.loads((home / '.claude.json').read_text())
+    leaked['projects'][str(root / 'runs')] = {'hasTrustDialogAccepted': True}
+    (home / '.claude.json').write_text(json.dumps(leaked))
+    with pytest.raises(AssertionError):
+        operator_home_untouched_by(home, root)
+    seed_claude_config(home)
+    (home / '.claude' / 'projects' / re.sub(r'[^A-Za-z0-9]', '-', str(root / 'runs' / 'w'))).mkdir()
+    with pytest.raises(AssertionError):
+        operator_home_untouched_by(home, root)
 
 def demo_root(text):
     m = re.search(r'Starting a one-off fleet in (\S+) ', text)
@@ -102,7 +135,7 @@ def test_demo_rejects_then_accepts_and_cleans_up(outer):
     assert not root.exists() and not own_processes(root) and demo_dirs() <= dirs_before
     # nothing outside the demo's directory: the caller's HOME and fleet directories, the user's real ~/.claude
     assert (snapshot(fh), snapshot(st), snapshot(home)) == before
-    real_home_untouched_by(root)
+    operator_home_untouched_by(home, root)
 
 
 def interrupt_after(env, marker, delay=0.0):
@@ -134,7 +167,7 @@ def assert_interrupted_clean(code, out, root, before, fh, st, home):
         time.sleep(0.2)
     assert not root.exists() and not own_processes(root), own_processes(root)
     assert (snapshot(fh), snapshot(st), snapshot(home)) == before
-    real_home_untouched_by(root)
+    operator_home_untouched_by(home, root)
 
 
 def test_ctrl_c_while_the_fleet_starts_cleans_up(outer):

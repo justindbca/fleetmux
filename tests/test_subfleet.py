@@ -21,7 +21,8 @@ import pytest
 
 from test_fleet import codex_rows, received, write_rollout
 import hook_sim  # noqa: E402
-from fleetmux import clear_after_result, cmux_manager, fleet, redis_runtime, roster, runtime_v2, subfleet
+from redis_kit import stop_test_redis
+from fleetmux import claude_hook, clear_after_result, cmux_manager, fleet, redis_runtime, roster, runtime_v2, subfleet
 
 # §48 (user 2026-11-09:「任何场景都不用 claude 输入框打字」): these tests exercised a channel that typed into a
 # Claude input box; it is refused at start now (tests/test_no_claude_typing.py covers the refusal).
@@ -195,47 +196,44 @@ def start_tree(tmp_path, monkeypatch, **over):
     if shutil.which('redis-server') is None:
         pytest.skip('redis-server unavailable')
     root = Path('/tmp/cfs-' + uuid.uuid4().hex[:8])  # short: macOS Unix socket path limit
-    monkeypatch.setattr(fleet, 'trust_claude_dir', lambda cwd: None)  # never touch ~/.claude.json
-    world = World(tmp_path / 'cmux-state')
-    monkeypatch.setattr(fleet, 'manager_for', world.manager)
-    rcfg, r = start_private(root)
-    run = tmp_path / 'fleet-20261013-000000-a1b2c3d4'
-    (run / 'workspace').mkdir(parents=True)
-    cfg = dict(rcfg, run=str(run), python=sys.executable, workers=['worker-1', 'worker-2'], mode='task',
-               supervisor_cli='codex', worker_cli='claude', codex_home=str(tmp_path / 'codex-home'),
-               allow_development_v2=True, stall_timeout=0, v2_lease_ms=300000, max_busy=0, max_attempts=2,
-               name='研报', token='a1b2c3d4',
-               adopted_supervisor_hook_delivery=True)  # every new start pins it; §48 refuses a typed adoption
-    cfg.update(over)
-    path = run / 'config.json'
-    fleet.save(path, cfg)
-    t = SimpleNamespace(world=world, root=root, sessions=tmp_path / 'codex-home' / 'sessions',
-                        claude=tmp_path / 'claude-projects', threads={}, fleets=[], tmp=tmp_path,
-                        monkeypatch=monkeypatch)
-    f = fleet.Fleet(path, r, world.manager(cfg), sessions=t.sessions)
-    t.f = f
-    t.fleets.append(f)
-    f.start_all()
-    f.r.set(f.v2.prefix + ':boot', 'running')
-    for slot in f.names:
-        assert hook(t, f, slot, 'READY', prompt='startup')['status'] == 'ready'
-    if cfg['mode'] == 'task':
-        runtime_v2.post_event(f.v2.bus, dict(kind='task', request_id='new-task', spec={'goal': 'write the report'}),
-                              'new-task')
-    step(t)
-    yield t
-    for x in t.fleets:
-        try:
-            x.v2.close()
-        except Exception:
-            pass
-    for pid_file in root.glob('*/redis.pid'):
-        try:
-            os.kill(int(pid_file.read_text()), signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
-            pass
-    time.sleep(.2)
-    shutil.rmtree(root, ignore_errors=True)
+    t = None
+    try:
+        monkeypatch.setattr(fleet, 'trust_claude_dir', lambda cwd: None)  # never touch ~/.claude.json
+        world = World(tmp_path / 'cmux-state')
+        monkeypatch.setattr(fleet, 'manager_for', world.manager)
+        rcfg, r = start_private(root)
+        run = tmp_path / 'fleet-20261013-000000-a1b2c3d4'
+        (run / 'workspace').mkdir(parents=True)
+        cfg = dict(rcfg, run=str(run), python=sys.executable, workers=['worker-1', 'worker-2'], mode='task',
+                   supervisor_cli='codex', worker_cli='claude', codex_home=str(tmp_path / 'codex-home'),
+                   allow_development_v2=True, stall_timeout=0, v2_lease_ms=300000, max_busy=0, max_attempts=2,
+                   name='研报', token='a1b2c3d4',
+                   adopted_supervisor_hook_delivery=True)  # every new start pins it; §48 refuses a typed adoption
+        cfg.update(over)
+        path = run / 'config.json'
+        fleet.save(path, cfg)
+        t = SimpleNamespace(world=world, root=root, sessions=tmp_path / 'codex-home' / 'sessions',
+                            claude=tmp_path / 'claude-projects', threads={}, fleets=[], tmp=tmp_path,
+                            monkeypatch=monkeypatch)
+        f = fleet.Fleet(path, r, world.manager(cfg), sessions=t.sessions)
+        t.f = f
+        t.fleets.append(f)
+        f.start_all()
+        f.r.set(f.v2.prefix + ':boot', 'running')
+        for slot in f.names:
+            assert hook(t, f, slot, 'READY', prompt='startup')['status'] == 'ready'
+        if cfg['mode'] == 'task':
+            runtime_v2.post_event(f.v2.bus, dict(kind='task', request_id='new-task',
+                                                 spec={'goal': 'write the report'}), 'new-task')
+        step(t)
+        yield t
+    finally:  # every path, also a failing setup or a generator closed before it was drained
+        for x in (t.fleets if t else []):
+            try:
+                x.v2.close()
+            except Exception:
+                pass
+        stop_test_redis(root)
 
 
 def step(t, ms=10):
@@ -1138,14 +1136,13 @@ def write_roster(t, autostart=False, declare=True, extra=''):
 def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(subfleet, 'default_launch', no_launch)
     gen = start_tree(tmp_path, monkeypatch, mode='service', max_attempts=1)
-    t = next(gen)
-    t.f.cfg['roster'] = str(write_roster(t))
-    t.f.roster_tick()
     try:
+        t = next(gen)
+        t.f.cfg['roster'] = str(write_roster(t))
+        t.f.roster_tick()
         yield t
     finally:
-        for _ in gen:
-            pass
+        gen.close()  # runs start_tree's teardown now, also when the roster setup raised
 
 
 def ask(t, op, name='ops', rid=None, **extra):
@@ -1899,7 +1896,7 @@ def waiting_hook(t, monkeypatch):
     box = {}
 
     def run():
-        box['v'] = REAL_HOOK_NEXT(own, 'worker-1', gen, thread, time.monotonic() + 120,
+        box['v'] = REAL_HOOK_NEXT(own, 'worker-1', gen, thread, claude_hook.clock() + 120,
                                   transcript=str(t.claude / (thread + '.jsonl')), own=(own, 'worker-1', gen))
     th = threading.Thread(target=run, daemon=True)
     th.start()

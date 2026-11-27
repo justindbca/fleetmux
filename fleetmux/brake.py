@@ -199,6 +199,8 @@ _TABLE = {}
 
 SAFEGUARDS = 'safeguards'  # walls class: the CLI's safeguards refusal of one message (user 2026-11-23, design section 23)
 SAFEGUARDS_KEYS = ('safeguards', 'safeguards_screen', 'safeguards_prefer', 'safeguards_error_types')
+DELIVERY_KEY = 'delivery_screen'  # how a fleet delivery is drawn on a pane, per CLI (docs/design.md section 67)
+AMBIGUOUS_LEAD = 20  # a wall match that starts within this many characters of a row's text may be the CLI's own row
 
 
 def wall_table(path=None):
@@ -209,7 +211,7 @@ def wall_table(path=None):
     if cached and cached[0] == stamp:
         return cached[1]
     raw = fleet_config.block('walls', path) or {}
-    missing = [k for k in SAFEGUARDS_KEYS if k not in raw]
+    missing = [k for k in SAFEGUARDS_KEYS + (DELIVERY_KEY,) if k not in raw]
     if missing:
         shipped = fleet_config.block('walls', fleet_config.SHIPPED) or {}
         raw = dict(raw, **{k: shipped.get(k) for k in missing})
@@ -220,6 +222,7 @@ def wall_table(path=None):
              'safeguards_screen': [re.compile(p, re.I) for p in raw.get('safeguards_screen') or []],
              'safeguards_prefer': [str(p) for p in raw.get('safeguards_prefer') or []],
              'safeguards_error_types': [str(p) for p in raw.get('safeguards_error_types') or []],
+             DELIVERY_KEY: [delivery_shape(x) for x in raw.get(DELIVERY_KEY) or []],
              'same_cli_downgrade': dict(raw.get('same_cli_downgrade') or {}),
              'aliases': dict(raw.get('aliases') or {}), 'default': dict(raw.get('default') or {})}
     _TABLE[str(path)] = (stamp, table)
@@ -257,7 +260,9 @@ def screen_wall(screen, lines=GATE_TAIL, table=None):
     """Wall on the bottom of a live screen (watchdog gate, E before F), or None. The safeguards class counts only
     on the CLI's own error line (walls.safeguards_screen)."""
     rows = (screen or '').rstrip().splitlines()
-    return classify_wall('\n'.join(rows[-lines:]), table, safeguards='screen')
+    inside = delivery_rows(rows, table)
+    tail = [rows[i] for i in range(max(0, len(rows) - lines), len(rows)) if i not in inside]
+    return classify_wall('\n'.join(tail), table, safeguards='screen')
 
 
 def preferred(model, patterns):
@@ -299,3 +304,127 @@ def wall_action(cli, model, below, walled=(), refused=None, prefer=None):
     return {'action': 'stop', 'cli': cli, 'from': model, 'skipped': skipped, 'skipped_rows': rows,
             'advice': ('no usable model left below this one on the chain (fleet.yaml#discovery): '
                        'wait for the reset or restart the slot by hand')}
+
+
+def screen_lines(screen):
+    """The non-empty lines of a captured screen, as wall_after compares them (docs/design.md §67)."""
+    return [x.rstrip() for x in (screen or '').splitlines() if x.strip()]
+
+
+def wall_after(base, screen, wall, lines_back=GATE_TAIL, table=None):
+    """Position-based (§67): is a wall line on the screen's tail below what the baseline ``base`` (screen_lines
+    at the last resume) already showed? The two captures are aligned line by line; a wall line on an aligned
+    (unchanged) line is old text, a wall line in a new or changed stretch is new -- also when an identical line is
+    still above it. Every tail line that classify_wall reads as a wall counts (``wall`` names the kind found)."""
+    import difflib
+    lines = screen_lines(screen)
+    start = max(0, len(lines) - lines_back)
+    inside = delivery_rows(lines, table)
+    hits = [i for i in range(start, len(lines))
+            if i not in inside and classify_wall(lines[i], table, safeguards='screen')]
+    if not hits:
+        return bool(wall)  # the gate saw a wall these lines do not show on their own: counted (fail safe)
+    new = set()
+    for op, _, _, j1, j2 in difflib.SequenceMatcher(None, list(base), lines, autojunk=False).get_opcodes():
+        if op in ('insert', 'replace'):
+            new.update(range(j1, j2))
+    return any(i in new for i in hits)
+
+
+# ------------------------------------------------------------------ delivered text on a screen (design section 67)
+def delivery_shape(raw):
+    """One walls.delivery_screen row compiled: ``head`` (the row that opens a delivered block), ``body_indent`` (the
+    column every further delivered row starts at or right of) and ``cli_row`` (a row the CLI draws itself)."""
+    return {'name': str(raw.get('name') or ''), 'head': re.compile(str(raw['head'])),
+            'body_indent': int(raw.get('body_indent') or 0), 'cli_row': re.compile(str(raw.get('cli_row') or r'(?!)'))}
+
+
+def _ambiguous(text, table):
+    """A wall match near the start of a row's text: the row may be the CLI's own line (counted, never hidden)."""
+    for p in table['account'] + table['model_pool']:
+        m = p.search(text)
+        if m and len(text[:m.start()].strip()) < AMBIGUOUS_LEAD:
+            return True
+    return False
+
+
+def delivery_rows(rows, table=None):
+    """Indices of ``rows`` (a screen's rows, top to bottom) that show a fleet delivery: from a row matching a
+    delivery_screen ``head``, the following non-empty rows that start at the shape's body indent or right of it.
+    The block ends at the first non-empty row left of the body indent or matching ``cli_row`` (whatever it is), and
+    a row whose wall match starts near its beginning counts as the CLI's own (ambiguity never hides a wall). No head
+    on the screen, no block. Judged by position only: the delivered texts themselves are never consulted."""
+    table = table or wall_table()
+    shapes = table.get(DELIVERY_KEY) or []
+    inside, cur = set(), None
+    if not shapes:
+        return inside
+    for i, row in enumerate(rows):
+        if not row.strip():
+            continue
+        if cur is not None:
+            indent = len(row) - len(row.lstrip(' '))
+            if indent >= cur['body_indent'] and not cur['cli_row'].search(row):
+                if not _ambiguous(row[indent:], table):
+                    inside.add(i)
+                continue
+            cur = None
+        for shape in shapes:
+            m = shape['head'].search(row)
+            if m:
+                cur = shape
+                if not _ambiguous(row[m.end():], table):
+                    inside.add(i)
+                break
+    return inside
+
+
+def own_text(screen, table=None):
+    """``screen`` without the rows that show a fleet delivery (what the CLI itself drew)."""
+    rows = (screen or '').splitlines()
+    inside = delivery_rows(rows, table)
+    return '\n'.join(r for i, r in enumerate(rows) if i not in inside)
+
+
+# ------------------------------------------------------------------ naming a wall without quoting it (section 67)
+_TIME = r'\d{1,2}(?::\d{2})?\s?(?:am|pm)?'
+_DATE = r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?'
+_ZONE = r'\s+\([A-Za-z_]+(?:/[A-Za-z_+\-]+){0,2}\)'
+_WHEN = r'(?:' + _DATE + r'\s+(?:at\s+)?' + _TIME + r'|' + _DATE + r'|' + _TIME + r')(?:' + _ZONE + r')?'
+RESETS = re.compile(r'\bresets\s+(?P<when>' + _WHEN + r')', re.I)
+_RESETS_AFTER = re.compile(r'[^\n]{0,12}?\bresets\s+(?P<when>' + _WHEN + r')', re.I)
+
+
+def wall_resets(line):
+    """The reset time a CLI wall line states (a clock time / a short date, optional zone), or ''. Nothing else of
+    the line is taken."""
+    m = RESETS.search(line or '')
+    return m.group('when').strip() if m else ''
+
+
+def wall_phrase(slot, scope, cli, model, resets=''):
+    """How a wall is named in any text a supervisor reads: never the CLI's own line (design section 67)."""
+    return (str(slot) + ' hit a ' + str(scope) + ' wall (' + str(cli) + ':' + str(model or '?')
+            + (', resets ' + resets if resets else '') + ')')
+
+
+def unquote_walls(text, table=None):
+    """``text`` with every CLI wall wording (walls.account / walls.model_pool) and the reset clause right after it
+    replaced by ``hit a <scope> wall[, resets <time>]``: a notice built from a CLI line no longer quotes it."""
+    table = table or wall_table()
+    out = str(text or '')
+    for _ in range(32):
+        best = None
+        for scope in ('account', 'model_pool'):
+            for p in table[scope]:
+                m = p.search(out)
+                if m and (best is None or m.start() < best[0].start()):
+                    best = (m, scope)
+        if best is None:
+            break
+        m, scope = best
+        after = _RESETS_AFTER.match(out, m.end())
+        when = after.group('when').strip() if after else ''
+        out = (out[:m.start()] + 'hit a ' + scope + ' wall' + (', resets ' + when if when else '')
+               + out[after.end() if after else m.end():])
+    return out

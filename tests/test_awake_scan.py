@@ -36,9 +36,11 @@ ALLOWED = {
     'fleetmux/demo.py::cleanup': DEMO,
     'fleetmux/demo.py::run': DEMO,
     'fleetmux/demo.py::settle_audit': DEMO,
-    'fleetmux/demo.py::stop_terminal_server': DEMO,
+    'fleetmux/demo.py::stop_server': POLL,  # shared with `fleetmux upgrade` (terminal_down)
     'fleetmux/demo.py::wait_closed': DEMO,
     'fleetmux/demo.py::wait_for_end': DEMO,
+    'fleetmux/upgrade.py::status_main': 'rollout health protocol: next_check_at is a calendar time printed for '
+                                       'the caller, not a deadline of this process (nothing waits on it)',
     'fleetmux/restart_state.py::deliver': 'section 60 ruling reminder: delivered_at is kept in the ledger file across '
                                          'daemon lives; a reminder right after a wake is harmless (it fails nothing)',
     'fleetmux/restart_state.py::prune': 'section 60: a temp file is judged by its mtime, which is wall time',
@@ -48,6 +50,7 @@ ALLOWED = {
                                            '(suspended_at is written by an earlier process; sleep included on purpose)',
     'fleetmux/agent_bridge.py::daemon_beat': LIVENESS,
     'fleetmux/applet_view.py::tick': TTL + ' (tab check and retry cadence)',
+    'fleetmux/baseline_check.py::tick': TTL + ' (baseline check cadence)',
     'fleetmux/brake.py::pool_reading': TTL,
     'fleetmux/channels/actor.py::drain': CHANNEL,
     'fleetmux/channels/actor.py::inbound_loop': CHANNEL,

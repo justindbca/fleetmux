@@ -1,0 +1,163 @@
+# Skip sites of main at 3b3f3cbe: file + reason pattern (fnmatch; "*" is a part computed at run time).
+# Generated from the source, no test run: python tests/skip_policy.py baseline --rev 3b3f3cbe > tests/skip_baseline.yaml
+rev: 3b3f3cbe
+command: python tests/skip_policy.py baseline --rev 3b3f3cbe > tests/skip_baseline.yaml
+sites:
+- file: tests/_fleetmux_milestone.py
+  reason: M* not in gate *
+- file: tests/hook_world.py
+  reason: needs *
+- file: tests/test_acceptance42_keyboard_diagnostic.py
+  reason: node is not installed
+- file: tests/test_actor_hook_contract.py
+  reason: 'opt-in: * is not set (the real Claude CLI side of the actor hook contract)'
+- file: tests/test_applet_view.py
+  reason: M* not in gate *
+- file: tests/test_autohandoff_launcher.py
+  reason: Node required
+- file: tests/test_autohandoff_launcher.py
+  reason: installed Pi required; set PI_TEST_PACKAGE_DIR
+- file: tests/test_channel_feishu.py
+  reason: could not import 'lark_oapi'*
+- file: tests/test_check_deps.py
+  reason: M* not in gate *
+- file: tests/test_claude_editor_review_repro.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_claude_editor_runtime.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_claude_editor_send.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_claude_supervisor_hook_edges.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_clear_after_result.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_clear_after_result_redis.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_cli_pairs.py
+  reason: could not import 'tomllib'*
+- file: tests/test_codex_notype_regression.py
+  reason: redis-server unavailable
+- file: tests/test_codex_via_pi.py
+  reason: pi+claude/task verified by a real smoke
+- file: tests/test_control_view_v2.py
+  reason: redis-server unavailable
+- file: tests/test_control_view_v2.py
+  reason: 'sandbox cannot bind temporary private Redis: *'
+- file: tests/test_crates_publish_metadata.py
+  reason: could not import 'tomllib'*
+- file: tests/test_daemon_watch.py
+  reason: installed Pi/Node dependencies needed for the actual TS harness
+- file: tests/test_decompose_prompt.py
+  reason: installed Pi/Node dependencies needed for actual TS contract harness
+- file: tests/test_devflow_roles.py
+  reason: could not import 'yaml'*
+- file: tests/test_dsh_bridge_plugin.py
+  reason: node is not installed
+- file: tests/test_fixture_redis_cleanup.py
+  reason: redis-server unavailable
+- file: tests/test_fleetmux_backend.py
+  reason: M* not in gate *
+- file: tests/test_fleetmux_backend.py
+  reason: 'real fleetmux not built: * (cargo build, or set FLEETMUX_REAL_BIN)'
+- file: tests/test_fleetmux_backend.py
+  reason: tmux not installed (deps.yaml requires it)
+- file: tests/test_fleetmux_default_switch.py
+  reason: M* not in gate *
+- file: tests/test_fleetmux_pages.py
+  reason: M* not in gate *
+- file: tests/test_fleetmux_pages.py
+  reason: tmux not installed (deps.yaml requires it)
+- file: tests/test_fleetmux_start_attach.py
+  reason: M* not in gate *
+- file: tests/test_fleetmux_tmux_view.py
+  reason: M* not in gate *
+- file: tests/test_fresh_always.py
+  reason: "docs/design.md \xA748: the typed \xA728 /clear channel is retired; start refuses --clear-after-result"
+- file: tests/test_history_view.py
+  reason: M* not in gate *
+- file: tests/test_history_view.py
+  reason: kqueue is only available on BSD/macOS
+- file: tests/test_install.py
+  reason: needs uv (it provides the Python of deps.yaml)
+- file: tests/test_install_fleetmux.py
+  reason: M* not in gate *
+- file: tests/test_keyboard_readonly_fix.py
+  reason: node is not installed
+- file: tests/test_m4_drain_s_contract.py
+  reason: M* not in gate *
+- file: tests/test_m4_e2e_hygiene.py
+  reason: M* not in gate *
+- file: tests/test_m4_e2e_ops.py
+  reason: M* not in gate *
+- file: tests/test_m4_fake_cli.py
+  reason: M* not in gate *
+- file: tests/test_m4_profile_switch.py
+  reason: M* not in gate *
+- file: tests/test_m4_tmux_cleanup.py
+  reason: M* not in gate *
+- file: tests/test_m4_tmux_cleanup.py
+  reason: tmux unavailable
+- file: tests/test_message_bus_v2.py
+  reason: redis-server unavailable
+- file: tests/test_night_switch.py
+  reason: feature C (model cards) is not merged
+- file: tests/test_night_switch.py
+  reason: 'feature C is merged: the cap is enforced (see the tests below)'
+- file: tests/test_npm_packaging.py
+  reason: node is not installed
+- file: tests/test_opencode_daemon.py
+  reason: node is not installed
+- file: tests/test_opencode_free.py
+  reason: Node >=22.19 required
+- file: tests/test_opencode_free.py
+  reason: Node required
+- file: tests/test_opencode_free.py
+  reason: installed Pi required; set PI_TEST_PACKAGE_DIR
+- file: tests/test_opencode_free_backend.mjs
+  reason: OpenCode bridge needs macOS sandbox-exec
+- file: tests/test_opencode_free_backend.mjs
+  reason: macOS has sandbox-exec
+- file: tests/test_orphan_redis.py
+  reason: redis-server unavailable
+- file: tests/test_pi.py
+  reason: Node >= 22.19 is needed for the Pi extension contract test
+- file: tests/test_pi_decision_schema.py
+  reason: installed Pi/Node dependencies needed for actual TS contract harness
+- file: tests/test_pi_v2_contract.py
+  reason: Node >=22.19 required
+- file: tests/test_pi_v2_contract.py
+  reason: installed Pi/Node dependencies needed for actual TS contract harness
+- file: tests/test_relay_budget_pause.py
+  reason: 'deferred: the task time budget pause while the machine sleeps waits for the awake-clock work'
+- file: tests/test_resume.py
+  reason: redis-server unavailable
+- file: tests/test_rollout_e2e.py
+  reason: set * to an exported rollout checkout (git archive)
+- file: tests/test_script_stdlib_shadow.py
+  reason: no Python 3.12 here
+- file: tests/test_service_answer.py
+  reason: installed Pi/Node dependencies needed for actual TS contract harness
+- file: tests/test_session_board_ext.py
+  reason: Node required
+- file: tests/test_skip_policy.py
+  reason: the baseline revision is not in the git history of this tree (an installed release copy)
+- file: tests/test_subfleet.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_subfleet.py
+  reason: redis-server unavailable
+- file: tests/test_subfleet_fleetmux.py
+  reason: M* not in gate *
+- file: tests/test_subfleet_named_tmux.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_subfleet_tmux.py
+  reason: "docs/design.md \xA748: fleet never types into a Claude input box (2026-11-09)"
+- file: tests/test_tabs_cli.py
+  reason: the request log is a fake-server knob
+- file: tests/test_terminal_theme.py
+  reason: 'a Linux pty does not wait for unread output on TCSAFLUSH (kernel 7.0 returns at once): the blocking this pins is macOS behaviour'
+- file: tests/test_tmux_attach_quoting.py
+  reason: zsh needed
+- file: tests/test_tmux_view.py
+  reason: tmux unavailable
+- file: tests/test_wezterm_mux.py
+  reason: 'real WezTerm mux server integration: needs wezterm and wezterm-mux-server on PATH'

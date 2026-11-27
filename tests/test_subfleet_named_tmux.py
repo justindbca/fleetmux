@@ -82,7 +82,11 @@ def service_tree(tmp_path, monkeypatch, declared_at_start=True, autostart=False)
     gen = start_tree(tmp_path, monkeypatch, **over)
     t = next(gen)
     t.gen = gen
-    t.f.roster_tick()  # first daemon tick: the roster declares the named sub-fleet
+    try:
+        t.f.roster_tick()  # first daemon tick: the roster declares the named sub-fleet
+    except BaseException:
+        gen.close()  # no caller holds t yet: stop the tree's Redis here
+        raise
     return t
 
 

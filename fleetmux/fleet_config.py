@@ -30,10 +30,10 @@ USER_FILE = None  # None: paths.default_home() / 'fleet.yaml' (never follows FLE
 BLOCKS = ('cli_pairs', 'lifecycle_modes', 'walls', 'watchdog_prompts', 'capability_matrix', 'models',
           'profiles', 'accounts', 'tools', 'pi_context', 'daemon_watch', 'fresh_dispatch', 'handoff', 'dsh',
           'discovery', 'remote', 'session_env', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose',
-          'ui')
+          'ui', 'release_drift', 'deliver')
 USER_BLOCKS = ('accounts', 'tools', 'walls', 'lifecycle_modes', 'pi_context', 'daemon_watch', 'fresh_dispatch',
                'discovery', 'remote', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose', 'ui',
-               'handoff')
+               'handoff', 'release_drift', 'deliver')
 
 NONE = 'none'  # recorded when there is no private file
 
@@ -395,6 +395,31 @@ def relay(*, hot=None):
     the running relay passes its Redis store). A bad block raises ValueError (relay ConfigError)."""
     from fleetmux.relay import params
     return params.load(hot=hot)
+
+
+DELIVER = {'via': 'rollout', 'registries': ['~/.fleetmux/rollout-targets.yaml', '~/rollout-site/registry.yaml'],
+           'submit_timeout_s': 600}
+DELIVER_VIAS = ('rollout', 'queue')
+
+
+def deliver():
+    """deliver (docs/design.md section 70): the default dev_task delivery and where the local rollout registry is.
+    Keys missing from the block take DELIVER; ``registries`` come back with ``~`` expanded. A bad value is refused
+    (ValueError)."""
+    raw = block('deliver') or {}
+    if not isinstance(raw, dict) or set(raw) - set(DELIVER):
+        raise ValueError('fleet.yaml#deliver must be a mapping with only: ' + ', '.join(DELIVER))
+    out = dict(DELIVER, **raw)
+    if out['via'] not in DELIVER_VIAS:
+        raise ValueError('fleet.yaml#deliver.via must be one of ' + ', '.join(DELIVER_VIAS) + ', got ' + repr(out['via']))
+    regs = out['registries']
+    if not isinstance(regs, list) or not all(isinstance(p, str) and p.strip() for p in regs):
+        raise ValueError('fleet.yaml#deliver.registries must be a list of paths, got ' + repr(regs))
+    timeout = out['submit_timeout_s']
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('fleet.yaml#deliver.submit_timeout_s must be seconds > 0, got ' + repr(timeout))
+    out['registries'] = [os.path.expanduser(p.strip()) for p in regs]
+    return out
 
 
 def dsh_default_model():

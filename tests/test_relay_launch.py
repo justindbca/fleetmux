@@ -215,3 +215,40 @@ def test_goal_tells_every_slot_where_to_keep_progress(tmp_path):
     note.parent.mkdir(parents=True)
     note.write_text('## Done\n')
     assert progress.find(wt, '.relay/demo/M3') == '.relay/demo/M3/notes/dev-1/PROGRESS.md'
+
+
+def test_render_pins_the_queue_delivery_whatever_the_default(tmp_path, monkeypatch):
+    """The relay judges 'delivered' from the queue file, so its spec says via: queue; with the fleet default at
+    rollout, the gate on that spec still moves the deploy branch and appends one queue row, and never submits."""
+    import sys
+    import yaml
+    from fleetmux import fleet_config
+    user = tmp_path / 'private-fleet.yaml'
+    user.write_text(yaml.safe_dump({'deliver': {'via': 'rollout'}}))
+    monkeypatch.setenv(fleet_config.USER_ENV, str(user))
+    monkeypatch.setenv('ROLLOUT_TARGETS', str(tmp_path / 'no-registry.yaml'))
+    (tmp_path / 'job').mkdir()
+    out = _render(tmp_path / 'job')
+    assert out['deliver']['via'] == 'queue'
+    assert lifecycle_deliver.validate_deliver(out['deliver'])['via'] == 'queue'
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    git('init', '-q', '-b', 'main')
+    git('config', 'user.email', 't@example.org'); git('config', 'user.name', 't')
+    (repo / 'a').write_text('a\n'); git('add', '.'); git('commit', '-qm', 'base')
+    git('branch', out['deliver']['deploy_branch'])
+    git('checkout', '-qb', out['deliver']['feature_branch'])
+    (repo / 'a').write_text('b\n'); git('commit', '-qam', 'work')
+    spec = dict(out['deliver'], repo=str(repo), test_cmd=[sys.executable, '-c', 'pass'])
+    rec = lifecycle_deliver.deliver(lifecycle_deliver.validate_deliver(spec), tmp_path / 'ws', task_id='M3',
+                                    run=str(tmp_path / 'run'))
+    assert rec['ok'], rec.get('problem')
+    sha = git('rev-parse', 'HEAD')
+    assert git('rev-parse', out['deliver']['deploy_branch']) == sha
+    rows = [json.loads(x) for x in open(out['deliver']['queue'], encoding='utf-8').read().splitlines()]
+    assert [r['sha'] for r in rows] == [sha] and rec['queue_entry']['sha'] == sha
+    assert 'rollout' not in rec

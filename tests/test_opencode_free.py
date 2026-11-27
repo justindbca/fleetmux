@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+import skip_policy
+
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / 'launchers/start-pi-deepseek-free.command'
 
@@ -34,12 +36,14 @@ def node_binary():
     return node
 
 
-def test_streaming_backend_contracts():
+def test_streaming_backend_contracts(request):
     # The proxy sub-tests set their own proxy; a proxy in the caller's environment must not leak in.
     env = {k: v for k, v in os.environ.items() if k.lower() not in ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy')}
-    result = subprocess.run([node_binary(), '--test', str(ROOT / 'tests/test_opencode_free_backend.mjs')],
+    result = subprocess.run([node_binary(), '--test', '--test-reporter=tap', str(ROOT / 'tests/test_opencode_free_backend.mjs')],
                             capture_output=True, text=True, timeout=60, env=env)
     assert result.returncode == 0, result.stdout + result.stderr
+    # A Node test the runner skipped counts like a pytest skip (tests/skip_policy.py): only allowlisted reasons pass.
+    assert skip_policy.node_skips(request, 'tests/test_opencode_free_backend.mjs', result.stdout) == [], result.stdout
 
 
 def test_actual_pi_free_provider(tmp_path):

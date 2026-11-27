@@ -101,14 +101,15 @@ def compute(cfg, ident, r):
 
 def confirmed(rec, spec):
     """A passing record stays passing only if its sha is the feature branch tip and done_when holds now (git +
-    the queue); else a failed copy. The test run is the CLI's: the daemon does not repeat them."""
+    the queue; via rollout, the record's request id for that sha); else a failed copy. The test run is the CLI's:
+    the daemon does not repeat them."""
     if not rec.get('ok'):
         return rec
     sha = str(rec.get('sha') or '')
     try:
         tip = lifecycle_deliver._sha(spec['repo'], spec['feature_branch'])
         problem = (None if sha and sha == tip else 'gate record sha ' + (sha[:12] or 'missing') + ' is not the tip of '
-                   + spec['feature_branch']) or lifecycle_deliver.done_when_problem(spec, sha)
+                   + spec['feature_branch']) or lifecycle_deliver.done_when_problem(spec, sha, rec)
     except (KeyError, RuntimeError, OSError) as exc:
         problem = 'done_when could not be read: ' + str(exc)
     return dict(rec, ok=False, problem=problem) if problem else rec

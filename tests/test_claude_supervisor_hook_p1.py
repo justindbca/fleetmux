@@ -43,7 +43,7 @@ def channel(private_redis_v2, tmp_path):
 def stop_deadline(channel, monkeypatch, race=lambda r, k: None):
     f, k, thread, _ = channel
     clock = [0]
-    monkeypatch.setattr(fleet, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(claude_hook, 'clock', lambda: clock[0])  # the hook deadline clock (counts sleep)
     def expired(r, *args, **kwargs):
         race(r, k)
         clock[0] = 2
@@ -83,7 +83,7 @@ def test_slash_without_stop_has_bounded_explicit_hold(channel, live_parent, monk
     f, k, thread, transcript = channel
     transcript.write_text(json.dumps(dict(type='queue-operation', operation='enqueue', content='/status')) + '\n')
     # Exercise the actual Stop wait yielding to the queue, even if the CLI never calls UserPromptSubmit.
-    assert fleet.claude_hook_next(f.cfg, 'supervisor', 0, thread, time.monotonic() + 1,
+    assert fleet.claude_hook_next(f.cfg, 'supervisor', 0, thread, claude_hook.clock() + 1,
                                   transcript=str(transcript)) is None
     with transcript.open('a') as out:
         out.write(json.dumps(dict(type='queue-operation', operation='dequeue')) + '\n')
@@ -124,7 +124,7 @@ def test_worker_stop_rearm_uses_worker_identity_not_supervisor(channel, live_par
     f.v2.bus.register_slot('worker-1', 3, 'worker-session')
     k = f.v2.hook_keys('worker-1', 3)
     clock = [0]
-    monkeypatch.setattr(fleet, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(claude_hook, 'clock', lambda: clock[0])  # the hook deadline clock (counts sleep)
     def expired(*a, **kw):
         clock[0] = 2
         return None, None
@@ -174,6 +174,7 @@ def test_unknown_yield_blocks_rewake_after_human_ttl_and_real_stop_resolves_it(c
     def advance(seconds):
         clock[0] += seconds
     monkeypatch.setattr(fleet, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time, sleep=advance))
+    monkeypatch.setattr(claude_hook, 'clock', lambda: clock[0])
     assert fleet.claude_rewake(f.path, 'supervisor', 0, json.dumps(dict(
         session_id=thread, transcript_path=str(transcript)))) is None
     assert f.r.llen(k['mailbox']) == 1 and not f.r.exists(k['bind'])

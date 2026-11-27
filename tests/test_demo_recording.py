@@ -1,7 +1,9 @@
 """The README recording pipeline: scripts/rec_to_cast.py (fleetmux --record -> asciicast v2) and the committed
 recording itself (redacted, shows the scripted banner and both verdicts)."""
 import json
+import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -38,8 +40,12 @@ def test_malformed_recording_writes_nothing(tmp_path):
     assert not out.exists()
 
 
-def test_record_script_parses():
-    assert subprocess.run(['bash', '-n', str(ROOT / 'scripts' / 'record_demo.sh')]).returncode == 0
+def test_record_script_parses(tmp_path):
+    # built, not inherited: no BASH_ENV or other startup entry point of the host reaches bash
+    bash = shutil.which('bash') or '/bin/bash'
+    env = {'PATH': os.pathsep.join(dict.fromkeys([os.path.dirname(bash), '/usr/bin', '/bin'])),
+           'HOME': str(tmp_path), 'LANG': 'en_US.UTF-8'}
+    assert subprocess.run([bash, '-n', str(ROOT / 'scripts' / 'record_demo.sh')], env=env).returncode == 0
 
 
 def test_committed_recording_is_redacted_and_tells_the_story():

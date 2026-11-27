@@ -256,24 +256,30 @@ ESC_SEQ = re.compile(rb'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\
                      rb'|\x1b[ -/]*[0-OQ-WYZ\\`a-~]')
 UNFINISHED = re.compile(rb'\x1b(?:\[[0-?]*[ -/]*|\][^\x07]*|[PX^_][\s\S]*|[ -/]*)\Z')
 MODE_SEQ = re.compile(rb'\x1b\[\?([0-9;]+)([hl])')
+CUP_SEQ = re.compile(rb'\x1b\[(\d*)(?:;(\d*))?[Hf]')
+EL_SEQ = re.compile(rb'\x1b\[([012]?)K')
+# Cursor addressing / erase-line (section 67 tests read panes as rows); FAKE_FLEETMUX_CURSOR=0 turns it off.
+CURSOR = os.environ.get('FAKE_FLEETMUX_CURSOR', '1') != '0'
 
 
 class Screen:
-    """Physical rows of a pane's output: escapes dropped, ``\\r`` / ``\\b`` / tab / auto-wrap honoured."""
+    """Physical rows of a pane's output: escapes dropped, ``\\r`` / ``\\b`` / tab / auto-wrap honoured. With CURSOR
+    (the default) cursor addressing (CSI row;col H / f) and erase-line (CSI K) are honoured too, so a program that
+    draws its screen row by row (the demo actor) reads back as those rows, the way a real terminal shows them."""
 
     def __init__(self, limit, cols, rows):
         self.limit, self.cols, self.rows = limit, cols, rows
-        self.lines, self.col, self.pending = [[]], 0, b''
+        self.lines, self.col, self.row, self.pending = [[]], 0, 0, b''
         self.utf8 = codecs.getincrementaldecoder('utf-8')('replace')
         self.modes = {'bracketed_paste': False, 'app_cursor': False}
 
     def feed(self, data):
         """Returns the bytes the terminal answers (CSI 6n), the way a real parser's replies come back."""
         data, self.pending = self.pending + data, b''
-        text, reply, i = [], b'', 0
+        reply, i = b'', 0
         while True:
             j = data.find(b'\x1b', i)
-            text.append(data[i:] if j < 0 else data[i:j])
+            self.put(data[i:] if j < 0 else data[i:j])
             if j < 0:
                 break
             m = ESC_SEQ.match(data, j)
@@ -283,17 +289,38 @@ class Screen:
                 for n in mode[1].split(b';') if mode else ():
                     if n in (b'2004', b'1'):
                         self.modes['bracketed_paste' if n == b'2004' else 'app_cursor'] = mode[2] == b'h'
+                cup = CURSOR and CUP_SEQ.fullmatch(seq)
+                el = CURSOR and EL_SEQ.fullmatch(seq)
                 if seq == b'\x1b[6n':
-                    reply += b'\x1b[%d;%dR' % (min(len(self.lines), self.rows), min(self.col, self.cols - 1) + 1)
+                    top = max(0, len(self.lines) - self.rows)
+                    reply += b'\x1b[%d;%dR' % (min(self.row - top + 1, self.rows), min(self.col, self.cols - 1) + 1)
+                elif cup:
+                    self.move(int(cup[1] or 1), int(cup[2] or 1))
+                elif el:
+                    self.erase(int(el[1] or 0))
             elif len(data) - j < 4096 and UNFINISHED.match(data, j):
                 self.pending = data[j:]                        # an escape split across reads
                 break
             else:
                 i = j + 1                                      # stray ESC: drop it
-        for ch in self.utf8.decode(b''.join(text)):
+        cut = max(0, len(self.lines) - (self.limit + self.rows))
+        if cut:
+            del self.lines[:cut]
+            self.row = max(0, self.row - cut)
+        return reply
+
+    def newline(self):
+        if self.row < len(self.lines) - 1:
+            self.row += 1
+        else:
+            self.lines.append([])
+            self.row = len(self.lines) - 1
+        self.col = 0
+
+    def put(self, raw):
+        for ch in self.utf8.decode(raw):
             if ch == '\n':
-                self.lines.append([])
-                self.col = 0
+                self.newline()
             elif ch == '\r':
                 self.col = 0
             elif ch == '\b':
@@ -302,17 +329,32 @@ class Screen:
                 self.col = min(self.cols - 1, (self.col // 8 + 1) * 8)
             elif ch >= ' ' and ch != '\x7f':
                 if self.col >= self.cols:                      # soft wrap: one more physical row
-                    self.lines.append([])
-                    self.col = 0
-                line = self.lines[-1]
+                    self.newline()
+                line = self.lines[self.row]
                 line.extend(' ' * (self.col - len(line)))
                 if self.col < len(line):
                     line[self.col] = ch
                 else:
                     line.append(ch)
                 self.col += 1
-        del self.lines[:-(self.limit + self.rows)]
-        return reply
+
+    def move(self, row, col):
+        """CSI row;col H: rows count from the top of the visible screen (the last ``rows`` physical rows)."""
+        top = max(0, len(self.lines) - self.rows)
+        target = top + max(1, min(row, self.rows)) - 1
+        while len(self.lines) <= target:
+            self.lines.append([])
+        self.row, self.col = target, max(0, min(col, self.cols) - 1)
+
+    def erase(self, how):
+        """CSI K: 0 from the cursor to the end of the row, 1 from its start to the cursor, 2 the whole row."""
+        line = self.lines[self.row]
+        if how == 0:
+            del line[self.col:]
+        elif how == 1:
+            line[:self.col + 1] = [' '] * min(len(line), self.col + 1)
+        else:
+            line.clear()
 
     def scrollback(self):
         return max(0, len(self.lines) - self.rows)
@@ -1071,16 +1113,28 @@ class Server:
             self.save()
 
     def finish(self, live=False):
-        """Clean exit: 0x82 to the viewers, drop ctl.sock / server.json (/ panes.json unless panes may live)."""
-        for conn in list(self.views):
+        """Clean exit: 0x82 to the viewers, drop ctl.sock / server.json (/ panes.json unless panes may live).
+
+        The exit call is reached whatever fails before it: with the runtime directory already gone (a test's
+        teardown removed it) the log write raised, handle() swallowed the OSError and the process slept forever
+        with its listener closed."""
+        try:
+            for conn in list(self.views):
+                try:
+                    self.send(conn, frame(0x82, b'server shutting down'))
+                except OSError:
+                    pass
+            for name in ('ctl.sock', 'server.json') + (() if live else ('panes.json',)):
+                try:
+                    unlink(self.runtime / name)
+                except OSError:
+                    pass
             try:
-                self.send(conn, frame(0x82, b'server shutting down'))
+                self.log('INFO', 'server exits')
             except OSError:
                 pass
-        for name in ('ctl.sock', 'server.json') + (() if live else ('panes.json',)):
-            unlink(self.runtime / name)
-        self.log('INFO', 'server exits')
-        os._exit(0)
+        finally:
+            os._exit(0)
 
 
 def prefix_byte(name):

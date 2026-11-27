@@ -21,7 +21,7 @@ def wz():
     try:
         return backends.backend_class('wezterm')
     except Exception as exc:  # pragma: no cover - the module ships on this branch
-        pytest.skip('wezterm backend unavailable: %s' % exc)
+        pytest.fail('wezterm backend does not load (a code error, not a missing program): %s' % exc)
 
 
 def test_wezterm_does_not_carry_the_two_cmux_only_methods(wz):

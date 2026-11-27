@@ -310,8 +310,11 @@ class Actor:
         if self.opts.get('--settings'):
             self.settings = json.loads(Path(self.opts['--settings']).read_text(encoding='utf-8'))
         self.name = re.sub(r'\s+', '-', self.opts.get('--name') or self.role)[:40]
-        self.state = 'idle'  # idle / working / hooks
+        self.state = 'idle'  # idle / working / hooks / prompting
         self.blocking, self.rewakes, self.pending = [], [], []
+        # UserPromptSubmit gates in flight: [(procs, kind, text, content, was_state)]; blocked_note: the footer line
+        # the real CLI shows after a hook blocked a prompt (claude_input.visible_editor accepts it)
+        self.gates, self.blocked_note = [], ''
         self.blocks, self.turn, self.reply_at = 0, None, 0.0
         self.draft, self.collapsed, self.pastes = '', '', 0
         self.feed = []  # the conversation shown on screen: (kind, text)
@@ -467,10 +470,68 @@ class Actor:
             if proc.returncode == 2 and text:
                 content = ('<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n'
                            '<system-reminder>\n' + message + ' ' + text + '\n</system-reminder>')
-                self.later('rewake', text, content)
+                self.submit('rewake', text, content)
+        if self.gates:
+            self.gates_tick(now)
         if self.state == 'idle' and self.pending:
             kind, text, content = self.pending.pop(0)
             self.start(kind, text, content)
+
+    def submit(self, kind, text, content=None):
+        """A prompt about to become a turn (a typed line, an asyncRewake notification): the settings'
+        UserPromptSubmit hooks run first, as in Claude Code (measured on 2.1.307, fleet.supervisor_rewake_prompt); a
+        block decision or exit 2 keeps it from running and from the queue. No such hooks: straight to ``later``."""
+        hooks = [h for entry in (self.settings.get('hooks') or {}).get('UserPromptSubmit') or []
+                 for h in entry.get('hooks') or [] if h.get('type') == 'command']
+        if not hooks:
+            self.later(kind, text, content)
+            return
+        payload = {'session_id': self.session, 'transcript_path': str(self.transcript), 'cwd': self.cwd,
+                   'permission_mode': 'bypassPermissions', 'hook_event_name': 'UserPromptSubmit',
+                   'prompt': content if kind == 'rewake' else text}
+        procs = []
+        for hook in hooks:
+            proc = self.hook(hook['command'], payload, stdout=subprocess.PIPE)
+            if proc:
+                procs.append((proc, time.monotonic(), float(hook.get('timeout') or 600)))
+        self.log('prompt_hook.start', kind=kind, hooks=len(procs))
+        self.gates.append((procs, kind, text, content, self.state))
+        if self.state == 'idle':
+            self.state = 'prompting'  # busy on screen while the hook runs (esc to interrupt)
+        self.poke()
+
+    def gates_tick(self, now):
+        for gate in list(self.gates):
+            procs, kind, text, content, was = gate
+            for proc, started, timeout in procs:
+                if proc.poll() is None and now - started > timeout:
+                    proc.terminate()
+            if any(proc.poll() is None for proc, _, _ in procs):
+                continue
+            self.gates.remove(gate)
+            reasons = []
+            for proc, _, _ in procs:
+                out = b''
+                try:
+                    out = (proc.stdout.read() or b'') if proc.stdout else b''
+                except OSError:
+                    pass
+                try:
+                    decision = json.loads(out.decode('utf-8', 'replace') or '{}')
+                except ValueError:
+                    decision = {}
+                decision = decision if isinstance(decision, dict) else {}
+                if proc.returncode == 2 or decision.get('decision') == 'block':
+                    reasons.append(str(decision.get('reason') or 'blocked'))
+            if self.state == 'prompting' and not self.gates:
+                self.state = 'idle'
+            if reasons:
+                self.blocked_note = 'UserPromptSubmit operation blocked by hook: ' + plain('; '.join(reasons))
+                self.log('prompt_hook.blocked', kind=kind, reason='; '.join(reasons)[:500])
+            else:
+                self.log('prompt_hook.passed', kind=kind)
+                self.later(kind, text, content)
+            self.poke()
 
     def later(self, kind, text, content=None):
         if self.state == 'idle' and not self.pending:
@@ -521,9 +582,17 @@ class Actor:
             self.escape()
         elif value == 'Enter' and self.draft:
             text, self.draft, self.collapsed = self.draft, '', ''
-            self.later('typed', text)
+            self.blocked_note = ''
+            self.submit('typed', text)
 
     def escape(self):
+        if self.state == 'prompting':  # the prompt hooks are cut off: the prompt does not run
+            for procs, _, _, _, _ in self.gates:
+                for proc, _, _ in procs:
+                    if proc.poll() is None:
+                        proc.terminate()
+            self.gates, self.state = [], 'idle'
+            return
         if self.state in ('working', 'hooks'):
             for proc, _, _ in self.blocking:
                 if proc.poll() is None:
@@ -561,14 +630,19 @@ class Actor:
                  for i, line in enumerate(self.draft.split('\n'))])[:max(1, rows - 8)]
         footer = '  ? for shortcuts' if self.state == 'idle' else '  esc to interrupt'
         status = {'idle': '', 'working': '✻ Working… (esc to interrupt)',
-                  'hooks': '✻ running stop hooks… (esc to interrupt)'}[self.state]
+                  'hooks': '✻ running stop hooks… (esc to interrupt)',
+                  'prompting': '✻ running prompt hooks… (esc to interrupt)'}[self.state]
         name = clip(self.name, max(1, cols - 14))
         top = '─' * 10 + ' ' + name + ' ' + '─' * max(1, cols - 12 - width_of(name))
-        block = [status, top] + body + ['─' * cols, footer]
+        notes = ['  ' + clip(self.blocked_note, max(1, cols - 3))] if self.blocked_note else []
+        block = [status, top] + body + ['─' * cols] + notes + [footer]
         head = ['\x1b[1;7m ' + clip(BANNER, max(1, cols - 2)) + ' \x1b[0m',
                 '[scripted] ' + self.role + ' (demo actor, no model)', '']
         room = max(0, rows - len(head) - len(block))
-        lines = head + self.feed_lines(cols)[-room:] if room else head[:rows]
+        # the newest output sits right above the input box, as a CLI draws it (a wall row stays in the bottom rows
+        # the brake's screen gate reads, section 67)
+        feed = self.feed_lines(cols)[-room:] if room else []
+        lines = head + [''] * (room - len(feed)) + feed if room else head[:rows]
         lines = (lines + [''] * rows)[:max(0, rows - len(block))] + block
         cursor_row = len(lines) - len(block) + 2 + len(body) - 1
         term.draw(lines, (cursor_row + 1, min(cols, width_of(body[-1]) + 1)))

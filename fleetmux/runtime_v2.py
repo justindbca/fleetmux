@@ -117,6 +117,27 @@ def validate_config(cfg):
     return version
 
 
+def transcript_turn_done(path):
+    """True when a Claude transcript ends at a finished turn: its last conversation row is an assistant reply
+    with no tool call pending, or the Escape row that ends a turn. A user row (prompt, tool result, a Stop-hook
+    block) last means a turn is running; no readable transcript means unknown (False)."""
+    if not path:
+        return False
+    rows = claude_hook.tail_rows(path)
+    if not rows:
+        return False
+    for row in reversed(rows):
+        if row.get('isSidechain') or row.get('type') not in ('user', 'assistant'):
+            continue
+        content = (row.get('message') or {}).get('content')
+        parts = content if isinstance(content, list) else [{'type': 'text', 'text': content or ''}]
+        if row['type'] == 'assistant':
+            return not any(isinstance(p, dict) and p.get('type') == 'tool_use' for p in parts)
+        text = ' '.join(str(p.get('text') or '') for p in parts if isinstance(p, dict))
+        return text.lstrip().startswith(claude_hook.INTERRUPTED)
+    return False
+
+
 def tui_slot(cfg, slot):
     """Official interactive CLIs (Codex/Claude) have no in-process bridge: the daemon
     receives their delivery and hands the business text to the TUI (typed for Codex and a
@@ -217,6 +238,11 @@ STOP_FAILURE_RESUME = ('[Retried after an API error] Your previous turn on this 
 STOP_FAILURE_RESUME_SUPERVISOR = ('[Retried after an API error] Your previous turn on this message ended with an API '
                                   'error before your decision was read; nothing from it was applied. Check the run '
                                   'state, then answer this message again with the JSON format from AGENTS.md.\n\n')
+# Unattended mailbox (no Stop hook and no rewake fallback left: Claude Code killed both at their timeout, Escape, a
+# crash): the daemon resumes the idle session as the next generation and queues the untaken message again in front.
+UNARMED_WAIT = 2 * claude_hook.GRACE  # seconds with no hook while a delivery waits; a live rewake acts after GRACE
+UNARMED_RESUME = ('[Delivered again] No Stop hook was waiting when this message first came, so it never reached '
+                  'you; the daemon resumed your session to hand it over. Nothing of it ran yet.\n\n')
 # Held watchdog backstop (§24): fleet.yaml#daemon_watch keys and their fallbacks when the file lacks them.
 HELD_WATCH = {'held_after_s': 300, 'held_realert_s': 1800,
               'subfleet_stuck_after_s': 600, 'subfleet_check_s': 60}  # R3b: the parent watches its sub-fleets
@@ -660,6 +686,8 @@ class RuntimeV2:
         self.queue_index = 0
         self.rotation_pending = set()
         self.startup_nudges = set()  # slots to re-ask for READY once, typed after the transaction
+        self.handoff_again = set()  # resumed after an unattended handoff: offer the handoff again after the transaction
+        self.unarmed_seen = {}  # slot -> ((generation, thread, delivery), first seen on the monotonic clock)
         self.pending_cursor = '0-0'
         self.stopfail_notices = []  # used-up API-error retries: tg / parent notices, sent outside any intent (tick)
         self.held_notices = []  # (slot, text, detail): escalations decided inside an intent, sent by held_watch_tick
@@ -877,6 +905,9 @@ class RuntimeV2:
             for slot in list(self.rotation_pending):
                 self.rotation_pending.remove(slot)
                 self.f.finish_rotation(slot)
+            for slot in list(self.handoff_again):  # the resumed session said READY: its handoff is offered again
+                self.handoff_again.remove(slot)
+                self.offer_handoff_again(slot)
             for slot in list(self.startup_nudges):  # pane typing / queueing is not a Redis effect either
                 self.startup_nudges.remove(slot)
                 pane = self.f.agent(slot).get('pane')
@@ -987,17 +1018,27 @@ class RuntimeV2:
                                       + startup_problem(ev) + '); not retried, model unchanged')
                     elif self.f.startup_unusable(slot, '\n'.join(str(ev.get(k) or '') for k in ('text', 'error'))):
                         self.audit('startup.unusable', slot=slot, level='warn', error=str(ev.get('error'))[:300])
-                    elif startup_offline(ev) and (retry := self.f.schedule_startup_retry(slot, info)):
+                    elif (startup_offline(ev) and not self.f.subfleet_supervisor(slot)
+                          and (retry := self.f.schedule_startup_retry(slot, info))):
                         self.audit('startup.offline', slot=slot, level='warn', error=str(ev.get('error'))[:300],
                                    detail={'attempt': retry[0], 'retry_in_s': retry[1]})
                     else:
-                        self.f.finish('blocked', slot + ': startup failed before READY')
+                        if self.f.subfleet_supervisor(slot):  # §67: the parent is told; it reopens the supervisor
+                            self.held_notices.append((slot, 'its start failed before READY (' + startup_problem(ev)
+                                                      + ')', {'state': 'dead', 'reason': 'startup'}))
+                        # §67: the pause this failure sets names its owner (kind startup, the slot)
+                        if self.f.cfg.get('parent_config'):
+                            self.f.clear_grants()  # as Fleet.finish does for a sub-fleet run (§46)
+                        self.finish('blocked', slot + ': startup failed before READY', kind='startup', slot=slot)
                     self.reply(ev, {'status': 'rejected', 'reason': 'startup did not settle with READY'})
                 else:
                     self.f.pi_metadata(slot, ev)
                     self.f.setf(slot, state='idle', runtime_ready=1, idle_confirmed=1, bridge_available=0,
                                 current_profile=info.get('runtime_profile', ''), startup_retries=0)
                     self.reply(ev, {'status': 'ready'})
+                    if info.get('handoff_again') and info.get('handoff_again') == info.get('generation'):
+                        self.f.setf(slot, handoff_again='')
+                        self.handoff_again.add(slot)
                     if late:
                         self.startup_late_lift(slot, late)
                     if slot == 'supervisor':  # section 60: reconcile this generation, hand it the open items
@@ -1096,9 +1137,10 @@ class RuntimeV2:
             self.reply(ev, {'status': 'rejected', 'reason': 'browser broker v2 transaction support is not implemented'})
             return
         if kind == 'stop':
-            if ev.get('suspend') and self.f.cfg.get('parent_config') and self.f.cfg.get('job') and not self.f.service:
+            if ev.get('suspend') and self.f.cfg.get('parent_config'):
                 # section 58 "Restart": the root stops, this job sub-fleet is suspended: its task stays running (no finish)
-                # and the root hands it to a fresh slot when it runs again
+                # and the root hands it to a fresh slot when it runs again. §67: also any sub-fleet whose supervisor
+                # the parent reopens (its Redis, run directory and task / requests stay for the readopt)
                 self.f.explicit_stop = self.f.stopping = self.f.suspending = True
                 self.audit('job.suspending', level='warn', request_id=self.f.task().get('id', ''))
                 self.reply(ev, {'status': 'accepted', 'execution_stopped': False, 'suspend': True})
@@ -1122,7 +1164,7 @@ class RuntimeV2:
             self.reply(ev, {'status': 'rejected', 'reason': 'foreign run'})
             return
         if kind not in ('operator_input', 'request', 'task', 'recheck', 'job_cancel', 'reconcile', 'pause', 'resume',
-                        'escalation_answer', 'legacy_invalid'):
+                        'escalation_answer', 'legacy_invalid', 'heal'):
             self.reply(ev, {'status': 'rejected', 'reason': 'unsupported v2 event'})
             return
         if kind == 'legacy_invalid':
@@ -2152,6 +2194,9 @@ class RuntimeV2:
                     stopfail_g=info.get('generation', '0'), stopfail_retry_at=0, stopfail_streak=streak,
                     **({'fresh_pending': 1, 'stopfail_fresh': 1} if refusal else {}))
         detail = {'streak': streak, 'max': cap, 'refusal': refusal, 'paused': False}
+        if slot == 'supervisor' and self.f.subfleet_supervisor(slot):  # §67: told at once, the parent may reopen it
+            self.held_notices.append((slot, ('model refusal' if refusal else 'API error') + ' (' + short + '); its '
+                                      'request failed', {'state': 'held', 'reason': 'stop_failure'}))
         if streak < cap:
             wait = STOP_FAILURE_BACKOFF[min(streak, len(STOP_FAILURE_BACKOFF)) - 1]
             self.f.setf(slot, stopfail_retry_at=awake.deadline(wait))
@@ -2938,7 +2983,7 @@ class RuntimeV2:
         if not task.get('id'):  # A42-LINUX-RESTORE-FAILURE-04: never a bare KeyError on a damaged record
             raise ValueError('cannot brief a resumed run: its task record has no id; refusing to brief a fake task')
         head = lambda text: ' '.join(text.split())[:200]
-        requeued = self.requeue_lost(lost)
+        requeued = self.requeue_lost(lost, count=False)  # the operator's resume lost them: no attempt spent
         if requeued is None:
             return
         done = ['- ' + self.f.label(slot) + ': ' + head(self.bus.message(mid).get('body', {}).get('text', ''))
@@ -2994,13 +3039,15 @@ class RuntimeV2:
         self.audit('resume.brief_spilled', level='warn', path=str(path), bytes=len(full.encode()))
         return brief
 
-    def requeue_lost(self, lost, when='start --resume'):
+    def requeue_lost(self, lost, when='start --resume', count=True):
         """Re-queue lost worker dispatches of the running task once more (``replay`` = attempt). Returns the
-        brief's lines, or None when one is over max-attempts: the task is blocked (§17)."""
+        brief's lines, or None when one is over max-attempts: the task is blocked (§17). ``count`` False: the
+        operator's resume lost them (``brief``), not the session -- ``replay`` is carried unchanged and never
+        judged against max-attempts (otherwise the second resume of one long instruction blocks the task)."""
         task = self.f.task()
         cap = int(self.f.cfg['max_attempts'])
         head = lambda text: ' '.join(text.split())[:200]
-        over = next((m for m in lost if int(m.get('replay') or 1) >= cap), None)
+        over = next((m for m in lost if int(m.get('replay') or 1) >= cap), None) if count else None
         if over:
             self.f.finish('blocked', when + ': the dispatch to ' + self.f.label(over['slot'])
                           + ' was lost again after ' + str(int(over.get('replay') or 1)) + ' attempt(s) '
@@ -3008,7 +3055,7 @@ class RuntimeV2:
             return None
         requeued = []
         for msg in lost:
-            attempt = int(msg.get('replay') or 1) + 1
+            attempt = int(msg.get('replay') or 1) + bool(count)
             mid = self.f.queue(msg['slot'], '[Supervisor instruction ' + task['id'] + '] ' + msg['body']['text'])
             retained = {k: msg[k] for k in ('midturn_splits', 'continues', 'midturn_instruction', 'original_kind') if k in msg}
             if msg.get('kind') == 'continuation':
@@ -3017,7 +3064,8 @@ class RuntimeV2:
                 retained['body'] = _json(dict(body, purpose='continuation'))
             self.effects.hset(self.bus.msg_key(mid), dict(retained, replay=attempt))
             requeued.append('- ' + self.f.label(msg['slot']) + ' (attempt ' + str(attempt) + ' of ' + str(cap)
-                            + '): ' + head(msg['body']['text']))
+                            + ('' if count else ', not counted: re-queued by the resume') + '): '
+                            + head(msg['body']['text']))
         return requeued
 
     def requeue_requests(self, ran=None, pinned=()):
@@ -3169,6 +3217,98 @@ class RuntimeV2:
             reason += ': ' + str(exc)[:500]
         self.transaction('tui-input-' + env['delivery_id'], lambda: self.hold(slot, reason, public_status='failed'))
         return False
+
+    def unarmed_idle(self, slot):
+        """(generation, thread, delivery) when ``slot`` is a hook-channel Claude session that is really idle while
+        its received delivery waits untaken in this generation's mailbox with no hook to take it, else None.
+
+        Really idle: READY, the delivery offered and received (busy / handoff), no confirmation dialog, background
+        task, API-error backoff or slash/queued-input wait; no Stop hook waiting, settling or yielded (``live``);
+        the last hand-over of this session ended (its Stop proof matches the bind, as for the keepalive claim); the
+        transcript ends at a finished turn; the pane is there. ``armed=false`` alone is normal right after a settle."""
+        info = self.f.agent(slot)
+        if (not self.hooked(slot) or info.get('state') not in ('busy', 'handoff') or info.get('runtime_ready') != '1'
+                or info.get('launch_ready') == '0' or info.get('prompt_wait') or info.get('bg_wait')
+                or (info.get('stopfail_g') and info.get('stopfail_g') == info.get('generation')) or not info.get('pane')):
+            return None
+        r, gen, thread = self.bus.r, int(info.get('generation') or 0), info.get('thread') or ''
+        lease = r.hgetall(self.bus.lease_key(slot))
+        delivery = lease.get('current_delivery') or ''
+        if (lease.get('status') != 'received' or not delivery or lease.get('generation') != str(gen)
+                or lease.get('session_id') != thread):
+            return None
+        k = self.hook_keys(slot, gen)
+        if claude_hook.live(r, k) or r.exists(k['yield_wait']):
+            return None
+        waiting = False
+        for raw in r.lrange(k['mailbox'], 0, -1):
+            try:
+                waiting = waiting or json.loads(raw).get('delivery_id') == delivery
+            except (ValueError, AttributeError):
+                continue
+        if not waiting:
+            return None
+        try:
+            bind = json.loads(r.get(k['bind']) or '{}')
+            stopped = json.loads(r.get(k['stopped']) or '{}')
+        except ValueError:
+            return None
+        if bind.get('delivery_id') == delivery:
+            return None  # handed over already: that turn runs
+        if (bind.get('kind') == 'delivery' and bind.get('session_id') == thread and bind.get('generation') == gen
+                and (stopped.get('delivery_id') != bind.get('delivery_id') or stopped.get('bind_at') != bind.get('at'))):
+            return None  # the last hand-over of this session has no Stop yet: a turn may still run
+        if not transcript_turn_done(info.get('transcript')) or self.f.mgr.get_pane_status(info['pane']) is None:
+            return None
+        return gen, thread, delivery
+
+    def hook_unarmed_tick(self):
+        """Brief 4.2: a delivery that waits for ``UNARMED_WAIT`` seconds on a really idle session with no hook left
+        wakes that session now (``hook_wake``), never after the stall path or handoff_timeout."""
+        if self.f.paused():  # nothing is restarted while the run is paused (watchdog.rotate holds instead)
+            self.unarmed_seen.clear()
+            return
+        now = time.monotonic()
+        for slot in ['supervisor'] + list(self.f.workers):
+            if slot not in self.f.names:
+                continue
+            try:
+                mark = self.unarmed_idle(slot)
+            except (redis.RedisError, OSError, ValueError, KeyError) as exc:
+                self.audit('hook.unarmed_check_failed', slot=slot, level='error', error=str(exc)[:300])
+                continue
+            seen = self.unarmed_seen.get(slot)
+            if mark is None:
+                self.unarmed_seen.pop(slot, None)
+            elif not seen or seen[0] != mark:
+                self.unarmed_seen[slot] = (mark, now)
+            elif now - seen[1] >= UNARMED_WAIT:
+                self.unarmed_seen.pop(slot, None)
+                self.hook_wake(slot, mark)
+
+    def hook_wake(self, slot, mark):
+        """Wake a really idle session that has no hook left, without typing (design 48): watchdog.rotate with
+        reason ``unarmed`` resumes the same Claude session as the next generation (claude --resume, CLI-argument
+        start prompt) and queues the untaken message again in front, with no attempt used; an untaken handoff is
+        offered again once the resumed session is READY. An adopted sub-fleet supervisor (its pane belongs to the
+        parent fleet) is held and reported at once instead (rotate's adopted branch)."""
+        info = self.f.agent(slot)
+        self.audit('hook.unarmed_wake', slot=slot, level='warn', generation=str(mark[0]), delivery_id=mark[2],
+                   message_id=info.get('msg_id', ''), detail={'handoff': bool(info.get('handoff_id')),
+                                                              'waited_s': UNARMED_WAIT})
+        screen = self.watchdog.capture(slot, info, info['pane']) or ''
+        self.watchdog.rotate(slot, 'no Stop hook was waiting while the session sat idle (hook timeout, Escape or '
+                             'a crash)', screen, reason='unarmed')
+
+    def offer_handoff_again(self, slot):
+        """The resumed session of an unattended handoff is READY: start the same handoff again, so the model writes
+        its note (start_rotation, the prompt the first one used)."""
+        info = self.f.agent(slot)
+        if info.get('state') != 'idle' or info.get('handoff_id'):
+            return
+        used, window = self.f.usage(slot)
+        self.audit('hook.handoff_again', slot=slot, level='warn', generation=info.get('generation', ''))
+        self.f.start_rotation(slot, used, window, prompt=info.get('handoff_prompt') or None)
 
     def supervisor_yield_timeout(self):
         """Unknown slash/queued-input completion cannot silently strand the hook mailbox."""
@@ -3782,7 +3922,8 @@ class RuntimeV2:
         (§27) or a worker."""
         knobs = knobs or self.held_knobs()
         return (slot == 'supervisor' and bool(knobs.get('supervisor_regen')) and not self.f.stopping
-                and not subfleet.adopted(self.f.cfg, slot, info.get('generation')))
+                and not subfleet.adopted(self.f.cfg, slot, info.get('generation'))
+                and not self.f.subfleet_supervisor(slot))  # §67: a sub-fleet's supervisor is reopened by its parent
 
     def api_error_of(self, slot, delivery_id):
         """The API / network error text a model-error candidate recorded for this delivery ('' when none)."""
@@ -4089,7 +4230,7 @@ class RuntimeV2:
         for slot in self.f.workers:
             info = self.f.agent(slot)
             if info.get('resume_failed') == '1' and info.get('state') == 'starting':
-                self.f.setf(slot, resume_failed=0)
+                self.f.setf(slot, resume_failed=0, handoff_again='')  # an unattended handoff: the skeleton note
                 try:
                     self.next_generation(slot, info, 'the resumed session did not say READY in time')
                 except RuntimeError as exc:
@@ -4159,6 +4300,9 @@ class RuntimeV2:
                     if slot == advisor.SLOT:  # §27: restarted in place by advisor_tick, never blocks the task
                         self.audit('advisor.startup_timeout', slot=slot, level='error')
                     else:
+                        if self.f.subfleet_supervisor(slot):  # §67: the parent is told; it reopens the supervisor
+                            self.held_notices.append((slot, 'its start timed out before READY',
+                                                      {'state': 'dead', 'reason': 'startup_timeout'}))
                         prior = self.f.r.hgetall(SERVICE)
                         self.finish('blocked', slot + ' startup timed out before READY', kind='startup', slot=slot)
                         # A late READY of this generation revives the slot; it lifts the pause only when this
@@ -4210,6 +4354,7 @@ class RuntimeV2:
         self.renew_tui()
         self.render_cards()
         self.watchdog.tick(now)  # screen / keys / kill / spawn: side effects, outside any Redis intent
+        self.hook_unarmed_tick()  # kill / spawn as well: outside any Redis intent
         for slot in self.f.names:
             info = self.f.agent(slot)
             if info.get('handoff_id') and info.get('state') in ('handoff', 'held') and now >= float(info.get('handoff_deadline') or 0):

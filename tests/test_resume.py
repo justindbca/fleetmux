@@ -19,6 +19,7 @@ import uuid
 import pytest
 
 import hook_sim
+from redis_kit import stop_test_redis
 from test_fleet import FakeMgr
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import event, fx, receive, result, session  # noqa: F401  (fx fixture)
@@ -52,20 +53,17 @@ def managed(tmp_path):
         pytest.skip('redis-server unavailable')
     root = Path('/tmp/cfr-' + uuid.uuid4().hex[:8])  # short: macOS Unix socket path limit
     rcfg = dict(redis_runtime.prepare(root, uuid.uuid4().hex[:8]), redis_server=binary, transport_version=2)
-    clients = [fleet.start_redis(rcfg)]
+    clients = []
     try:
+        clients.append(fleet.start_redis(rcfg))  # inside the try: a Redis that never answers is stopped too
         yield rcfg, clients
     finally:
         for c in clients:
-            c.close(); c.connection_pool.disconnect()
-        pid_file = Path(rcfg['redis_runtime_dir']) / 'redis.pid'
-        if pid_file.exists():
             try:
-                os.kill(int(pid_file.read_text()), signal.SIGTERM)
-            except (ProcessLookupError, ValueError):
+                c.close(); c.connection_pool.disconnect()
+            except Exception:
                 pass
-        time.sleep(.2)
-        shutil.rmtree(root, ignore_errors=True)
+        stop_test_redis(root)
 
 
 def kill_redis(rcfg):
@@ -190,7 +188,8 @@ def test_aof_restart_resumes_task_redoes_only_the_lost_dispatch_and_writes_resul
     assert brief.startswith('[Resumed task ')
     assert 'verified on disk: ["worker-1/a.md"]' in brief and 'worker-2/b.md (artifact not written' in brief
     assert 'Write worker-1/a.md' in brief and 'wrote worker-1/a.md' in brief  # completed + report excerpt
-    assert 'worker-2.1 (attempt 2 of 2): [M1] Write worker-2/b.md' in brief  # §44 auto id
+    assert ('worker-2.1 (attempt 1 of 2, not counted: re-queued by the resume): [M1] Write worker-2/b.md'
+            in brief)  # §44 auto id; the operator's resume spends no attempt (§17 Attempt limit)
     assert len(typed(f, 'worker-1')) == w1_typed  # verified work is not redone
     again, = typed(f, 'worker-2')  # the new generation's pane got the lost dispatch exactly once
     assert 'Write worker-2/b.md' in again and '[Supervisor instruction' not in again
@@ -232,23 +231,24 @@ def test_resume_reattaches_idle_hook_worker_and_replaces_in_flight_one(task_run)
     assert answer_turn(f, 'worker-2', REPORT.format('worker-2/b.md'))['status'] == 'committed'
 
 
-def test_attempt_cap_blocks_with_the_lost_dispatch_named(task_run):
+def test_a_second_resume_of_the_same_dispatch_spends_no_attempt(task_run):
+    """Was test_attempt_cap_blocks_with_the_lost_dispatch_named: two resumes used to block the task at max-attempts
+    2 (an upgrade resumes the tree each time). A resume spends no attempt now; a session's own losses still block at the cap
+    (tests/test_upgrade_replay_attempts.py::test_a_frozen_restart_still_counts_an_attempt)."""
     state = task_run
     half_done(state)
     state['mgr'].alive.discard(state['f'].agent('worker-2')['pane'])
     f = crash_and_resume(state)
     for slot in ('supervisor', 'worker-2'):
         answer_turn(f, slot, 'READY', startup=True)
-    f.pump()  # attempt 2 of worker-2's dispatch is in flight again
+    f.pump()  # worker-2's dispatch is in flight again
     assert f.v2.bus.slot_state('worker-2')['status'] == 'received'
     f = crash_and_resume(state)
     task = f.task()
-    assert task['status'] == 'blocked'
-    # The label carries the generation: each resume of an in-flight hook worker starts a new one.
-    assert re.search(r'worker-2\.\d+', task['reason']) and 'max-attempts 2' in task['reason'] \
-        and 'worker-2/b.md' in task['reason']
+    assert task['status'] == 'running', task.get('reason')
+    assert re.search(r'worker-2\.\d+ \(attempt 1 of 2, not counted', f.v2.pending_text('supervisor')[0])
     f.tick()
-    assert json.loads((f.run_dir / 'result.json').read_text())['status'] == 'blocked'
+    assert not (f.run_dir / 'result.json').exists()
 
 
 def test_max_attempts_override_on_resume_allows_another_replay(task_run):
@@ -261,7 +261,7 @@ def test_max_attempts_override_on_resume_allows_another_replay(task_run):
     f.pump()
     f = crash_and_resume(state, max_attempts=3)
     assert f.task()['status'] == 'running'
-    assert 'attempt 3 of 3' in f.v2.pending_text('supervisor')[0]
+    assert 'attempt 1 of 3, not counted' in f.v2.pending_text('supervisor')[0]  # the override is in effect
 
 
 def test_plain_restart_without_resume_still_holds_and_never_replays(task_run):

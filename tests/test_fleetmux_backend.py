@@ -15,6 +15,7 @@ Socket roots are short ``mkdtemp`` dirs under /tmp: macOS limits ``sockaddr_un``
 import base64
 import json
 import os
+import pwd
 import re
 import shlex
 import shutil
@@ -52,6 +53,11 @@ def _launcher(path: Path, argv) -> Path:
     return path
 
 
+# passed on from the test process: the suite's own per-test stand-ins (tests/conftest.py) and the bytecode switch
+IMPL_PASSED = ('PYTHONDONTWRITEBYTECODE', 'FLEETMUX_HOME', 'FLEETMUX_STATE', 'FLEETMUX_CONFIG',
+               'FLEETMUX_CONFIG_DIR', 'FLEETMUX_SUPERPOWERS', 'FLEETMUX_DISCOVERY', 'FLEETMUX_JOIN_ROOT')
+
+
 @pytest.fixture(params=['fake', 'real'])
 def impl(request, monkeypatch):
     root = Path(tempfile.mkdtemp(prefix='fm', dir='/tmp')).resolve()
@@ -65,11 +71,36 @@ def impl(request, monkeypatch):
     bindir = root / 'bin'
     bindir.mkdir()
     binary = _launcher(bindir / 'fleetmux', target)
-    monkeypatch.setenv(fm.BIN_ENV, str(binary))
-    monkeypatch.setenv('PATH', str(bindir) + os.pathsep + os.environ.get('PATH', ''))
+    # Nothing of the operator's account (home, Claude config, shell startup files): the
+    # environment of the server, its panes and this file's tmux calls is built here and not inherited. Login
+    # shells (`exec $SHELL -l`, `bash -lc`) read the root's own empty HOME, SHELL is /bin/sh, a tmux server
+    # started without -S would put its socket under the root, and no startup entry point (BASH_ENV, ENV,
+    # ZDOTDIR, XDG_CONFIG_HOME) or outer tmux (TMUX) is passed on. Checked by
+    # test_isolation_the_environment_is_built_not_inherited.
+    home = root / 'home'
+    home.mkdir()
+    tmux_tmp = root / 'tmux-default'
+    tmux_tmp.mkdir()
+    tools = [os.path.dirname(t) for t in (shutil.which('tmux'), shutil.which('bash'), sys.executable) if t]
+    built = {'PATH': os.pathsep.join(dict.fromkeys([str(bindir), *tools, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])),
+             'HOME': str(home), 'SHELL': '/bin/sh', 'TMUX_TMPDIR': str(tmux_tmp), 'TMPDIR': tempfile.gettempdir(),
+             'LANG': 'en_US.UTF-8', 'TERM': 'xterm-256color', 'USER': pwd.getpwuid(os.getuid()).pw_name,
+             'LOGNAME': pwd.getpwuid(os.getuid()).pw_name, fm.BIN_ENV: str(binary),
+             'PYTHONPATH': str(ROOT)}  # this worktree, not the host's import path
+    built.update({k: os.environ[k] for k in IMPL_PASSED if k in os.environ})
+    for key in list(os.environ):
+        if key != 'PYTEST_CURRENT_TEST':  # pytest's own bookkeeping of the running test
+            monkeypatch.delenv(key)
+    for key, value in built.items():
+        monkeypatch.setenv(key, value)
     state = root / 'state'
     state.mkdir()
-    env = SimpleNamespace(kind=request.param, root=root, bindir=bindir, binary=binary, state=state)
+    # F2: every server this test starts (a restarted one too) is registered the moment it is up
+    servers = []
+    monkeypatch.setattr(fm.FleetmuxSessionManager, '_spawn_server',
+                        _recording_spawn(fm.FleetmuxSessionManager._spawn_server, servers))
+    env = SimpleNamespace(kind=request.param, root=root, bindir=bindir, binary=binary, state=state, home=home,
+                          tmux_tmp=tmux_tmp, servers=servers)
     yield env
     _teardown(env)
 
@@ -80,10 +111,72 @@ def new_mgr(env, session=SESSION):
     return fm.FleetmuxSessionManager(session, state_dir=env.state)
 
 
+TEARDOWN_WAIT_S = 10.0  # how long a server asked to stop may take to exit before the teardown signals it
+
+
+def _server_record(runtime, info):
+    """The identity of one server this test started: its runtime, pid and OS start time (+ epoch), as its
+    server.json states them. A bare pid can be reused; pid + start time + runtime cannot."""
+    pid, start = info.get('pid'), info.get('start_time')
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (pid, start)):
+        return None
+    return {'runtime': Path(runtime), 'pid': pid, 'start_time': start, 'epoch': info.get('epoch')}
+
+
+def _register(servers, runtime):
+    """Add the server now named by ``<runtime>/server.json`` to ``servers`` (once per pid + start time)."""
+    rec = _server_record(runtime, _read_json(Path(runtime) / 'server.json'))
+    if rec and not any((s['pid'], s['start_time']) == (rec['pid'], rec['start_time']) for s in servers):
+        servers.append(rec)
+    return rec
+
+
+def _recording_spawn(real, servers):
+    """FleetmuxSessionManager._spawn_server that registers the server it brought up, also when it raises after
+    the server wrote server.json."""
+    def spawn(mgr):
+        try:
+            return real(mgr)
+        finally:
+            _register(servers, mgr.runtime_root)
+    return spawn
+
+
+def _server_is_ours(srv):
+    """The recorded server still runs: alive, ``--runtime <its runtime>`` on its command line, same start time."""
+    pid = srv['pid']
+    if not alive(pid):
+        return False
+    argv = fm._cmdline(pid) or []
+    rt = str(srv['runtime'])
+    if not any(a == '--runtime' and b == rt for a, b in zip(argv, argv[1:])):
+        return False
+    return fm._start_time(pid) == srv['start_time']
+
+
+def _wait_gone(servers, timeout):
+    deadline = time.monotonic() + timeout
+    while any(_server_is_ours(s) for s in servers) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return [s for s in servers if _server_is_ours(s)]
+
+
 def _teardown(env):
-    """Stop whatever the test left running under its own root, never anything else."""
+    """Stop whatever the test left running under its own root, never anything else.
+
+    Every server is registered (``env.servers``: runtime, pid, start time) *before* anything is asked to stop: a
+    server removes its server.json while it exits, so a read afterwards can find nothing although the process
+    hangs on. Only a recorded server that still is that server is signalled.
+    The root is removed only once every recorded server is gone; otherwise the teardown fails and names it.
+    """
+    servers = getattr(env, 'servers', None)
+    if servers is None:
+        servers = env.servers = []
     runtimes = env.state / 'fleetmux'
-    for rt in sorted(runtimes.glob('*')) if runtimes.is_dir() else []:
+    found = sorted(runtimes.glob('*')) if runtimes.is_dir() else []
+    for rt in found:
+        _register(servers, rt)
+    for rt in found:
         try:
             _send(rt / 'ctl.sock', {'id': 1, 'cmd': 'server.shutdown', 'force': True}, timeout=5)
         except Exception:
@@ -94,14 +187,17 @@ def _teardown(env):
                     os.killpg(int(pgid), signal.SIGKILL)
             except (OSError, ValueError, TypeError):
                 pass
-        pid = _read_json(rt / 'server.json').get('pid')
+    for srv in _wait_gone(servers, TEARDOWN_WAIT_S):
         try:
-            if pid and alive(int(pid)) and str(rt) in ps_args(int(pid)):
-                os.kill(int(pid), signal.SIGKILL)
-        except (OSError, ValueError):
+            os.kill(srv['pid'], signal.SIGKILL)
+        except OSError:
             pass
+    left = _wait_gone(servers, TEARDOWN_WAIT_S)
     for sock in (env.root / 'tmux').glob('*.sock') if (env.root / 'tmux').is_dir() else []:
         subprocess.run(['tmux', '-S', str(sock), 'kill-server'], capture_output=True, timeout=10)
+    if left:
+        pytest.fail('teardown: server(s) of this test still running, %s kept: %s' % (env.root, ', '.join(
+            'pid %d start %d runtime %s' % (s['pid'], s['start_time'], s['runtime']) for s in left)))
     shutil.rmtree(env.root, ignore_errors=True)
 
 
@@ -1199,7 +1295,8 @@ def test_tmux_view_info_attach_view_reattach_detach(impl):
     sock.parent.mkdir()
     session = 'ops-g1'
     s = spawn(mgr, 'supervisor-1', type_='supervisor')
-    assert tmux(sock, 'new-session', '-d', '-s', session, 'sleep 600').returncode == 0
+    # -f /dev/null: this starts the tmux server, which would otherwise load ~/.tmux.conf (and its plugins; X1)
+    assert tmux(sock, '-f', '/dev/null', 'new-session', '-d', '-s', session, 'sleep 600').returncode == 0
     info = {'type': 'worker', 'label': 'ops', 'tmux_socket': str(sock), 'tmux_session': session}
     assert mgr.attach_view({'tmux_socket': str(sock), 'tmux_session': 'no-such'}, s) is None
     v = mgr.attach_view(info, s)
@@ -1222,6 +1319,185 @@ def test_tmux_view_info_attach_view_reattach_detach(impl):
     tmux(sock, 'kill-server')
     assert wait_for(lambda: mgr.tmux_session_alive(v3) is False)
     assert mgr.tmux_session_alive('zzzz-1') is None
+
+
+
+# ================================================================ isolation evidence
+# The impl fixture builds the environment of every process under test (stand-in HOME, SHELL=/bin/sh, TMUX_TMPDIR,
+# no BASH_ENV / ENV). The cases below prove the processes actually use it. Each one has a synthetic "real" HOME
+# beside the stand-in (a decoy in the test root, never the operator's home) with the same sentinel startup file:
+# the stand-in must be the one read, and the *_catches_a_decoy_home twin points HOME at the decoy to show the check
+# fails when a home other than the stand-in is read. Only HOME, SHELL and TMUX_TMPDIR are ever echoed.
+#
+# Every case here that starts a server, a shell or tmux is written, not executed, until the isolation has been
+# confirmed independently. test_isolation_the_environment_is_built_not_inherited starts nothing.
+
+# what a process under test may get from the impl fixture; everything else is dropped (built, not inherited)
+IMPL_ENV_KEYS = {'PATH', 'HOME', 'SHELL', 'TMUX_TMPDIR', 'TMPDIR', 'LANG', 'TERM', 'USER', 'LOGNAME', 'PYTHONPATH',
+                 'PYTHONDONTWRITEBYTECODE', 'FLEETMUX_BIN', 'FLEETMUX_HOME', 'FLEETMUX_STATE', 'FLEETMUX_CONFIG',
+                 'FLEETMUX_CONFIG_DIR', 'FLEETMUX_SUPERPOWERS', 'FLEETMUX_DISCOVERY', 'FLEETMUX_JOIN_ROOT',
+                 'PYTEST_CURRENT_TEST'}
+ENV_DUMP = ('import json, os, sys; keys = ("HOME", "SHELL", "TMUX_TMPDIR")\n'
+            'if "BASH_ENV" in os.environ or "ENV" in os.environ:\n'
+            '    open(sys.argv[2], "w").close()  # a marker only, never the values\n'
+            'open(sys.argv[1] + ".tmp", "w").write(json.dumps({k: os.environ.get(k) for k in keys}))\n'
+            'os.replace(sys.argv[1] + ".tmp", sys.argv[1])')
+# a login-shell startup file. In {probes} it leaves markers only, never a value: which shell layer read it
+# (interactive: the `sh -l` after a CLI; login-c: a `bash -lc`), whether BASH_ENV or ENV is set at all, and whether
+# HISTFILE points outside $HOME. Then it records HOME / SHELL / TMUX_TMPDIR under the name of its home in {marks}.
+SENTINEL_RC = ('case $- in *i*) layer=interactive ;; *) layer=login-c ;; esac\n'
+               ': > {probes}/{label}-read-by-$layer\n'
+               '[ -n "${{BASH_ENV+x}}${{ENV+x}}" ] && : > {probes}/inherited-entry-point\n'
+               'case "${{HISTFILE-}}" in ""|"$HOME"/*) ;; *) : > {probes}/histfile-outside-home ;; esac\n'
+               'printf "%s\\n%s\\n%s\\n" "$HOME" "$SHELL" "$TMUX_TMPDIR" > {marks}/{label}.tmp && '
+               'mv {marks}/{label}.tmp {marks}/{label}\n')
+SENTINEL_TMUX = 'set -g @fleet_sentinel {label}\n'
+
+
+def isolated_values(impl):
+    return [str(impl.home), '/bin/sh', str(impl.tmux_tmp)]
+
+
+def sentinel_homes(impl, name, body):
+    """Put the startup file ``name`` into the stand-in HOME (label test-home) and into a synthetic "real" HOME
+    (label decoy-home) next to it; returns (decoy home, marker directory). Probe markers go to probes(impl)."""
+    decoy, marks = impl.root / 'decoy-real-home', impl.root / 'markers'
+    decoy.mkdir(exist_ok=True)
+    marks.mkdir(exist_ok=True)
+    probes(impl).mkdir(exist_ok=True)
+    for home, label in ((impl.home, 'test-home'), (decoy, 'decoy-home')):
+        (home / name).write_text(body.format(marks=shlex.quote(str(marks)), label=label,
+                                             probes=shlex.quote(str(probes(impl)))))
+    return decoy, marks
+
+
+def probes(impl):
+    return impl.root / 'probes'
+
+
+def no_inherited_entry_point(impl):
+    """The pane-level probe found neither BASH_ENV nor ENV set (it writes a marker only if one is)."""
+    return not (probes(impl) / 'inherited-entry-point').exists()
+
+
+def read_homes(marks):
+    """{home label: [HOME, SHELL, TMUX_TMPDIR]} of every sentinel that ran."""
+    return {p.name: p.read_text().split('\n')[:3] for p in marks.iterdir() if not p.name.endswith('.tmp')}
+
+
+def test_isolation_the_environment_is_built_not_inherited(impl):
+    """No process is started here: only the environment the fixture leaves for the server, its panes and the tmux
+    calls is checked. Only listed keys, the stand-ins for HOME / SHELL / TMUX_TMPDIR, and none of the shell
+    startup entry points (BASH_ENV, ENV, ZDOTDIR, XDG_CONFIG_HOME) nor an outer tmux (TMUX, TMUX_PANE)."""
+    extra = len(set(os.environ) - IMPL_ENV_KEYS)  # a count only: the names of an inherited environment are not echoed
+    assert extra == 0, '%d inherited variable(s) beyond the list (names not shown)' % extra
+    assert [os.environ.get(k) for k in ('HOME', 'SHELL', 'TMUX_TMPDIR')] == isolated_values(impl)
+    assert not [k for k in ('BASH_ENV', 'ENV', 'ZDOTDIR', 'XDG_CONFIG_HOME', 'TMUX', 'TMUX_PANE', 'PROMPT_COMMAND')
+                if k in os.environ]
+    assert os.environ['FLEETMUX_BIN'] == str(impl.binary)
+    assert os.environ['PATH'].split(os.pathsep)[0] == str(impl.bindir)
+
+
+def test_isolation_a_pane_process_inherits_the_test_home_shell_and_tmux_tmpdir(impl):
+    """T2 / H3: what the server starts in a pane carries the stand-in HOME, SHELL and TMUX_TMPDIR (only these three
+    are written out)."""
+    mgr = new_mgr(impl)
+    dump = impl.root / 'pane-env.json'
+    probes(impl).mkdir(exist_ok=True)
+    spawn(mgr, 'worker-1', command=py(ENV_DUMP, dump, probes(impl) / 'inherited-entry-point'), cwd=impl.root)
+    assert wait_for(lambda: dump.exists())
+    got = json.loads(dump.read_text())
+    assert [got['HOME'], got['SHELL'], got['TMUX_TMPDIR']] == isolated_values(impl), got
+    assert no_inherited_entry_point(impl), 'BASH_ENV or ENV reached the pane process'
+
+
+def login_shell_after_a_cli(impl):
+    """H1's path: `exec $SHELL -l` after the CLI (auto_close=False)."""
+    res = new_mgr(impl).spawn_interactive_cli('worker-1', 'true', auto_close=False, metadata={'type': 'worker'},
+                                              start_directory=str(impl.root))
+    assert res.success, res.error
+
+
+def test_isolation_the_login_shell_after_a_cli_reads_only_the_stand_in_profile(impl):
+    """H1: the interactive login sh (`exec /bin/sh -l` after the CLI) reads the stand-in HOME's .profile and not the
+    decoy's. The two outer `bash -lc` layers read .profile too (no .bash_profile here), so the interactive layer
+    proves itself with its own marker; its HISTFILE stays inside the stand-in HOME and no BASH_ENV / ENV is set."""
+    _, marks = sentinel_homes(impl, '.profile', SENTINEL_RC)
+    login_shell_after_a_cli(impl)
+    assert wait_for(lambda: (probes(impl) / 'test-home-read-by-interactive').exists())
+    time.sleep(0.5)
+    assert read_homes(marks) == {'test-home': isolated_values(impl)}, read_homes(marks)
+    assert not list(probes(impl).glob('decoy-home-read-by-*'))
+    assert not (probes(impl) / 'histfile-outside-home').exists(), 'the interactive sh keeps history outside HOME'
+    assert no_inherited_entry_point(impl), 'BASH_ENV or ENV reached a login shell'
+
+
+def test_isolation_the_login_shell_check_catches_a_decoy_home(impl, monkeypatch):
+    """H1, constructed red: with HOME pointing at the synthetic "real" home, the decoy's .profile runs and the check
+    above would fail."""
+    decoy, marks = sentinel_homes(impl, '.profile', SENTINEL_RC)
+    monkeypatch.setenv('HOME', str(decoy))
+    login_shell_after_a_cli(impl)
+    assert wait_for(lambda: 'decoy-home' in read_homes(marks))
+    assert read_homes(marks) != {'test-home': isolated_values(impl)}
+
+
+def login_bash_of_a_tmux_session(impl, name):
+    """H2's path: the session built for tmux fields runs `bash -lc` (private socket under the root)."""
+    sock = impl.root / 'tmux' / (name + '.sock')
+    sock.parent.mkdir(exist_ok=True)
+    res = new_mgr(impl).spawn_interactive_cli('worker-1', 'sleep 600', metadata={'type': 'worker'},
+                                              start_directory=str(impl.root), tmux_socket=str(sock),
+                                              tmux_session=name + '-g0')
+    assert res.success, res.error
+
+
+def test_isolation_the_login_bash_of_a_tmux_session_reads_only_the_stand_in_bash_profile(impl):
+    """H2: the login bash reads the stand-in HOME's .bash_profile and not the decoy's; no BASH_ENV / ENV is set."""
+    _, marks = sentinel_homes(impl, '.bash_profile', SENTINEL_RC)
+    login_bash_of_a_tmux_session(impl, 'iso')
+    assert wait_for(lambda: 'test-home' in read_homes(marks))
+    time.sleep(0.5)
+    assert read_homes(marks) == {'test-home': isolated_values(impl)}, read_homes(marks)
+    assert not list(probes(impl).glob('decoy-home-read-by-*'))
+    assert no_inherited_entry_point(impl), 'BASH_ENV or ENV reached a login shell'
+
+
+def test_isolation_the_login_bash_check_catches_a_decoy_home(impl, monkeypatch):
+    """H2, constructed red: HOME at the synthetic "real" home makes the decoy's .bash_profile run."""
+    decoy, marks = sentinel_homes(impl, '.bash_profile', SENTINEL_RC)
+    monkeypatch.setenv('HOME', str(decoy))
+    login_bash_of_a_tmux_session(impl, 'decoy')
+    assert wait_for(lambda: 'decoy-home' in read_homes(marks))
+    assert read_homes(marks) != {'test-home': isolated_values(impl)}
+
+
+def sentinel_option(sock):
+    return tmux(sock, 'show-options', '-gv', '@fleet_sentinel')
+
+
+def test_isolation_tmux_loads_no_config_with_dev_null_and_only_the_stand_in_without(impl):
+    """X1: with -f /dev/null (how the view test starts its server) no config is loaded; without -f, the server
+    (private socket under the root) loads the stand-in HOME's .tmux.conf, not the decoy's."""
+    sentinel_homes(impl, '.tmux.conf', SENTINEL_TMUX)
+    d = impl.root / 'tmux'
+    d.mkdir(exist_ok=True)
+    bare, plain = d / 'devnull.sock', d / 'plain.sock'
+    assert tmux(bare, '-f', '/dev/null', 'new-session', '-d', '-s', 'iso', 'sleep 600').returncode == 0
+    shown = sentinel_option(bare)
+    assert shown.stdout.strip() == '' and shown.returncode != 0, (shown.stdout, shown.stderr)
+    assert tmux(plain, 'new-session', '-d', '-s', 'iso', 'sleep 600').returncode == 0
+    assert sentinel_option(plain).stdout.strip() == 'test-home'
+
+
+def test_isolation_the_tmux_config_check_catches_a_decoy_home(impl, monkeypatch):
+    """X1, constructed red: HOME at the synthetic "real" home makes tmux load the decoy's .tmux.conf."""
+    decoy, _ = sentinel_homes(impl, '.tmux.conf', SENTINEL_TMUX)
+    monkeypatch.setenv('HOME', str(decoy))
+    sock = impl.root / 'tmux' / 'decoy.sock'
+    sock.parent.mkdir(exist_ok=True)
+    assert tmux(sock, 'new-session', '-d', '-s', 'iso', 'sleep 600').returncode == 0
+    assert sentinel_option(sock).stdout.strip() == 'decoy-home'
 
 
 # ================================================================ M1 / M2 additions (brief-m03 §3.5)

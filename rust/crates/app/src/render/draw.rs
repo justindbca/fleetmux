@@ -948,7 +948,12 @@ fn status(state: &State, buf: &mut Buffer, r: LRect) {
     }
     // Design section 19: a child card's confirmed close stays on the line until the root daemon answers.
     if let super::sidebar::ChildStop::Requested(_) = &state.side.child_stop {
-        text.push_str("  已请求关闭子 fleet，等 daemon…");
+        if super::sidebar::child_request_dismisses(&state.side) {
+            text.push_str("  ");
+            text.push_str(&tr(lang, "top.child_dismiss.requested", "removal from the sidebar requested, waiting for the daemon..."));
+        } else {
+            text.push_str("  已请求关闭子 fleet，等 daemon…");
+        }
     }
     // S2b (plan §13.6-4): the restore pane runs until kv `restorable` is cleared (the daemon's cards are back).
     if state.side.resuming {

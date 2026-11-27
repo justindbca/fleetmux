@@ -112,7 +112,7 @@ def repo(tmp_path):
 def deliver_spec(repo, tmp_path, test_cmd=None):
     return {'repo': str(repo), 'feature_branch': 'feat/x', 'deploy_branch': 'main',
             'test_cmd': test_cmd or [sys.executable, '-c', 'print("12 passed")'],
-            'queue': str(tmp_path / 'queue' / 'deploy-queue.jsonl')}
+            'queue': str(tmp_path / 'queue' / 'deploy-queue.jsonl'), 'via': 'queue'}
 
 
 # ------------------------------------------------------------------ dev_task: gate, auto stop, close
@@ -502,7 +502,7 @@ def test_stop_keep_resumable_run_is_picked_up_again_by_resume(fx, table, notes):
     f.mgr.dock_control = lambda pane: True
     submit(f, {'goal': 'x', 'hours': 4, 'deliver': {
         'repo': '/r', 'feature_branch': 'f', 'deploy_branch': 'm', 'test_cmd': ['true'], 'queue': '/q',
-        'review_file': 'v.json'}})
+        'review_file': 'v.json', 'via': 'queue'}})
     f.finish('blocked', 'needs a human')
     f.tick()
     lifecycle_close.tick(f, now=result_json(f)['at'] + 13 * 3600)
@@ -962,7 +962,7 @@ def test_sidebar_close_then_resume_reopens_the_run(fx, table, notes):
     f.mgr.dock_control = lambda pane: True
     submit(f, {'goal': 'x', 'hours': 4, 'deliver': {
         'repo': '/r', 'feature_branch': 'f', 'deploy_branch': 'm', 'test_cmd': ['true'], 'queue': '/q',
-        'review_file': 'v.json'}})
+        'review_file': 'v.json', 'via': 'queue'}})
     lifecycle_close.request_close(f, 'user', 'fleetmux 侧栏「关闭整个 fleet」', resumable=True,
                                   via='fleetmux-sidebar')
     assert f.stopping and f.explicit_stop, 'request_close must drive the explicit-stop tail'

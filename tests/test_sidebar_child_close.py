@@ -60,9 +60,9 @@ def test_after_the_confirmation_a_job_subfleet_is_recorded_as_cancelled(jt, monk
     finish_child(t, key, outcome='cancelled', monkeypatch=monkeypatch)
     published = result(f, jid)
     assert published['status'] == 'failed' and published['result']['outcome'] == 'cancelled', published
-    # the card is gone from the running ones and carries no button any more
+    # the card is gone from the running ones: no stop button any more, only the finished card's dismiss
     cards = {c['id']: c for c in fleetmux_sidebar.payload(f)['fleets']}
-    assert 'close' not in cards[d.name]
+    assert cards[d.name]['close']['action'] == 'dismiss'
 
 
 @pytest.mark.usefixtures('job_chains_as_before')

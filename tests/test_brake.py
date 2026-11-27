@@ -876,3 +876,115 @@ def test_codex_usage_limit_wording_is_an_account_wall():
                  'You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min.'):
         got = brake.classify_wall(text)
         assert got and got['scope'] == 'account', text
+
+
+# ------------------------------------------------------------------ delivered text on a screen (design section 67)
+# A fleet delivery drawn on a pane is not the CLI's own line: a wall quoted inside it never trips the brake, while
+# the CLI's own wall row after it always does (G7 position rule unchanged). Rows are built as the CLIs draw them;
+# tests/fixtures/delivery_screens/claude-stop-hook-feedback.txt is the Claude geometry of a turn that failed at once
+# (from a live pane: a Stop hook feedback header row, the CLI's own wall right under it at the result glyph). A whole
+# Claude delivery block (head row, drawn body, block end) is not measured, so Claude has no delivery_screen row.
+import types  # noqa: E402
+
+from fleetmux import demo_actor  # noqa: E402
+
+DELIVERY_SCREENS = Path(__file__).resolve().parent / 'fixtures' / 'delivery_screens'
+GLYPH_OUT, GLYPH_IN, GLYPH_RESULT = '▶', '◀', '⎿'
+SPIN = '✻ Working… (esc to interrupt)'
+RULE = '─' * 100
+
+
+def demo_wall():
+    import parent_heals_actor  # the scripted actor's wall line (tests/parent_heals_actor.py)
+    return parent_heals_actor.WALL_LINE
+
+
+def quoted_notice():
+    """A delivered text that quotes a raw wall line in the middle of a row, as the evidence did. (A wall line at the
+    start of a delivered row is ambiguous and counts as the CLI's own: test_cli_wall_after_a_delivery_block.)"""
+    return ('[sub-fleet walled] sub-fleet M0 (/run/sub/M0): its worker-1 is paused: worker-1 hit a account wall '
+            '("orker-1/). Reply in the AGENTS.md format when done.' + GLYPH_OUT + ' ' + demo_wall()
+            + '✻ Working…"); no usable model left on the chain\n'
+            + 'Answer with the usual service decision JSON (status RUNNING, dispatch [], skip [])')
+
+
+def demo_rows(feed, cols=200, bottom=True):
+    """The rows the demo actor draws for ``feed`` (its own feed_lines), then its status block."""
+    rows = demo_actor.Actor.feed_lines(types.SimpleNamespace(feed=feed), cols)
+    return rows + ([SPIN, RULE, '❯ ', RULE, '  esc to interrupt'] if bottom else [])
+
+
+def root_feed():
+    return [('out', 'READY'), ('in', quoted_notice())]
+
+
+def test_delivery_quoting_a_wall_line_does_not_brake_the_root(tmp_path):
+    """The root supervisor's pane shows a delivery quoting a raw wall line; the root never resumed (no baseline).
+    Neither the gate nor the screen reader may take the quoted line for the root's own wall."""
+    rows = demo_rows(root_feed() + [('out', '{"status": "RUNNING", "reason": "[scripted] service supervisor"}')])
+    tail = rows[-brake.GATE_TAIL:]
+    assert any(brake.classify_wall(r) for r in tail)  # the quoted line is on the screen's tail
+    screen = '\n'.join(rows)
+    assert brake.screen_wall(screen) is None
+    f = make(tmp_path, {'goal': 'x'})
+    assert f.wall_gate('supervisor', screen) is None
+    assert not f.paused() and not f.r.hget(fleet.BRAKE, 'tripped')
+
+
+def claude_rows(wall_text):
+    """The Claude geometry of a turn that failed at once (live capture): the CLI's own wall right under a bare
+    Stop hook feedback header row (result glyph, col 2). Not a drawn delivery block: that shape is not measured."""
+    head, _, rest = wall_text.partition(' · ')
+    text = (DELIVERY_SCREENS / 'claude-stop-hook-feedback.txt').read_text(encoding='utf-8')
+    return text.replace('{WALL}', head).replace('{WALL_CONT}', rest).rstrip('\n').split('\n')
+
+
+def cli_wall_shapes():
+    """(name, row) for every CLI wall row shape in the repo, drawn at its own column."""
+    fable = REAL_FABLE_WALL.split(GLYPH_RESULT, 1)[1].strip()
+    # the CLI's own safeguards line, shaped as tests/test_safeguards_wall.py SCREEN_LINE (not imported: that module
+    # imports this one, and collection order decides which loads first)
+    safeguards = ('  ' + GLYPH_RESULT + "  API Error: Opus 5.5's safeguards flagged this message "
+                  '(https://www.anthropic.com/legal/aup). Try rephrasing the request.')
+    return [('claude-result', '  ' + GLYPH_RESULT + '  ' + demo_wall()),
+            ('claude-fable', '  ' + GLYPH_RESULT + '  ' + fable),
+            ('claude-fable-col0', REAL_FABLE_WALL),
+            ('claude-account', '  ' + GLYPH_RESULT + '  ' + CLAUDE_ACCOUNT_WALL.strip()),
+            ('claude-safeguards', safeguards),
+            ('codex', REAL_CODEX_WALL),
+            ('codex-col2', '  ' + REAL_CODEX_WALL),
+            ('demo', GLYPH_OUT + ' ' + demo_wall()),
+            ('plain-indented', '  ' + demo_wall())]
+
+
+def screens_that_must_trip():
+    """(case, screen rows, rows before the CLI's own wall) -- each must trip the brake."""
+    out = []
+    block = demo_rows(root_feed(), bottom=False)
+    open_block = [r for r in block if r.strip()]  # no empty row before the next row
+    for name, row in cli_wall_shapes():
+        out.append(('under-demo-block-' + name, open_block + [row, SPIN], open_block))  # indent collision
+        headless = ['  delivered-looking text that has no header above it'] * 3
+        out.append(('headless-' + name, headless + [row, SPIN], headless))
+    out.append(('demo-after-empty-row', block + [GLYPH_OUT + ' ' + demo_wall(), SPIN], block))
+    for name, row in cli_wall_shapes()[:5]:
+        wall = row.strip().lstrip(GLYPH_RESULT).strip()
+        out.append(('claude-fixture-' + name, claude_rows(wall), claude_rows(wall)[:4]))
+    out.append(('evidence-slice', ['in the  AGENTS.md format when done.' + GLYPH_OUT + ' ' + demo_wall()
+                                   + '✻ Working…"); no usable'], []))
+    return out
+
+
+@pytest.mark.parametrize('case', [c[0] for c in screens_that_must_trip()])
+def test_cli_wall_after_a_delivery_block_still_brakes(tmp_path, case):
+    """Regression: the CLI's own wall row (every shape in the repo, its CLI's block shape where measured; a headless
+    indented stretch; a row at the body column of a demo block) trips, also with a baseline taken before it (G7)."""
+    _, rows, before = next(c for c in screens_that_must_trip() if c[0] == case)
+    screen = '\n'.join(rows)
+    for baseline in (None, before):
+        f = make(tmp_path / ('b' if baseline is not None else 'n'), {'goal': 'x'})
+        if baseline is not None:
+            f.setf('supervisor', wall_baseline=json.dumps({'generation': str(f.agent('supervisor').get('generation', '0')),
+                                                           'lines': brake.screen_lines('\n'.join(baseline))}))
+        record = f.wall_gate('supervisor', screen)
+        assert record and record['kind'] == 'wall', (case, 'no baseline' if baseline is None else 'baseline')

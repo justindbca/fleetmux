@@ -16,6 +16,7 @@ import pytest
 from test_subfleet import (WorldMgr, drive, given, hook, spawn_m0, step, stop_child_like_daemon, supervisor_texts,
                            tree)  # noqa: F401
 from test_subfleet_named_tmux import adopt_view_child, service_tree
+from test_named_subfleet_chain import named_chain_as_before  # noqa: F401  (fixture)
 from fleetmux import fleet, named_subfleet, subfleet
 
 pytestmark = pytest.mark.usefixtures('job_chains_as_before')  # named supervisors keep the slot's model
@@ -343,13 +344,18 @@ def test_supervisor_is_never_restarted_it_pauses_even_with_stop_evidence(tree):
 def killed_up_autostart(tmp_path, monkeypatch):
     t = service_tree(tmp_path, monkeypatch, autostart=True)
     f = t.f
-    subfleet.tick(f)  # declared + idle READY: delegated at once
-    rec, cf, view = adopt_view_child(t)
-    subfleet.tick(f)
-    assert named_subfleet.state(f, 'ops')['state'] == 'up'
+    try:
+        subfleet.tick(f)  # declared + idle READY: delegated at once
+        rec, cf, view = adopt_view_child(t)
+        subfleet.tick(f)
+        assert named_subfleet.state(f, 'ops')['state'] == 'up'
+    except BaseException:
+        t.gen.close()  # the callers' try starts after this returns: stop the tree's Redis here
+        raise
     return t, f, rec, cf, view
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains (1d4387a1): the named child's slot is adopted in place
 def test_killed_supervisor_slot_takes_its_subfleet_down_and_autostart_brings_it_back(tmp_path, monkeypatch):
     t, f, rec, cf, view = killed_up_autostart(tmp_path, monkeypatch)
     try:
@@ -380,6 +386,7 @@ def test_killed_supervisor_slot_takes_its_subfleet_down_and_autostart_brings_it_
             pass
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains (1d4387a1): the named child's slot is adopted in place
 def test_closed_tabs_of_a_delegated_live_session_are_reattached_on_both_sides(tmp_path, monkeypatch):
     t, f, rec, cf, view = killed_up_autostart(tmp_path, monkeypatch)
     try:
@@ -416,6 +423,7 @@ def child_request(t, cf, rid):
     return cf.r.hgetall(fleet.REQ + rid)
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains (1d4387a1): the named child's slot is adopted in place
 def test_crashed_child_daemon_is_revived_with_resume_and_replays_its_requests(tmp_path, monkeypatch):
     """Reused as is (§29 revive -> daemon --resume -> §17 requeue_requests): the request continues in the same
     child Redis, attempt counted."""
@@ -449,6 +457,7 @@ def test_crashed_child_daemon_is_revived_with_resume_and_replays_its_requests(tm
             pass
 
 
+@pytest.mark.usefixtures('named_chain_as_before')  # §29 chains (1d4387a1): the named child's slot is adopted in place
 def test_lost_supervisor_slot_lists_the_childs_open_requests_in_the_return_note(tmp_path, monkeypatch):
     """§29: a taken-down child's open requests belong to their caller (who re-delivers them after the next up):
     they are read before its Redis goes and written into the slot's return note."""

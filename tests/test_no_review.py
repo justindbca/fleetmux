@@ -18,8 +18,13 @@ from fleetmux.agent_registry import AgentRegistry
 
 AGENTS = Path(fleet.__file__).resolve().parent / 'agents'
 MERGE_READ = ('Merge read: when a feature block is done, the supervisor (Fable) reads the whole diff once before '
-              'merging, fixes plain errors and does a light refactor in place (or sends one list back to the author '
-              'once). No second read, no PASS/FAIL, no verdict file, nothing in the program waits for it.')
+              'merging or handing the delivery to the local rollout, fixes plain errors and does a light refactor in '
+              'place (or sends one list back to the author once). No second read, no PASS/FAIL, no verdict file, '
+              'nothing in the program waits for it. A supervisor not running on Fable (its own CLI names its model) '
+              'borrows one Fable read instead: add a roster row `- {name: fable-read-<n>, profile: claude-fable}`, '
+              'dispatch it one block "read the whole diff once and write the list of errors to <file>", send a '
+              'non-empty list back to the original author for one fix, then delete the row; no second read, and the '
+              'delivery does not wait for it.')
 
 
 def plain_spec(repo, tmp_path, **extra):
@@ -58,7 +63,7 @@ def old_table(tmp_path, monkeypatch):
 # ------------------------------------------------------------------ §2 item 1: the gate runs only test_cmd
 def test_deliver_spec_needs_no_review_file():
     spec = lifecycle_deliver.validate_deliver({'repo': '/r', 'feature_branch': 'f', 'deploy_branch': 'main',
-                                               'test_cmd': ['true'], 'queue': '/q.jsonl'})
+                                               'test_cmd': ['true'], 'queue': '/q.jsonl', 'via': 'queue'})
     assert 'review_file' not in spec
 
 
