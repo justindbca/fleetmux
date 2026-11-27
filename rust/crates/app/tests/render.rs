@@ -1276,9 +1276,9 @@ fn restore_spawns_the_registered_command_in_this_server() {
     let mut v = Viewer::attach(&srv, W, H);
     v.wait_text("已关闭 · 可恢复", T);
     v.input(&sgr_click(31, 2, 0));
-    let screen = v.wait_text("RESUMED", T);
+    let screen = v.wait_text("ENV-", T); // the second echo: "RESUMED" alone can be drawn before it
     assert!(
-        screen.contains("ENV-yes"),
+        screen.contains("RESUMED") && screen.contains("ENV-yes"),
         "the resume pane did not get the registered env: {screen}"
     );
     let panes = srv.panes();
