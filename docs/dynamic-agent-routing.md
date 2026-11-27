@@ -9,7 +9,7 @@ Cards live in `fleetmux/agents/` alongside role prompts. JSON needs only the sta
 | Profile | CLI | Model/default | Capabilities |
 |---|---|---|---|
 | `flashnext-coder` | Pi | `flashnext/<local-model>` | code-edit, test-fix, planning |
-| `claude-reviewer` | Official Claude Code CLI, directly | `opus` (role `reviewer.md`, independent read-only reviewer) | code-review, safety-audit, planning |
+| `claude-opus` | Official Claude Code CLI, directly | `opus` (role `worker.md`); takes a review the user asks for (`claude-reviewer` was removed and resolves here) | code-edit, test-fix, planning, code-review, safety-audit |
 | `claude-coder` | Official Claude Code CLI, directly | `opus` (role `worker.md`); preferred for implementation when fleet `worker_cli` is `claude` | code-edit, test-fix, planning |
 | `researcher` | Codex | Existing worker/shared Codex profile and its model | web-research, planning |
 

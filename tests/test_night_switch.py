@@ -14,7 +14,7 @@ import yaml
 from test_roster import REPORT, audits, hot, write_roster  # noqa: F401  (fixture)
 from test_v2_codex_claude import WORKERS, answer_turn, decision, mixed, no_provisioning, submit, typed  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
-from fleetmux import fleet, night, roster, runtime_v2
+from fleetmux import fleet, fleet_config, night, roster, runtime_v2
 
 DAY_CARD, NIGHT_CARD = None, 'claude-coder'  # same CLI (official Claude), other model: today's matrix admits it
 
@@ -540,7 +540,7 @@ def test_night_swapped_slot_takes_its_card_handoff_ratio_through_the_one_resolve
     assert f.agent('worker-2')['runtime_profile'] == 'flashnext-coder'
     window, ratio, source = f.handoff_limits('worker-2')
     assert ratio == .5 and source.endswith('ratio: card flashnext-coder')  # FlashNext card: 0.5
-    assert f.handoff_limits('worker-1')[1] == float(f.cfg['handoff_ratio'])  # day slot: fleet default
+    assert f.handoff_limits('worker-1')[1] == fleet_config.handoff()['ratio']  # day slot: fleet default
 
 
 def test_night_roster_must_declare_the_same_subfleets(tmp_path):

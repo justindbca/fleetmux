@@ -13,9 +13,9 @@ def test_code_task_routes_to_flashnext_coder():
     assert set(classify_task("fix failing pytest in router")) >= {"code-edit", "test-fix"}
 
 
-def test_review_task_routes_to_claude_reviewer():
+def test_review_task_routes_to_the_code_review_card():
     decision = route_task("审查这次改动并做安全复核")
-    assert decision.agent_id == "claude-reviewer"
+    assert decision.agent_id == "claude-opus"
     assert decision.capability == "code-review"
 
 
@@ -58,8 +58,8 @@ def test_primary_capability_and_rank_tie_breakers(tmp_path):
     ("修复安全漏洞并复核", "test-fix", "flashnext-coder"),
     ("research security risks", "web-research", "researcher"),
     ("研究代码安全风险", "web-research", "researcher"),
-    ("fix failing tests", "code-review", "claude-reviewer"),
-    ("fix failing tests", "safety-audit", "claude-reviewer"),
+    ("fix failing tests", "code-review", "claude-opus"),
+    ("fix failing tests", "safety-audit", "claude-opus"),
     ("review security", "planning", "flashnext-coder"),
 ])
 def test_explicit_capability_overrides_goal_keywords(text, capability, agent_id):
@@ -71,15 +71,15 @@ def test_explicit_capability_overrides_goal_keywords(text, capability, agent_id)
     assert decision.confidence == 1.0
 
 
-@pytest.mark.parametrize("text,capability,confidence", [
-    ("fix security bug", "safety-audit", .33),
-    ("implement feature and review it", "code-review", .67),
-    ("修复安全漏洞并复核", "code-review", .5),
+@pytest.mark.parametrize("text,capability,confidence", [  # claude-opus carries code-edit and test-fix too
+    ("fix security bug", "safety-audit", 1.0),
+    ("implement feature and review it", "code-review", 1.0),
+    ("修复安全漏洞并复核", "code-review", 1.0),
     ("research security risks", "safety-audit", .5),
 ])
 def test_legacy_direct_routing_remains_keyword_based(text, capability, confidence):
     decision = route_task(text)
-    assert decision.agent_id == "claude-reviewer"
+    assert decision.agent_id == "claude-opus"
     assert decision.capability == capability
     assert decision.confidence == confidence
     assert route_task(text, required_capability=None).to_dict() == decision.to_dict()

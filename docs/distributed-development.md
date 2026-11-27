@@ -822,7 +822,7 @@ The steps above cover link up, work, finish and the next venue. This section add
 
 1. **Turn-take.** The home supervisor routes the first report, and the advisor picks the model. Later reports
    go straight to the worker named in `owner`. That worker brings the supervisor back with `blocked` or a split
-   request when it needs another worker, for example a reviewer.
+   request when it needs another worker.
 2. **Build.** The home fleet commits two applets and a workflow entry to one applet repository. The worker that
    writes it has that repository in its roster row's `writable:` list (design.md section 40).
 3. **Finish.** The home fleet answers `done` with the workflow name.
@@ -952,7 +952,6 @@ Home dev fleet (`home-dev.yaml`; the shipped example is `fleetmux/agents/peer/ho
 advisor: on
 workers:
   - {name: dev-1, role: roles/dev-peer.md, writable: [/srv/applets/claude-route]}
-  - {name: review-1, role: roles/reviewer.md}
 ```
 
 Rows the field applet adds to the root field roster (`teams/field-applet.yaml` in the applet repository):

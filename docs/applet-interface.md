@@ -16,7 +16,7 @@ This page is the single source for key names, field tables, commands and signatu
 | host | The fleet whose roster declares the applet: a root fleet or a named sub-fleet, in service mode (section 1). Its supervisor, workers, daemon and private Redis are the applet's whole world. |
 | applet lease | A grant by the host's supervisor: one worker slot, for a limited time and a stated scope, is driven exclusively by one applet. |
 | leased worker | The worker slot named in an active applet lease. |
-| fix review | The independent review the host runs, with a worker in another slot, when a leased worker hands back a fix. The applet takes no part in it (section 3.9). |
+| fix review | Removed. A leased worker's fix reply goes straight back to the applet (section 3.9). |
 | op | A JSON object the applet submits to the host fleet (lease request, renewal, release, escalation, ...). |
 
 Do not confuse an **applet lease** with two older things that also say "lease": the bus delivery lease of a slot
@@ -42,7 +42,7 @@ Hot reload follows design.md section 16 and is how an applet is attached and det
 |---|---|
 | Row added | The applet is declared and (if `autostart`) started. The fleet is not restarted; no worker is touched. A name used earlier in the run may come back. |
 | Row removed | Detach: new lease requests are refused, the applet gets `host.draining` (`reason: detach`) and up to `detach_wait_s` to release its leases, leases still open are revoked (`applet_detached`), then SIGTERM, `stop_grace_s`, SIGKILL. Putting the row back before the revoke cancels it. |
-| Row edited | `lease` and `review` values apply from the next op on. Every other field applies at the applet's next start. |
+| Row edited | `lease` values apply from the next op on. Every other field applies at the applet's next start. |
 | Move to another host | Remove the row from one roster and add it to the other. Leases do not move; the applet applies again on the new host. The new host starts the applet only after the old process has exited (owner record `host.json` in the state directory). |
 | Any invalid row | The whole roster is rejected and the running roster stays. |
 
@@ -79,9 +79,9 @@ applets:
 | `durable_state` | bool | `true` | | `false` | `false`: `FLEETMUX_APPLET_STATE` is a directory inside the host run (section 2.2), archived with the run; nothing is kept under the fleet home. Use it for applets loaded from a saved workflow. |
 | `session_env` | map | none | exactly `port` (int 1-65535: the loopback port the applet serves), `vars` (non-empty map of variable name to one-line string) and `clis` (non-empty list; every name must be in `fleet.yaml#session_env.verified_clis`, shipped `[claude]`). At most one applet per roster routes a given CLI. Any error refuses the whole roster. | `{port: 17890, vars: {HTTPS_PROXY: "http://127.0.0.1:17890"}, clis: [claude]}` | Environment the fleet sets on the agent sessions of the listed CLIs (distributed-development.md, session environment). The fleet first removes inherited `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in both cases, then sets `vars`, then sets `NO_PROXY` and `no_proxy` to the applet's `NO_PROXY` value plus `127.0.0.1,localhost,::1`. A session of a listed CLI does not start while `127.0.0.1:<port>` is closed. |
 | `lease` | map | see 1.2 | | | Lease policy bounds for this applet. |
-| `review` | map | see 1.3 | | | Bounds of the fix reviews the host runs for this applet. |
+| `review` | map | | | | Removed (1.3): an older roster's value is accepted and ignored. |
 | `notify` | map | `{max_per_hour: 6}` | `max_per_hour` integer >= 0 | `{max_per_hour: 6}` | Cap on `applet.notify` ops (each costs the supervisor a turn). |
-| `waits` | map | `request_lease` and `renew`: `lease.decision_wait_s` + 60; `send`: `lease.prepare_timeout_s` + `lease.ttl_max_s` + `review.timeout_s` + 60; `release` and `notify`: 60 | keys `request_lease`, `renew`, `send`, `release`, `notify`; numbers > 0 (seconds) | `{send: 3600}` | Local bound of each SDK call when the call passes no `wait_s` (section 7): the op door and the wait for the result together. The defaults let the host answer first while it runs. Passed as `FLEETMUX_APPLET_WAITS`. |
+| `waits` | map | `request_lease` and `renew`: `lease.decision_wait_s` + 60; `send`: `lease.prepare_timeout_s` + `lease.ttl_max_s` + 60; `release` and `notify`: 60 | keys `request_lease`, `renew`, `send`, `release`, `notify`; numbers > 0 (seconds) | `{send: 3600}` | Local bound of each SDK call when the call passes no `wait_s` (section 7): the op door and the wait for the result together. The defaults let the host answer first while it runs. Passed as `FLEETMUX_APPLET_WAITS`. |
 
 ### 1.2 `lease` fields
 
@@ -95,16 +95,14 @@ applets:
 | `renew_grace_s` | number | `0` | >= 0 | A renewal still waiting for the supervisor at expiry keeps the lease alive this much longer. `0` = strict expiry. |
 | `prepare_timeout_s` | number | `300` | > 0 | A granted lease whose worker is not ready within this is ended (`prepare_failed`). |
 | `eligible` | list of worker names | all workers of this roster | names in `workers:` | Slots that may be leased to this applet. Workers the host added for this applet (below) are eligible too. |
-| `hot_add_max` | int | `2` | >= 0 | Ceiling of workers the host may add to the roster for this applet's leases and reviews when no worker is free (section 3.3). Counts lease-added rows present in the roster, awake or asleep. `0` = never add. Hot value: loaded into `fx:applet:<name>` (`hot_add_max`) on every roster load; `fleetmux applet set <name> hot_add_max <n>` changes the running value and the host daemon writes it back into this row. |
+| `hot_add_max` | int | `2` | >= 0 | Ceiling of workers the host may add to the roster for this applet's leases when no worker is free (section 3.3). Counts lease-added rows present in the roster, awake or asleep. `0` = never add. Hot value: loaded into `fx:applet:<name>` (`hot_add_max`) on every roster load; `fleetmux applet set <name> hot_add_max <n>` changes the running value and the host daemon writes it back into this row. |
 | `hot_add_like` | worker name | first name of `eligible` | a name in `workers:` | Template for an added worker: the new row takes this worker's name base and `role`. |
 | `decision_wait_s` | number | `600` | 10 ... 86400 | How long a lease request or renewal waits for the supervisor before it is answered `timeout`. |
 
-### 1.3 `review` fields
+### 1.3 `review` fields (removed)
 
-| Field | Type | Default | Allowed | Meaning |
-|---|---|---|---|---|
-| `max_rounds` | int | `3` | >= 1 | FAIL verdicts one `job` may collect. After that the result says `capped` and further `fix` messages of the job are refused. |
-| `timeout_s` | number | `1800` | 60 ... 86400 | Upper bound of one review, from the worker's reply to the verdict, waiting for a reviewer slot included. |
+The host no longer reviews fixes, so there are no review bounds. A `review` map in an older roster row is accepted
+and ignored; the default `waits.send` no longer includes a review timeout.
 
 The applet's own values that should change while the fleet runs belong in its parameter block (section 2.5), not here.
 
@@ -149,7 +147,7 @@ Two rules apply to every applet before any other design choice:
 | `FLEETMUX_APPLET_HEARTBEAT_S` | `10` | The entry's `heartbeat_s`: how often to write the heartbeat (section 2.4). |
 | `FLEETMUX_APPLET_STALE_AFTER_S` | `60` | The entry's `stale_after_s`: the SDK stops (`run` exits `0`) when the host Redis has been unreachable this long (section 2.1). |
 | `FLEETMUX_APPLET_STOP_GRACE_S` | `30` | The entry's `stop_grace_s`. On a stop the SDK's `run` waits at most half of it for the host to confirm that the open leases are released (section 2.4). |
-| `FLEETMUX_APPLET_WAITS` | `{"notify": 60, "release": 60, "renew": 660, "request_lease": 660, "send": 9360}` | The entry's `waits` (section 1.1) as a JSON object. The SDK uses the same defaults when it is unset and exits `78` when it is malformed. |
+| `FLEETMUX_APPLET_WAITS` | `{"notify": 60, "release": 60, "renew": 660, "request_lease": 660, "send": 7560}` | The entry's `waits` (section 1.1) as a JSON object. The SDK uses the same defaults when it is unset and exits `78` when it is malformed. |
 | `FLEETMUX_APPLET_PARAMS_FILE` / `FLEETMUX_APPLET_PARAMS_BLOCK` | `/abs/rollout.yaml` / `applet` | From `params`; unset when the entry has none. |
 | `FLEETMUX_APPLET_SDK` | `<release>` | Directory containing the release's `fleetmux` package; also prepended to `PYTHONPATH` (section 2.3). |
 | `FLEETMUX_APPLET_PYTHON` | `<release>/.venv/bin/python` | The release's interpreter (what `{python}` stands for). The SDK runs `fleetmux request` with it, never with the applet's own interpreter (section 2.3). |
@@ -245,16 +243,15 @@ keys below**. The applet never writes any `fx:*` key except those marked *applet
 | `fx:applet:<name>` | hash | the host daemon writes `state`, `state_at`, `started_at`, `restarts`, `crashes`, `token_sha256`, `interface`, `paused`, `hot_add_max`, `detaching`; fields `pid`, `hb_at`, `phase` are *applet-writable* | `state` (`declared` / `starting` / `up` / `stalled` / `stopping` / `exited` / `crashloop` / `config_error`), `state_at` (wall time of the last `state` write), `pid`, `started_at`, `hb_at`, `restarts`, `crashes` (JSON list of times), `interface`, `token_sha256`, `phase` (free text <= 200 characters shown in status), `paused` (`0`/`1`), `hot_add_max`, `detaching` (`1` from the row's removal until the detach ends or is cancelled; absent otherwise; the lease gate refuses `applet.lease.request` with `applet_detaching` while it is set) |
 | `fx:applet:<name>:leases` | set | host | Ids of leases not yet ended. |
 | `fx:applet:<name>:lease:<lease_id>` | hash | host | The lease record (3.3). Kept 7 days after it ends. |
-| `fx:applet:<name>:review:<review_id>` | hash | host | A fix review (3.9): `id`, `job`, `lease`, `message`, `fixer`, `reviewer`, `round`, `state` (`waiting` / `running` / `done`), `verdict`, `reason`, `started_at`, `ended_at`. Kept 7 days after it ends. |
 | `fx:applet:<name>:events` | stream | host | Host -> applet events (3.6), capped at about 1000 entries. Read with `XREAD`. |
 | `fx:applet:<name>:notices` | list | host | The last 50 notices in full (3.7), oldest first: `applet.notify` texts and the notices of `delete` / `human` escalations. Each item is JSON `{id, at, job, text}`; an escalation notice also has `class`. Read with `fleetmux applet notices <name>`. |
 | `fx:applet:<name>:inbox` | list | `fleetmux applet send` (anyone with the socket) | JSON items for the applet from outside callers (3.8). The applet `BLPOP`s and must persist an item before acting on it. |
 | `fx:applet:<name>:params` | hash | *applet-writable*; also `fleetmux applet param` | Hot parameters, JSON-encoded values (2.5). |
 | `fx:applet:<name>:esc:<op id>` | hash | host | An open or answered escalation (3.7): `id`, `applet`, `class`, `what`, `why`, `job`, `options` (JSON), `paths` (JSON), `status` (`awaiting` / `awaiting_human` / `ruled` / `timeout`), `created`, `decision`, `choice`, `by`, `note`. Kept 7 days after it is ruled or timed out. |
-| `fx:agent:<slot>` (*existing*) | hash | host | Gains `applet_lease` (lease id or empty), `applet_lease_holder`, `applet_lease_until`; `applet_review` (review id or empty) while the slot reviews a fix; `applet_added_for` (applet name) on a row the host added for a lease or a review. The slot's `state` keeps its existing values (`idle`, `busy`, `held`, ...). |
+| `fx:agent:<slot>` (*existing*) | hash | host | Gains `applet_lease` (lease id or empty), `applet_lease_holder`, `applet_lease_until`; `applet_added_for` (applet name) on a row the host added for a lease. The slot's `state` keeps its existing values (`idle`, `busy`, `held`, ...). |
 | `fx:result:<id>` (*existing*) | string (JSON) | host | Answer to every op and every message, by its `id`. |
 
-`<lease_id>` is `L-` + 8 lowercase hex digits and a review id is `R-` + 8 lowercase hex digits, both issued by the host. Op and message ids are chosen by the applet and
+`<lease_id>` is `L-` + 8 lowercase hex digits, issued by the host. Op and message ids are chosen by the applet and
 must match the existing request id rule; use `<applet name>.<counter or uuid>`.
 
 ### 3.2 Submitting an op
@@ -306,7 +303,7 @@ Common answer shape at `fx:result:<id>` (*existing* envelope: `id`, `status`, `a
 
 | Field | Type | Required | Default | Allowed | Meaning |
 |---|---|---|---|---|---|
-| `job` | string | yes | | 1-64 characters `[A-Za-z0-9._-]` | The applet's own unit of work. Fix reviews count their rounds per job and never use a slot that held a lease of the same job. |
+| `job` | string | yes | | 1-64 characters `[A-Za-z0-9._-]` | The applet's own unit of work. |
 | `purpose` | string | yes | | <= 2000 characters | The scope in words. Shown to the supervisor and written into the leased worker's rule file. |
 | `ttl_s` | number | no | entry `ttl_s` | 60 ... `ttl_max_s` | Requested term. |
 | `paths` | list of absolute paths | no | `[]` | normalized, absolute | Extra directories the leased worker may write for this lease (the worker's own directory is always writable). |
@@ -327,7 +324,7 @@ A lease request is never refused because every worker is busy. Finding a slot, i
 
 | Step | Condition | The supervisor is told | On a grant |
 |---|---|---|---|
-| 1 | An eligible slot is idle, READY, has nothing queued, is not leased, is not reviewing and is not the supervisor slot of a sub-fleet. | The worker board. | `slot` names it. |
+| 1 | An eligible slot is idle, READY, has nothing queued, is not leased and is not the supervisor slot of a sub-fleet. | The worker board. | `slot` names it. |
 | 2 | An eligible slot is asleep (`reclaimed` by the idle reclaim, `worker_idle_reclaim_min`). | The board lists it as asleep. | `slot` names it; the host wakes it. |
 | 3 | Neither; lease-added rows of this applet < `hot_add_max`; the fleet limits (`child_workers_max`, `max_agents_total`, design.md section 19) allow one more worker. | "No worker is free; a grant adds worker `<name>`." | No `slot` in the answer. The host daemon writes the row `- {name: <base>-<n>, role: <template role>}` into the host roster (and the night roster) and starts it as any hot-added worker (design.md section 16). `<base>` and the role come from `hot_add_like`; `<n>` is the next number never used for that base in this run. The row sets no CLI and no model: the worker runs the host's default worker CLI and the first usable model of the default worker chain (`fleet.yaml#discovery.worker`). |
 | 4 | None of the above. | Nothing; no turn is spent. | `rejected`, `by: program`, `worker_limit`, `retry_after_s`. |
@@ -364,7 +361,6 @@ Lease record (`fx:applet:<name>:lease:<id>`; all values strings, JSON where note
 | `granted_by` | Label of the supervisor generation that decided. |
 | `messages`, `last_message`, `last_status` | Count, id and result status of messages sent under the lease. |
 | `end_reason` | For `revoked`: `supervisor`, `operator`, `host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`, `prepare_failed`. For `denied`: the rejection reason, or the cause when a request still waiting for the supervisor is ended (table below). |
-| `last_review` | JSON `{id, verdict, round, message}` of the last fix review under this lease; empty when none. |
 | `outcome` | JSON the applet passed at release. |
 
 A request still waiting for the supervisor (`requested`) has no term yet: only `decision_wait_s` limits the wait.
@@ -405,9 +401,6 @@ a shorter `ttl_s`) or denies. On grant: `expires_at` = time of the decision + gr
 answer `{"status": "ok", "lease": {"id", "expires_at", "renewals"}}` and event `lease.renewed`. Denied or
 unanswered: the lease runs to its current `expires_at` (plus `renew_grace_s` while the renewal is still waiting).
 
-While a fix review of this lease runs (3.9) the lease does not expire; when the review ends, `expires_at` is at
-least `renew_margin_s` away.
-
 ```json
 {"id": "applet-rollout-1.60", "op": "applet.lease.release", "applet": "applet-rollout-1", "token": "...", "v": 1,
  "lease": "L-3fa9c210", "outcome": {"result": "fixed", "commit": "9f2c1ab"}, "force": false}
@@ -439,8 +432,8 @@ have empty `dispatch`, `answer` and `skip`, like one carrying `escalations`.
 | nothing (supervisor's own initiative) | a lease id | `revoke` | `note` (required). |
 | nothing (supervisor's own initiative) | an applet name | `pause` / `resume` | `note`. A paused applet's lease requests are refused with `applet_paused`; the applet receives `control`. |
 
-A supervisor **dispatch to a leased or reviewing slot** is refused through the usual correction path, as is a
-`fresh` for it. The supervisor is not asked about fix reviews. The pi supervisor's service decision schema
+A supervisor **dispatch to a leased slot** is refused through the usual correction path, as is a
+`fresh` for it. The pi supervisor's service decision schema
 allows the optional `applet` key in the same way it allows `subfleet` (design.md section 29).
 
 ### 3.6 Events to the applet: `fx:applet:<name>:events`
@@ -454,10 +447,9 @@ Each stream entry has one field `data` holding a JSON object with `type`, `at` (
 | `lease.renewed` | `lease`, `expires_at`, `renewals` | A renewal was granted. |
 | `lease.renew_denied` | `lease`, `by`, `reason`, `note` | A renewal was denied or timed out. |
 | `lease.ended` | `lease`, `state` (`released` / `expired` / `revoked`), `end_reason`, `note` | The lease is over. After this, messages for it are refused. |
-| `review.started` | `lease`, `id` (the message), `review`, `round` | The worker replied `ok` to a `fix` message; the result is withheld until the review ends. |
 | `worker.rotated` | `lease`, `slot`, `from`, `to` (labels), `why` (`handoff` / `midturn` / `frozen` / `link` / `wall`) | The leased slot started a new generation. The lease continues. |
 | `worker.model_changed` | `lease`, `slot`, `cli`, `model` | The slot moved down its model chain (design.md section 23). The lease continues. |
-| `message.result` | `lease`, `id`, `status`, `review` (verdict, when the message carried `fix`) | A message of this lease got its final result (also at `fx:result:<id>`). |
+| `message.result` | `lease`, `id`, `status` | A message of this lease got its final result (also at `fx:result:<id>`). |
 | `escalation.ruled` | `id`, `decision`, `choice` (index into `options`, or null), `by` (`supervisor` / `root` / `human`), `note` | An escalation was answered. |
 | `control` | `action` (`pause` / `resume`), `by`, `note` | The supervisor or an operator paused or resumed the applet. |
 | `host.draining` | `reason` (`stop`, `down`, `rotate`, `detach`), `deadline_at` (awake seconds, as the lease times) | The host is going down or the applet is being detached. Checkpoint, release leases, expect SIGTERM. |
@@ -536,67 +528,34 @@ fields:
 | `to` | string | yes | | Must be the lease's `slot`. |
 | `lease` | string | yes | | A `granted` or `active` lease of this applet. |
 | `applet`, `token` | string | yes | | As in ops. |
-| `fix` | map | no | none | Marks this message as the one whose reply **hands back a fix**. With it, an `ok` reply is reviewed by the host before the result is published (3.9). Without it the reply is plain work or information and is never reviewed. Keys: `dir` (required; absolute path inside the lease's `paths` or the worker's directory), `base` (required; the revision the change starts from), `head` (a revision, or `null` = the state of `dir` when the worker replies), `files` (optional list, relative to `dir`, to narrow the scope; absent or `[]` = not narrowed, the whole change in `dir` is reviewed). |
+| `fix` | map | no | none | Marks this message as the one whose reply **hands back a fix**. Its shape is checked; the reply is published as it comes, never reviewed (3.9). Keys: `dir` (required; absolute path inside the lease's `paths` or the worker's directory), `base` (required; the revision the change starts from), `head` (a revision, or `null` = the state of `dir` when the worker replies), `files` (optional list, relative to `dir`, to narrow the scope; absent or `[]` = not narrowed, the whole change in `dir`). |
 
 Refusals (`rejected`, `by: program`): `bad_token`, `lease_not_active` (ended or unknown), `wrong_slot`,
-`host_paused`, `invalid` (a `fix` whose `dir` is outside the lease), `review_cap` (a `fix` for a job that used up
-`review.max_rounds`). A service request with `to` naming a leased slot that carries no matching `lease` is refused with
+`host_paused`, `invalid` (a `fix` whose `dir` is outside the lease). A service request with `to` naming a leased slot that carries no matching `lease` is refused with
 `slot_leased`, whoever sends it.
 
 Delivery order is first in, first out per slot; one message runs at a time. All messages of one lease go to the
 same session, so the worker keeps its context between them (clean-session-per-result is suspended for a leased
 slot and applied when the lease ends).
 
-Result at `fx:result:<id>` (*existing* envelope, plus `lease`, and `review` for a `fix` message, 3.9):
+Result at `fx:result:<id>` (*existing* envelope, plus `lease`):
 
 | `status` | Meaning | What the applet should do |
 |---|---|---|
-| `ok` | `result` holds the worker's JSON with the required keys. For a `fix` message, `review` holds the verdict. | Verify by its own checks; a worker saying "fixed" proves nothing. Use a fix only when its `review.verdict` is `pass`. |
+| `ok` | `result` holds the worker's JSON with the required keys. | Verify by its own checks; a worker saying "fixed" proves nothing. |
 | `blocked` | The worker says it cannot proceed without a decision (`result.blocked` = one sentence; a split proposal comes as `result.proposal`). Not sent to the supervisor automatically. | Escalate (`applet.escalate`) or release. Never answer the question yourself by widening scope. |
 | `invalid` | The reply did not satisfy `reply` after the correction rounds. | Resend or release. |
 | `timeout` | `timeout_s` passed. The slot is held (design.md section 43) and the lease is revoked (`slot_held`). | Request a new lease. |
 | `stalled` | The watchdog judged the turn dead (design.md section 24). If the slot could be rotated the lease continues (`worker.rotated` follows); if the stop could not be confirmed the slot is held and the lease is revoked (`slot_held`, `lease.ended` follows). | Wait for the event that follows; resend under the same lease, or request a new one. |
-| `lease_ended` | The lease ended while this message was queued or running. (A message whose worker already replied is not affected: its review finishes and the result is published.) | Request a new lease if work remains. |
+| `lease_ended` | The lease ended while this message was queued or running. (A message whose worker already replied is not affected: its result is already published.) | Request a new lease if work remains. |
 
-### 3.9 Fix review (run by the host)
+### 3.9 Fix review (removed)
 
-The applet's part is the `fix` field. Everything else is done by the host daemon; no supervisor turn is spent and
-no op exists for it.
-
-| Step | What the host does |
-|---|---|
-| 1 | The worker replies `ok` to a `fix` message. The result is withheld; event `review.started`; the lease stops expiring. |
-| 2 | Pick a reviewer: any worker of the host that is not the fixer's slot and never held a lease of this applet with the same `job`. Free slot first, else an asleep one, else a new row (the order and limits of 3.3; at the limit the review waits for a slot). A different slot is required; a different model is not. Round 2 and later prefer the previous reviewer. |
-| 3 | Clean session in the reviewer slot; mark it `applet_review`. |
-| 4 | Send one program-written message: `[Fix review R-5b1e22c0, applet-rollout-1, job batch-0007, round 1]`, the scope (`dir`, `base`, `head`, `files`), the open findings of the previous round, "follow REVIEWER.md in your directory", and the reply shape. The reviewer gets no write grant. |
-| 5 | Read the reply: `verdict` (`PASS` / `FAIL`) and `findings`. PASS = zero P0 and zero P1; a PASS that lists a P0 or P1 counts as FAIL. |
-| 6 | Publish the withheld result with `review` attached; clear `applet_review`; clean session for the reviewer slot; the lease's end is moved to at least `renew_margin_s` from now. |
-
-```json
-{"id": "applet-rollout-1.47", "status": "ok", "lease": "L-3fa9c210",
- "result": {"status": "done", "summary": "resolved the conflict in src/config.py", "commit": "9f2c1ab"},
- "review": {"id": "R-5b1e22c0", "verdict": "fail", "round": 1, "reviewer": "fix-2.1", "capped": false, "reason": null,
-            "findings": [{"level": "P1", "file": "src/config.py", "line": 42,
-                          "what": "after the merge load() ignores the override file, so a deployed override is lost",
-                          "repro": "python3 -m pytest tests/test_config.py::test_override -q"}],
-            "report": "/abs/path/to/review-R-5b1e22c0.md"}}
-```
-
-| `review` key | Type | Meaning |
-|---|---|---|
-| `id` | string | Review id. |
-| `verdict` | `pass` / `fail` / `none` | `pass`: the fix may be used (after the applet's own check). `fail`: see `findings`. `none`: no verdict could be had; see `reason`. |
-| `round` | int | 1 for the first review of the job; +1 per FAIL. |
-| `reviewer` | string | Label of the generation that reviewed. Information only. |
-| `findings` | list | For `fail`: objects with `level` (`P0` / `P1`), `file`, `line`, `what`, `repro` (a command or test id). Empty for `pass`. |
-| `report` | string | Path of the reviewer's report file, for people. |
-| `capped` | bool | `true` on the FAIL that used up `review.max_rounds`. Further `fix` messages of the job are refused `review_cap`. |
-| `reason` | string or null | For `none`: `reviewer_timeout`, `reviewer_invalid`, `no_reviewer` (no slot within `review.timeout_s`). Not a round; the applet may hand back again. |
-
-The message's `timeout_s` covers the leased worker's turn only; the review is bounded by `review.timeout_s`.
-
-What the applet does with it: `pass` -> go on; `fail` -> send the findings to the fixer under the same lease, run
-its own check, send a new `fix` message; `capped` or repeated `none` -> stop the job (bounce it or `applet.escalate`).
+The host no longer reviews a handed-back fix. A reply to a `fix` message is published like any other reply, at once
+and without a `review` key; `Reply.review` in the SDK is always `None`. A host upgraded while an older release still
+held a fix reply for review publishes that reply once, as the worker gave it, on its next applet tick (audit
+`applet.review.drained`). What the applet does with a fix is its own check; the fleet's merge read happens where the
+work is merged.
 
 ## 4. What the leased worker sees
 
@@ -666,9 +625,8 @@ config.json. Output is one JSON line; exit code
 | `fleetmux applet clear-state <name> [--yes]` | Delete the applet's state directory (`FLEETMUX_APPLET_STATE`). Without `--yes` it is a dry run: it lists the files (`files`), removes nothing (`removed: []`) and exits `0`; with `--yes` it deletes them and lists what it removed. A non-zero exit means a real refusal or error, never a dry run. `--yes` is refused (exit `2`) while a live process owns the directory (`host.json`); the dry run still lists and says so in `note`. Works while the host is down. Nothing ever runs it automatically. |
 | `fleetmux applet set <name> hot_add_max <n>` | Change the worker ceiling while the fleet runs; written back to the roster row. |
 | `fleetmux applet notices <name> [--last <n>]` | The full text of the kept notices (3.7), oldest first: `applet.notify` texts and `delete` / `human` escalation notices, each with `id`, `at`, `job`, `text` (an escalation notice also `class`). Use it to read a notice that the audit line or the one-line card cuts short. |
-| `fleetmux applet reviews [--all]` | Running (or all kept) fix reviews: id, job, lease, fixer, reviewer, round, verdict. |
 | `fleetmux applet answer <op id> approve\|reject [--choice <n>] [--note <text>]` | The human owner's answer to a `delete` or `human` escalation. When the escalation has `options`, `approve` needs `--choice <n>`; the notice card shows the command with the option list. Agents' rule files forbid running it. |
-| `fleetmux status` (*existing*) | The tree gains, per fleet that hosts applets, `applets: [{name, state, phase, leases}]`; each slot gains `applet_lease: {id, holder, until}`, `applet_review` and `applet_added_for` when set. |
+| `fleetmux status` (*existing*) | The tree gains, per fleet that hosts applets, `applets: [{name, state, phase, leases}]`; each slot gains `applet_lease: {id, holder, until}` and `applet_added_for` when set. |
 | `fleetmux logs` (*existing* reader) | Shows the audit events of section 6 with the rest of the host's audit. |
 
 ## 6. Audit events
@@ -679,9 +637,9 @@ config.json. Output is one JSON line; exit code
 | `applet.stalled` / `applet.restarted` / `applet.crashloop` / `applet.config_error` | `applet`, `reason`, `crashes`, `window_s` |
 | `applet.lease.requested` / `.denied` / `.granted` / `.active` | `applet`, `lease`, `job`, `slot`, `added`, `ttl_s`, `by`, `reason` |
 | `applet.lease.renew_requested` / `.renewed` / `.renew_denied` | `applet`, `lease`, `need_s`, `ttl_s`, `renewals`, `by` |
-| `applet.lease.released` / `.expired` / `.revoked` | `applet`, `lease`, `slot`, `end_reason`, `held_s`, `messages`, `last_review` |
-| `applet.worker_added` | `applet`, `slot`, `like`, `for` (lease or review id), `count`, `hot_add_max` |
-| `applet.review.started` / `.passed` / `.failed` / `.unavailable` | `applet`, `review`, `job`, `lease`, `message`, `fixer`, `reviewer`, `round`, `findings` (count), `capped`, `reason` |
+| `applet.lease.released` / `.expired` / `.revoked` | `applet`, `lease`, `slot`, `end_reason`, `held_s`, `messages` |
+| `applet.worker_added` | `applet`, `slot`, `like`, `for` (lease id), `count`, `hot_add_max` |
+| `applet.review.drained` | `applet`, `review`, `lease`, `message` (a fix reply an older host held for review, published once after the upgrade) |
 | `applet.message.sent` / `applet.message.result` | `applet`, `lease`, `id`, `status` |
 | `applet.escalated` / `applet.ruled` | `applet`, `id`, `class`, `decision`, `by` |
 | `applet.notified` / `applet.param_changed` / `applet.paused` / `applet.resumed` | `applet`, ... (`applet.notified`: `id`, `text` cut to 300 characters) |
@@ -705,7 +663,7 @@ class Applet:
     stopping: "threading.Event"    # set on SIGTERM or host.draining (the heartbeat thread watches the
                                    # events stream; seen within heartbeat_s, events() not needed)
     waits: "dict[str, float]"      # local bound of request_lease, renew, send, release, notify without wait_s
-                                   # (FLEETMUX_APPLET_WAITS; defaults 660, 660, 9360, 60, 60)
+                                   # (FLEETMUX_APPLET_WAITS; defaults 660, 660, 7560, 60, 60)
 
     @classmethod
     def from_env(cls, env: "dict | None" = None, *, start: bool = True) -> "Applet":
@@ -764,7 +722,7 @@ class Applet:
 
     def message_result(self, msg_id: str, *, wait_s: "float | None" = None) -> "Reply | None":
         """The result of a message sent earlier with this id (`Lease.send(msg_id=...)`). Read it back after a
-        restart instead of sending the message again (a resent `fix` costs another review round). Waits at most
+        restart instead of sending the message again. Waits at most
         `wait_s` (None: until the result comes); None when the host has no result by then. Raises as `send`."""
 
     def notify(self, text: str, *, job: "str | None" = None, wait_s: "float | None" = None) -> None:
@@ -805,12 +763,12 @@ class Lease:
              replay: bool = True, fix: "dict | None" = None, msg_id: "str | None" = None,
              wait_s: "float | None" = None) -> "Reply":
         """Send one message to the leased worker and wait for its result.
-        fix={"dir", "base", "head", "files"} marks the message that hands back a fix: the host then has
-        another slot review it and the reply carries .review. Raises LeaseEnded when the lease is over,
+        fix={"dir", "base", "head", "files"} marks the message that hands back a fix (shape-checked, not
+        reviewed: the reply comes straight back). Raises LeaseEnded when the lease is over,
         Rejected when the program refuses the message or the applet is stopping. `msg_id`: the message id
         (default: a new one; the rule of 3.1); save it before the call to read the result back after a restart
         (`Applet.message_result`). The Reply carries it as `.id`. `wait_s`: local bound (default
-        `waits['send']`; keep it above `timeout_s`, plus the review's `timeout_s` for a `fix` message); past it
+        `waits['send']`; keep it above `timeout_s`); past it
         Rejected `no_answer`: the message may still run, read it back with `message_result`."""
 
     def renew(self, *, need_s: float, progress: str, why: "str | None" = None,
@@ -837,16 +795,7 @@ class Reply:
     result: "dict | None"  # the worker's JSON for ok / blocked
     worker: str            # label of the generation that answered, e.g. fix-1.2
     elapsed_s: float
-    review: "Review | None"  # set when the message carried fix= and the worker replied ok
-
-
-class Review:
-    verdict: str           # pass / fail / none
-    round: int
-    findings: "list[dict]" # level, file, line, what, repro
-    capped: bool           # True: the job used up review.max_rounds
-    reason: "str | None"   # for none: reviewer_timeout / reviewer_invalid / no_reviewer
-    report: "str | None"
+    review: None           # always None: the host no longer reviews fixes (kept for older callers)
 
 
 class Ruling:
@@ -891,7 +840,7 @@ class Rejected(Exception): ...        # any other refused op: .by .reason .note
 ## 8. Minimal applet skeleton
 
 ```python
-"""applet-example-1: when a job arrives, have a leased worker do it and hand the fix back; the fleet reviews it."""
+"""applet-example-1: when a job arrives, have a leased worker do it and hand the fix back."""
 import json
 from fleetmux.applet import Applet, LeaseDenied, LeaseEnded
 
@@ -923,17 +872,10 @@ def handle(app: Applet, job: dict) -> bool:
                 if reply.status != "ok" or not check(job):        # the applet's own verdict comes first
                     note = "The check still fails. Payload has the details."
                     continue
-                back = lease.send({"job": job}, instruction="State what you changed, file by file.",
-                                  required=["summary"], fix={"dir": job["dir"], "base": job["base"], "head": None})
-                review = back.review
-                if review and review.verdict == "pass":
-                    app.audit("job.done", job=job["id"], review_round=review.round)
-                    return True
-                if review is None or review.capped:
-                    break
-                if review.verdict == "fail":                      # next round: findings go to the same fixer
-                    job = dict(job, findings=review.findings)
-                    note = "A reviewer found the problems listed in payload.findings. Fix them."
+                lease.send({"job": job}, instruction="State what you changed, file by file.",
+                           required=["summary"], fix={"dir": job["dir"], "base": job["base"], "head": None})
+                app.audit("job.done", job=job["id"])
+                return True
             app.audit("job.bounced", job=job["id"])
             return True
     except LeaseDenied as denied:
@@ -977,7 +919,7 @@ if __name__ == "__main__":
 
 `bad_token`, `bad_version`, `applet_not_up`, `applet_paused`, `applet_detaching`, `host_paused`, `host_draining`,
 `max_active`, `max_renewals`, `renew_pending`, `worker_limit` (the worker ceiling or a fleet limit is reached; never
-sent only because workers are busy), `review_cap`, `invalid`, `lease_not_active`, `wrong_slot`, `slot_leased`,
+sent only because workers are busy), `invalid`, `lease_not_active`, `wrong_slot`, `slot_leased`,
 `message_in_flight`, `rate_limited`, `duplicate`, `no_decision` (supervisor did not answer in time),
 `supervisor` (the supervisor's own refusal, or with `by: operator` an operator's revoke of a request still waiting;
 read `note`).
@@ -1006,5 +948,5 @@ The SDK adds two local reasons, both with `by: program`:
 | Additive within a version | New optional op fields, new event types, new record fields, new audit events, new result statuses and new rejection reasons may appear. An applet must ignore unknown event types and fields and treat an unknown status or reason as a refusal. |
 | Never within a version | Renaming or removing a key, field, op, exit code meaning or environment variable; changing a default in section 1; making an optional field required. |
 | A new version | The host accepts both the old and the new version for at least one release line; an entry's `interface:` says which one the applet speaks. |
-| Not part of the contract | The internal bus stream and Lua scripts, the layout of `config.json`, the wording of supervisor, worker and reviewer prompts (only the first-line markers `[Applet lease ...`, `[Fix review ...` and `## Applet lease ...` are stable), terminal tab placement, which slot reviews. |
+| Not part of the contract | The internal bus stream and Lua scripts, the layout of `config.json`, the wording of supervisor and worker prompts (only the first-line markers `[Applet lease ...` and `## Applet lease ...` are stable), terminal tab placement. |
 | Changes to this page | Follow contracts.md: add, do not change; a change of meaning needs a transition period and the commit's first line starts with `contract`. |

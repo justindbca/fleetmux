@@ -142,8 +142,8 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
   the task closes only when every declared output exists, is long enough and contains the required text, and three
   false `COMPLETED` claims block it. Free endpoints are flaky and capped: rate limits and usage walls go through the
   wall table, which moves the slot down its model chain or pauses the run resumably; `--max-busy` stays under the free tier's
-  concurrency; workers are added or removed by editing the roster YAML while the fleet runs. For a quality pass, give
-  one roster row a stronger `pi_model:` and use it as the reviewer.
+  concurrency; workers are added or removed by editing the roster YAML while the fleet runs. For the hardest pieces, give
+  one roster row a stronger `pi_model:` and dispatch those pieces to it.
 - **Scheduled research report** (`scheduled`). The caller's own scheduler starts a fleet at fixed times of
   the business day (with `clock_gate` on, the fleet itself refuses to launch on a closed market day): a supervisor plus two Claude Code workers that carry research skills and a web-search MCP
   through `--worker-kit`. The goal declares the report file and the sections it must contain; the daemon
@@ -153,13 +153,12 @@ Every `start` names a `--lifecycle`; it decides what "done" means and how the ru
   prompt per role through `--roles`). The daemon checks each reply against `reply.required` / `reply.allowed`,
   and the caller holds the fleet outside its working hours with `pause` / `resume`. Larger work goes in with
   `fleetmux task` as a job that runs in its own task-mode sub-fleet. See *Service mode*.
-- **Feature development with independent review** (`dev_task`). The supervisor splits the feature, workers build
-  it, and separate reviewer workers judge it; review is capped at three rounds and leftover P0 / P1 go to you
-  instead of a fourth round. The task is done only when the delivery gate's `test_cmd` has passed and the work
-  is merged and handed to the release queue. Interface contracts (`"contracts": true`) freeze shared interfaces before work starts.
+- **Feature development** (`dev_task`). The supervisor splits the feature and workers build it; the supervisor
+  reads the whole diff once when it merges, fixes plain errors and refactors lightly. No review round and no
+  verdict file: the task is done when the delivery gate's `test_cmd` has passed and the work is merged and
+  handed to the release queue. Interface contracts (`"contracts": true`) freeze shared interfaces before work starts.
 - **Multi-phase program** (`program`). Each phase runs as its own child `dev_task` fleet; a ledger records
-  the phases, and the program ends when the last phase is merged and reviewed.
-- **Review until it passes** (`review_loop`). Review → fix → review, at most three rounds, then a report.
+  the phases, and the program ends when the last phase is merged.
 - **A task that outgrows one worker** (development). When a worker keeps a flowing workflow busy past a
   configurable time, it is asked to propose a split; on the supervisor's approval (with chosen models) the worker
   hands off and its successor becomes the supervisor of a child fleet, shown live in the parent's worker area.
@@ -353,7 +352,7 @@ New starts require Redis v2 and an explicit development opt-in. Without `--super
 takes the default pair from `fleetmux/config/fleet.yaml#cli_pairs`: a **Pi supervisor on `openai-codex/gpt-6-astra` (thinking
 high) with official Claude Code workers**. That table lists every supported pair and its status
 (see "Redis v2 development runtime"); a pair it does not list is refused. `start` also requires `--lifecycle <mode>`
-(`service`, `dev_task`, `program`, `scheduled`, `review_loop`, `smoke`; see `fleetmux/config/fleet.yaml#lifecycle_modes`); an
+(`service`, `dev_task`, `program`, `scheduled`, `smoke`; see `fleetmux/config/fleet.yaml#lifecycle_modes`); an
 `unverified` pair starts only with `--lifecycle smoke`.
 The Codex-specific setup and launch examples below are retained only as legacy v1 reference.
 
@@ -818,24 +817,24 @@ echo '{"goal": "Survey the five vendor APIs and write a comparison report",
 fleetmux status                         # "jobs": id, state, slot, subfleet, waiting
 fleetmux result job-0123456789 --wait 60
 
-# a development fleet as one job: its roster, roles, delivery gate and review step
+# a development fleet as one job: its roster, roles and delivery gate
 echo '{"goal": "Implement the export command", "name": "export-cmd", "lifecycle": "dev_task",
        "roster": "/abs/path/dev-roster.yaml", "roles": "/abs/path/roles",
        "deliver": {"repo": "/abs/path/repo", "feature_branch": "feat/export", "deploy_branch": "main",
-                   "test_cmd": ["pytest", "-q"], "queue": "/abs/path/queue.json", "review_file": "review.json"}}' \
+                   "test_cmd": ["pytest", "-q"], "queue": "/abs/path/queue.json"}}' \
   | fleetmux task -
 ```
 
 Rules:
 
 1. **Use the job keys only.** `goal` (required), `hours`, `artifacts`, `budget`, `lifecycle`, `workers`,
-   `supervisor_profile`, `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `review_file`, `tree`, `by`. Other
-   keys are refused. `tree` is the absolute path of the job's tree file (check it first with
+   `supervisor_profile`, `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `tree`, `by`. Other
+   keys are refused (`review_file` of an older spec is accepted and ignored). `tree` is the absolute path of the job's tree file (check it first with
    `fleetmux tree check <file>`); `by` names who wrote it (default `submitter`). With the decompose switch on, a
    `lifecycle: dev_task` job without `tree` is refused (docs/design.md section 62).
 2. **Run a development fleet as a job.** `roster` (absolute path) gives the sub-fleet its workers, role files and
    cards. `roles` (absolute directory) adds `<agent>.md` rules, as `start --roles` does. `name` titles the sub-fleet.
-   With `lifecycle: dev_task`, `deliver` is required and the sub-fleet runs the same review step and delivery gate as
+   With `lifecycle: dev_task`, `deliver` is required and the sub-fleet runs the same delivery gate as
    a root dev_task run; the gate record comes back in the result as `delivery`.
 3. **Set defaults in one block.** `fleet.yaml#job_subfleet` (`workers: 2`, `supervisor_profile: null`,
    `worker_profiles: []`, `hours: 4`); override it in `~/.fleetmux/fleet.yaml`. A job's own keys win.
@@ -1304,7 +1303,7 @@ the verb, confines `js` files to the run directory, paces page actions (`--chrom
 | `codex_queue.py`, `opencode_adapter.py`, `pi_extension_v2.ts` | CLI-specific delivery adapters |
 | `control_view.py`, `history.py`, `presentation.py` | Read-only control page and the history of retired sessions |
 | `lifecycle.py` | Lifecycle modes: what "done" means for a run |
-| `lifecycle_deliver.py`, `lifecycle_close.py` | dev_task delivery gate (review / tests / merge / enqueue) and run closing |
+| `lifecycle_deliver.py`, `lifecycle_close.py` | dev_task delivery gate (tests / merge / enqueue) and run closing |
 | `session_board.py` | Cross-session board: independent Claude Code / pi sessions record what they touch and get one collision notice per side when two edit the same repository file or merge into the same branch — first come keeps going, the later one waits for the fleet supervisor's release (`session_board.py list` / `note`); hook `session_board.py hook claude`, pi `extensions/session-board.ts`; [contracts §7](docs/contracts.md) |
 
 Every `dev_task` gate writes its `test_cmd` run to `<run>/gate/<task_id>-tests.log`: a header with the

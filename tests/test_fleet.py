@@ -293,17 +293,14 @@ def test_auto_agents_stores_plan_and_keeps_profile_ids_out_of_slot_routing(fx):
     assert task['id'] == task_id and task['auto_agents'] == '1'
     assert json.loads(task['artifacts']) == artifacts
     assert [(item['id'], item['agent_id']) for item in plan['subtasks']] == [
-        ('implementation', 'flashnext-coder'),
-        ('review', 'claude-reviewer'),
+        ('implementation', 'flashnext-coder'),  # no review step is appended
     ]
-    assert plan['subtasks'][1]['depends_on'] == ['implementation']
     assert [(item['subtask_id'], item['worker'], item['agent_id']) for item in assignments] == [
         ('implementation', 'worker-1', 'flashnext-coder'),
-        ('review', 'worker-1', 'claude-reviewer'),
     ]
 
     queued = fx.r.l['fx:inbox:supervisor'][-1]
-    assert 'flashnext-coder' in queued and 'claude-reviewer' in queued
+    assert 'flashnext-coder' in queued and 'claude-reviewer' not in queued
     assert 'profile ids are recommendations, not worker names' in queued
     assert 'Profile assignments to stable worker slots:' in queued
     assert 'Use each assignment worker value for dispatch.to' in queued
@@ -347,8 +344,8 @@ def test_unique_worker_assignment_adds_advisory_without_explicit_marker(fx):
     }])))
 
     worker_message = fx.r.l['fx:inbox:worker-1'][0]
-    assert worker_message.startswith('[Recommended agent profile: claude-reviewer]\n')
-    assert 'Capabilities: code-review, safety-audit, planning' in worker_message
+    assert worker_message.startswith('[Recommended agent profile: claude-opus]\n')  # a review asked for: a job
+    assert 'Capabilities: code-edit, test-fix, planning, code-review, safety-audit' in worker_message
 
 
 @pytest.mark.parametrize('bad_auto_agents', ['true', 1, 0, None, []])

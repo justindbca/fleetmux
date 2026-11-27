@@ -2,7 +2,7 @@
 
 Counting rules (docs/design.md §12 模型特点卡; interface for the night switch and the brake):
 - The unit is the *model*: a profile card counts under its ``model_card`` (claude-coder and
-  claude-reviewer both count as ``opus``); a card without ``model_card`` counts under its own id.
+  claude-opus both count as ``opus``); a card without ``model_card`` counts under its own id.
 - One slot counts once, whatever its generation: a handoff successor or a profile switch inside
   the same slot never doubles the count (same-slot reuse is free).
 - A slot runs the card frozen in its ``runtime_launch`` (set before the successor is spawned, so a

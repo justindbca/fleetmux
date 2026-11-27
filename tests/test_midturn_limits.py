@@ -3,23 +3,26 @@ import json
 import pytest
 from fleetmux import midturn, roster
 
+# The policy values these tests exercise, equal to the shipped fleet.yaml#handoff; decide() has no built-in ones.
+POLICY = {'midturn_ratio': .8, 'midturn_retry': 300, 'midturn_max_splits': 3}
+
 
 def test_defaults_never_clamp_the_200k_window():
     settings, sources = midturn.resolve_settings('pi', 'deepseek', {'handoff_timeout': 900})
-    assert settings == {'midturn_ratio': .8, 'midturn_retry': 300, 'midturn_max_splits': 3}
-    assert sources['midturn_ratio'] == 'default'
-    assert midturn.decide(159999, 200000) == 'none'
-    assert midturn.decide(160000, 200000) == 'steer'
+    assert settings == POLICY
+    assert sources['midturn_ratio'] == 'fleet.yaml#handoff'
+    assert midturn.decide(159999, 200000, **settings) == 'none'
+    assert midturn.decide(160000, 200000, **settings) == 'steer'
 
 
 @pytest.mark.parametrize('cli,window', [('pi', 200000), ('claude', 1000000), ('codex', 400000), ('opencode', 200000)])
 def test_all_clis_use_same_ratio_and_one_retry(cli, window):
     settings, _ = midturn.resolve_settings(cli, '', {})
     assert midturn.decide(int(window * .8), window, **settings) == 'steer'
-    assert midturn.decide(None, window, ordered=True, elapsed=299) == 'none'
-    assert midturn.decide(1, window, ordered=True, elapsed=300) == 'retry'
-    assert midturn.decide(1, window, ordered=True, elapsed=300, tries=2) == 'kill'
-    assert midturn.decide(window, window, ordered=True, elapsed=999, guarded=True) == 'none'
+    assert midturn.decide(None, window, ordered=True, elapsed=299, **settings) == 'none'
+    assert midturn.decide(1, window, ordered=True, elapsed=300, **settings) == 'retry'
+    assert midturn.decide(1, window, ordered=True, elapsed=300, tries=2, **settings) == 'kill'
+    assert midturn.decide(window, window, ordered=True, elapsed=999, guarded=True, **settings) == 'none'
 
 
 def test_exact_model_roster_overrides_then_cli_config_and_default():
@@ -46,12 +49,12 @@ def test_bad_split_cap_rejected(bad):
 
 
 def test_unknown_idle_cap_and_successor_ready():
-    assert midturn.decide(None, 200000) == 'none'
-    assert midturn.decide(160000, 0) == 'none'
-    assert midturn.decide(160000, 200000, busy=False) == 'none'
-    assert midturn.decide(160000, 200000, midturn_splits=2) == 'steer'
-    assert midturn.decide(160000, 200000, midturn_splits=3) == 'blocked'
-    assert midturn.decide(160000, 200000, busy=False, ready=True) == 'blocked'
+    assert midturn.decide(None, 200000, **POLICY) == 'none'
+    assert midturn.decide(160000, 0, **POLICY) == 'none'
+    assert midturn.decide(160000, 200000, busy=False, **POLICY) == 'none'
+    assert midturn.decide(160000, 200000, midturn_splits=2, **POLICY) == 'steer'
+    assert midturn.decide(160000, 200000, midturn_splits=3, **POLICY) == 'blocked'
+    assert midturn.decide(160000, 200000, busy=False, ready=True, **POLICY) == 'blocked'
 
 
 def test_prompt_and_continuation_preserve_identity_and_original_text():
@@ -191,11 +194,11 @@ def test_pause_at_zero_redis_strings_and_clock_backwards():
 
 def test_message_deadline_pause_resume_and_no_double_extension():
     message = {'deadline_at': '200000', 'midturn_splits': '2', 'replay': '1'}
-    paused = midturn.pause_message(message, 150000)
+    paused = midturn.pause_message(message, 150000, midturn_retry=300)
     assert paused['deadline_at'] == 980000  # original + (2 * 300 + 180) seconds
     assert paused['deadline_remaining_ms'] == 50000
     assert paused['clock_paused_at'] == 150
-    assert midturn.pause_message(paused, 180000) == paused
+    assert midturn.pause_message(paused, 180000, midturn_retry=300) == paused
     resumed = midturn.resume_message(paused, 500000)
     assert resumed['deadline_at'] == 550000
     assert resumed['clock_paused_ms'] == 350000
@@ -208,7 +211,7 @@ def test_message_deadline_pause_resume_and_no_double_extension():
 @pytest.mark.parametrize('at', [200000, 200001])
 def test_already_expired_message_cannot_be_paused(at):
     with pytest.raises(ValueError, match='already expired'):
-        midturn.pause_message({'deadline_at': '200000'}, at)
+        midturn.pause_message({'deadline_at': '200000'}, at, midturn_retry=300)
 
 
 @pytest.mark.parametrize('value', ['nan', 'inf', -1, True])

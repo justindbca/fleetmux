@@ -30,8 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from test_lifecycle_close import (as_task, complete, deliver_spec, notes, repo, table,  # noqa: F401
-                                  write_verdict)
+from test_lifecycle_close import as_task, complete, deliver_spec, notes, repo, table  # noqa: F401
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fx fixture dependency)
 from test_runtime_v2 import fx  # noqa: F401
 
@@ -44,10 +43,8 @@ LOG_TAIL = 19 * MiB        # ... and the last 19 MiB, with a marker in between.
 SLACK = 64 * 1024          # header + truncation marker overhead
 
 
-def _verdict(ws):
-    (ws / 'reviewer').mkdir(parents=True, exist_ok=True)
-    (ws / 'reviewer' / 'verdict.json').write_text(
-        json.dumps({'round': 1, 'verdict': 'PASS', 'reviewer': 'opus', 'issues': []}))
+def _workspace(ws):
+    ws.mkdir(parents=True, exist_ok=True)
 
 
 def _log_path(base, task_id):
@@ -60,7 +57,7 @@ def _gate(tmp_path, repo, code, *, task_id='t1', run=None, timeout=None, ws_name
     if timeout is not None:
         spec['test_timeout_s'] = timeout
     ws = tmp_path / ws_name
-    _verdict(ws)
+    _workspace(ws)
     kwargs = {'task_id': task_id}
     if run is not None:
         kwargs['run'] = run
@@ -156,7 +153,7 @@ def test_gate_timeout_accepts_bytes_and_str_partial_output(tmp_path, repo, out, 
     spec = deliver_spec(repo, tmp_path, [sys.executable, '-c', 'pass'])
     spec['test_timeout_s'] = 1
     ws = tmp_path / 'ws'
-    _verdict(ws)
+    _workspace(ws)
 
     def runner(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 1, output=out, stderr=err)
@@ -175,7 +172,7 @@ def test_gate_start_failure_is_a_problem_and_writes_a_start_log(tmp_path, repo):
     binary = '/nonexistent/fleetmux-gate-test-binary'
     spec = deliver_spec(repo, tmp_path, [binary])
     ws = tmp_path / 'ws'
-    _verdict(ws)
+    _workspace(ws)
     run = tmp_path / 'run'
     rec = lifecycle_deliver.deliver(spec, ws, task_id='t1', run=str(run))   # never raises
     assert not rec['ok'] and 'tests could not start' in rec['problem']
@@ -213,7 +210,7 @@ def test_gate_log_is_capped_at_20mb_keeping_head_1mb_tail_19mb_and_a_marker(tmp_
 def test_gate_log_falls_back_beside_the_workspace_without_a_run_dir(tmp_path, repo):
     spec = deliver_spec(repo, tmp_path, [sys.executable, '-c', 'print("NO-RUN-MARK")'])
     ws = tmp_path / 'ws'
-    _verdict(ws)
+    _workspace(ws)
     rec = lifecycle_deliver.deliver(spec, ws, task_id='t1')   # run defaults to ''
     assert rec['ok'], rec.get('problem')
     log = Path(rec['tests']['log'])
@@ -245,7 +242,6 @@ def test_gate_failure_keeps_the_exit_code_when_the_log_cannot_be_written(tmp_pat
 # ------------------------------------------------------------------ lifecycle.gate audit record
 def test_lifecycle_gate_audit_carries_returncode_log_and_the_20_line_tail(fx, table, notes, repo, tmp_path):  # noqa: F811
     f = as_task(fx, 'dev_task')
-    write_verdict(f)
     out = ''.join('line %02d %s\n' % (i, 'x' * 30) for i in range(40))   # > 1500 chars
     code = 'for i in range(40):\n    print("line %02d %s" % (i, "x" * 30))\n'
     complete(f, {'goal': 'ship', 'deliver': deliver_spec(repo, tmp_path, [sys.executable, '-c', code])})

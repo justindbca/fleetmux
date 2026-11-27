@@ -534,6 +534,6 @@ def test_pause_and_resume(host):
 def test_reasons_are_the_documented_set():
     assert set(al.REASONS) == {'bad_token', 'bad_version', 'applet_not_up', 'applet_paused', 'applet_detaching',
                                'host_paused', 'host_draining', 'max_active', 'max_renewals', 'renew_pending',
-                               'worker_limit', 'review_cap', 'invalid', 'lease_not_active', 'wrong_slot',
+                               'worker_limit', 'invalid', 'lease_not_active', 'wrong_slot',
                                'slot_leased', 'message_in_flight', 'rate_limited', 'duplicate', 'no_decision',
                                'supervisor'}

@@ -289,7 +289,7 @@ def test_default_bounds_come_from_the_waits_environment(door, tmp_path, name):
 
 def test_sdk_default_bounds_without_the_environment(door, tmp_path):
     app = sdk.Applet.from_env(applet_env(door, tmp_path), start=False)
-    assert app.waits == {'request_lease': 660, 'renew': 660, 'send': 9360, 'release': 60, 'notify': 60}
+    assert app.waits == {'request_lease': 660, 'renew': 660, 'send': 7560, 'release': 60, 'notify': 60}
 
 
 @pytest.mark.parametrize('bad', ['[1]', '{"send": 0}', '{"other": 5}', 'x'])
@@ -304,9 +304,9 @@ WORKERS = 'workers:\n  - {name: worker-1}\n'
 
 def test_roster_waits_default_to_the_hosts_own_bounds_and_reach_the_environment(tmp_path):
     [entry] = roster.applets(WORKERS + 'applets:\n  - {name: applet-a-1, command: [x], '
-                             'lease: {decision_wait_s: 900, ttl_max_s: 3600}, review: {timeout_s: 600}, '
+                             'lease: {decision_wait_s: 900, ttl_max_s: 3600}, review: {timeout_s: 600}, '  # review: an older key, ignored
                              'waits: {notify: 20}}\n', tmp_path)
-    assert entry['waits'] == {'request_lease': 960, 'renew': 960, 'send': 4560, 'release': 60, 'notify': 20}
+    assert entry['waits'] == {'request_lease': 960, 'renew': 960, 'send': 3960, 'release': 60, 'notify': 20}
     env = applet_host.environment({'run': str(tmp_path), 'redis_socket': '/s', 'python': '/p'}, entry, 'tok', base={})
     assert json.loads(env['FLEETMUX_APPLET_WAITS']) == entry['waits']
 
@@ -365,27 +365,22 @@ def test_human_notice_is_kept_in_full_for_applet_notices(host, monkeypatch):
 
 
 # ====================================================================== a resent fix message (section 3.8)
-FIELDS = ('inflight', 'fixes', 'messages', 'last_message')
+FIELDS = ('inflight', 'messages', 'last_message')
 
 
-@pytest.mark.parametrize('when', ['running', 'reviewing', 'answered'])
+@pytest.mark.parametrize('when', ['running', 'answered'])
 def test_resending_a_fix_message_with_the_same_id_changes_nothing(host, when):
     """``screen`` must find a used message id before it writes the lease record: a resend (an applet unsure whether
-    the first got through) is a duplicate whose first result stays, not a second entry in ``inflight`` / ``fixes``
-    and not a second delivery. ``reviewing``: the worker replied and the reply waits for its review, when the
-    message has neither a request record nor a result."""
-    from test_applet_lease_review import reviewer_answers
+    the first got through) is a duplicate whose first result stays, not a second entry in ``inflight`` and not a
+    second delivery. ``answered``: the worker replied; the reply went straight back (no review)."""
     lid = grant(host)
     spec = dict(id='m.1', to='worker-1', lease=lid, applet=NAME, token=TOKEN, instruction='Fix only what broke.',
                 payload={'file': 'src/app.py'}, reply={'required': ['status']},
                 fix={'dir': '/srv/demo/work', 'base': 'abc123', 'head': None})
     event(host, dict(kind='request', request_id='cmd-m.1', spec=dict(spec)))
     host.pump()
-    if when != 'running':
-        settle(host, 'worker-1', receive(host, 'worker-1'), {'status': 'done'})
-        assert json.loads(rec(host, lid)['fixes'])['m.1']['review']  # the review is linked
     if when == 'answered':
-        reviewer_answers(host)
+        settle(host, 'worker-1', receive(host, 'worker-1'), {'status': 'done'})
         assert json.loads(host.r.get(fleet.RESULT + 'm.1'))['status'] == 'ok'
     before = rec(host, lid)
     event(host, dict(kind='request', request_id='cmd-again-m.1', spec=dict(spec)))

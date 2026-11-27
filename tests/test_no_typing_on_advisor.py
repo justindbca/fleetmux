@@ -38,12 +38,11 @@ def assert_hooked_and_advised(f, slot, generation):
     assert stop[0]['timeout'] == claude_hook.hook_timeout(f.cfg)
     assert settings['env'] == {'DISABLE_AUTOUPDATER': '1', 'CLAUDE_CODE_STOP_HOOK_BLOCK_CAP': '0'}
     assert argv[argv.index('--append-system-prompt') + 1] == claude_hook.DECLARATION
-    # the tab env and the fleet review rules
+    # the tab env; no review rules in the worker directory
     tab = [s for s in f.mgr.spawned if s['metadata']['cli_type'] == 'claude'][-1]
     assert tab['env_vars']['DISABLE_AUTOUPDATER'] == '1'
     cwd = fleet.agent_cwd(f.cfg, slot)
-    assert (cwd / 'REVIEWER.md').read_text() == (AGENTS / 'reviewer.md').read_text()
-    assert 'read REVIEWER.md in your current directory' in (cwd / 'CLAUDE.md').read_text()
+    assert not (cwd / 'REVIEWER.md').exists() and 'REVIEWER.md' not in (cwd / 'CLAUDE.md').read_text()
 
 
 def test_first_generation_released_by_the_advisor_keeps_the_hook_channel(v2adv):  # noqa: F811

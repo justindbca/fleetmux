@@ -30,7 +30,7 @@ OPEN = ('granted', 'active', 'renew_requested')  # lease states that hold a slot
 ESCALATE_GRACE_S = 60.0  # escalate(wait_s=...) waits locally this long past wait_s: the host times out on its tick
 # Local bounds of the other calls when no wait_s is given (applet-interface.md 1.1 ``waits``, 7): the host's own
 # bounds at their roster defaults plus ESCALATE_GRACE_S. The host passes its values in FLEETMUX_APPLET_WAITS.
-WAITS = {'request_lease': 660, 'renew': 660, 'send': 9360, 'release': 60, 'notify': 60}
+WAITS = {'request_lease': 660, 'renew': 660, 'send': 7560, 'release': 60, 'notify': 60}
 DOOR_MAX_S = 120.0  # one `fleetmux request` child at most this long (the command itself waits about 30 s)
 STOPPING = {'status': 'rejected', 'by': 'program', 'reason': 'stopping', 'note': 'the applet is stopping'}
 ESCALATE_ACCEPT_S = 10.0  # escalate(wait=False) looks this long for the host's record or refusal after the door
@@ -75,25 +75,12 @@ class Rejected(Exception):
         self.by, self.reason, self.note = by, reason, note
 
 
-class Review:
-    """The host's review of a fix (applet-interface.md 3.9): ``verdict`` (pass / fail / none), ``round``,
-    ``findings``, ``capped``, ``reason`` (for none), ``report``."""
-    def __init__(self, data):
-        self.verdict, self.round = data.get('verdict', 'none'), int(data.get('round') or 0)
-        self.findings, self.capped = list(data.get('findings') or []), bool(data.get('capped'))
-        self.reason, self.report = data.get('reason'), data.get('report')
-        self.id, self.reviewer = data.get('id', ''), data.get('reviewer', '')
-
-    def __repr__(self):
-        return 'Review(%r, round=%r, capped=%r)' % (self.verdict, self.round, self.capped)
-
-
 class Reply:
     """The result of one message: ``id`` (the message id), ``status``, ``result``, ``worker`` (label),
-    ``elapsed_s``, ``review`` (set when the message carried ``fix=`` and the worker replied ok)."""
+    ``elapsed_s``. ``review`` is always None: the host no longer reviews a fix (kept for older callers)."""
     def __init__(self, status, result=None, worker='', elapsed_s=0.0, review=None, id=''):
         self.status, self.result, self.worker, self.elapsed_s = status, result, worker, elapsed_s
-        self.review = Review(review) if isinstance(review, dict) else None
+        self.review = None  # ``review`` is accepted and ignored
         self.id = id
 
     def __repr__(self):
@@ -146,8 +133,7 @@ def _reply(applet, rid, out):
         raise LeaseEnded(rec.get('state') or 'unknown', rec.get('end_reason') or '')
     if status == 'rejected':
         raise Rejected(out.get('by', 'program'), out.get('reason', ''), out.get('note', ''))
-    return Reply(status, out.get('result'), out.get('worker', ''), float(out.get('elapsed_s') or 0),
-                 out.get('review'), rid)
+    return Reply(status, out.get('result'), out.get('worker', ''), float(out.get('elapsed_s') or 0), id=rid)
 
 
 def _submit(applet, spec, cut=None):
@@ -210,8 +196,8 @@ class Lease:
     def send(self, payload, *, instruction, required, allowed=None, timeout_s=None, replay=True, fix=None,
              msg_id=None, wait_s=None):
         """Send one message to the leased worker and wait for its result.
-        fix={"dir", "base", "head", "files"} marks the message that hands back a fix: the host then has
-        another slot review it and the reply carries .review. Raises LeaseEnded when the lease is over.
+        fix={"dir", "base", "head", "files"} marks the message that hands back a fix (shape-checked, not
+        reviewed: the reply comes straight back). Raises LeaseEnded when the lease is over.
         msg_id: the message id (default: a new one); save it first to read the result back after a restart
         (Applet.message_result). The Reply carries it as .id. wait_s: local bound (default waits['send']);
         past it Rejected ``no_answer``."""

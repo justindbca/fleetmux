@@ -170,11 +170,9 @@ goal: "Read .relay/demo/core/brief.md and do it."
 hours: 8
 artifacts:
   - {path: notes/integ-1/integration.md, min_chars: 300}
-  - {path: notes/reviewer-1/verdict.json, contains: ['"verdict"']}
 deliver:
   test_cmd: ["/bin/bash", ".relay/demo/core/gate.sh"]
   test_timeout_s: 1800
-  review_file: notes/reviewer-1/verdict.json
 ```
 
 What happens:
@@ -217,8 +215,8 @@ Before `relay init`:
 1. `.relay/<job>/` is committed and pushed.
 2. No file under `.relay/<job>/` holds an absolute machine path, a machine name or an account.
 3. Every task, and `merge`, has a directory with `job.spec.yaml`. Its keys are `goal`, `hours`, `budget`,
-   `artifacts`, `workers`, `supervisor_profile`, `worker_profiles` and `deliver` (`test_cmd`, `test_timeout_s`,
-   `review_file`). It does not set the keys the program fills.
+   `artifacts`, `workers`, `supervisor_profile`, `worker_profiles` and `deliver` (`test_cmd`, `test_timeout_s`; an older `review_file` is ignored). It does not
+   set the keys the program fills.
 4. Every `needs` entry uses an inventory toolchain name (`rust`, `node`, `python`, `go`), optionally with a
    bound such as `node>=20`.
 5. Every `gate.sh` runs from the repository root and takes its interpreter from `RELAY_PYTHON`.

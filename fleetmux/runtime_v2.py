@@ -252,6 +252,12 @@ OFFLINE_ERROR = re.compile(r'fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_
                            r'network (is )?(unreachable|error|down)|connection (error|reset|refused)', re.I)
 
 
+# A startup turn that failed on the login (user 2026-11-27; 11-26 pi: "OAuth refresh failed for openai: ...
+# invalid_grant"): after a wall switch the slot takes the next model on the chain (Fleet.startup_unusable).
+AUTH_ERROR = re.compile(r'OAuth refresh failed|invalid_grant|Not logged in|No API key|credentials_not_configured|'
+                        r'401 Unauthorized|authentication (failed|error)', re.I)
+
+
 # A supervisor turn that ended on an API / network error (§24 supervisor regeneration): OFFLINE_ERROR plus pi's own
 # give-up line and Claude's connection errors. Separate from OFFLINE_ERROR, which startup_offline also uses.
 API_NETWORK_ERROR = re.compile(OFFLINE_ERROR.pattern + r'|Retry failed after \d+ attempts?|Connection lost mid-response'
@@ -979,6 +985,8 @@ class RuntimeV2:
                     elif legacy.is_opencode(self.slot_cfg(slot), slot):
                         self.f.finish('blocked', slot + ': opencode startup failed before READY ('
                                       + startup_problem(ev) + '); not retried, model unchanged')
+                    elif self.f.startup_unusable(slot, '\n'.join(str(ev.get(k) or '') for k in ('text', 'error'))):
+                        self.audit('startup.unusable', slot=slot, level='warn', error=str(ev.get('error'))[:300])
                     elif startup_offline(ev) and (retry := self.f.schedule_startup_retry(slot, info)):
                         self.audit('startup.offline', slot=slot, level='warn', error=str(ev.get('error'))[:300],
                                    detail={'attempt': retry[0], 'retry_in_s': retry[1]})
@@ -1295,7 +1303,7 @@ class RuntimeV2:
             self.f.r.hset('fx:req:' + msg['request_id'], mapping={'midturn_splits': splits, 'continues': msg['message_id']})
         if not retired:
             self.f.setf(slot, state='handoff', handoff_id=hid, handoff_draft=info['midturn_draft'],
-                        handoff_mtime=info['midturn_mtime'], handoff_deadline=time.time() + float(self.f.cfg['handoff_timeout']))
+                        handoff_mtime=info['midturn_mtime'], handoff_deadline=time.time() + fleet_config.handoff_timeout(self.f.cfg))
             self.rotation_pending.add(slot)
         else:
             self.midturn_clear(slot, resume=False)
@@ -2197,8 +2205,6 @@ class RuntimeV2:
         # gate recheck of a blocked job) is the one deliberate second result.
         tombstone = self.prefix + ':public:' + digest(rid)
         if self.f.r.get(tombstone) and not replace:
-            return
-        if applet_lease.withhold(self.f, rid, status, fields):  # a fix reply waits for its review (applets.md 6)
             return
         req = self.f.r.hgetall(legacy.REQ + rid)
         if self.f.service:  # plan F': a [blocked] question about a request that is now terminal is moot

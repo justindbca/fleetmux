@@ -13,10 +13,10 @@ SEVEN = ['astra', 'fable', 'flashnext', 'flashnext-dsh', 'haiku', 'opencode-flas
          'workbuddy-ds-dsh']  # + opencode free tier, dsh (FlashNext, WorkBuddy DeepSeek)
 
 
-def test_default_registry_has_seven_model_cards_and_the_same_four_profiles():
+def test_default_registry_has_the_model_cards_and_profiles():
     registry = AgentRegistry()
     assert [m.id for m in registry.models] == SEVEN
-    assert [c.id for c in registry] == ['claude-coder', 'claude-fable', 'claude-haiku', 'claude-opus', 'claude-reviewer',
+    assert [c.id for c in registry] == ['claude-coder', 'claude-fable', 'claude-haiku', 'claude-opus',
                                         'claude-sonnet', 'flashnext-coder', 'researcher']  # + four advisor launch cards
     for model in registry.models:
         assert model.judgement and model.quota_pool and model.roles_allowed and model.evidence
@@ -32,7 +32,7 @@ def test_profiles_inherit_unset_fields_from_their_model_card():
         ('flashnext', 0.5, ('studio',), 2, 100000)
     coder = registry.get('claude-coder')
     assert coder.model_card == 'opus' and coder.night_ok is False and 'implementer' in coder.roles_allowed
-    assert registry.get('claude-reviewer').roles_allowed == registry.model('opus').roles_allowed
+    assert registry.get('claude-opus').roles_allowed == registry.model('opus').roles_allowed
     researcher = registry.get('researcher')
     assert researcher.model_card is None and researcher.hosts is None and researcher.handoff_ratio is None
     json.dumps(registry.as_list(), ensure_ascii=False)  # `agents list` output stays JSON
@@ -120,7 +120,7 @@ def test_default_registry_routing_unchanged_without_filters_and_host_aware_with_
     assert route_task('fix the failing pytest', registry, host='macmini').agent_id == 'claude-coder'
     assert route_task('fix the failing pytest', registry, role='reviewer').agent_id != 'flashnext-coder'
     plan = build_dispatch_plan('Implement the parser fix', registry, host='macmini')
-    assert [s.agent_id for s in plan.subtasks] == ['claude-coder', 'claude-reviewer']
+    assert [s.agent_id for s in plan.subtasks] == ['claude-coder']
 
 
 def test_handoff_ratio_follows_the_running_profile_card():

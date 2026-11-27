@@ -1,19 +1,16 @@
-"""Trusted-Python completion gates of the lifecycle modes (master design v2 §4.14).
+"""Trusted-Python completion gate of the dev_task lifecycle (master design v2 §4.14).
 
 ``dev_task`` is done only when its work is merged into the deploy branch and enqueued, and that is
 judged here by reading git and the queue file, never by a worker's own report:
 
-1. review gate: the reviewer's verdict file (``load_verdict``: the workspace root, else the directory of the
-   slot the supervisor dispatched the review to) says PASS with zero open P0/P1. Who reviews is the supervisor's decision: the gate never checks the
-   reviewer's model. The slot that wrote the verdict and the model it runs are recorded for the audit only;
-2. the feature worktree is clean, on the feature branch, and fast-forwards the deploy branch;
-3. the full test command passes in the feature worktree;
-4. the deploy branch is fast-forwarded to the tested sha (refused while it is checked out anywhere);
-5. one ``pending_approval`` entry is appended to the queue file. Enqueued is not deployed: the queue
+1. the feature worktree is clean, on the feature branch, and fast-forwards the deploy branch;
+2. the test command passes in the feature worktree;
+3. the deploy branch is fast-forwarded to the tested sha (refused while it is checked out anywhere);
+4. one ``pending_approval`` entry is appended to the queue file. Enqueued is not deployed: the queue
    executor deploys only when the user names it (T-39 ⑤).
 
-``review_loop`` reads the same verdict file each round; ``max_rounds`` FAIL verdicts end the loop with
-an outstanding-issues list for the user.
+There is no review step: no verdict file is looked for or read. A deliver spec written before the review
+removal may still carry ``review_file``; it is kept as written and ignored.
 """
 import json
 import os
@@ -21,13 +18,7 @@ import subprocess
 import time
 from pathlib import Path
 
-DELIVER_KEYS = ('repo', 'feature_branch', 'deploy_branch', 'test_cmd', 'queue', 'review_file')
-
-
-def _relative(value, what):
-    if not isinstance(value, str) or not value.strip() or os.path.isabs(value) or '..' in Path(value).parts:
-        raise ValueError(what + ' must be a relative path inside the shared workspace')
-    return value
+DELIVER_KEYS = ('repo', 'feature_branch', 'deploy_branch', 'test_cmd', 'queue')
 
 
 def validate_deliver(spec):
@@ -49,120 +40,10 @@ def validate_deliver(spec):
     cmd = spec['test_cmd']
     if not isinstance(cmd, list) or not cmd or not all(isinstance(x, str) and x for x in cmd):
         raise ValueError('deliver.test_cmd must be a non-empty argv list')
-    _relative(spec['review_file'], 'deliver.review_file')
     timeout = spec.get('test_timeout_s', 3600)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError('deliver.test_timeout_s must be a positive number')
     return dict(spec, test_timeout_s=timeout)
-
-
-def validate_review_file(value):
-    return _relative(value, 'review_file')
-
-
-def verdict_paths(workspace, review_file, slots=None):
-    """Where a verdict file is looked for: ``<workspace>/<review_file>``, then ``<workspace>/<review slot>/<review_file>``
-    for the slot the supervisor dispatched the review to (``review_slot``), else every worker's directory (a
-    worker writes only in its own directory)."""
-    ws = Path(workspace)
-    slots = slots or {}
-    review = slots.get('review_slot')
-    return [ws / review_file] + [ws / s / review_file for s in ([review] if review else list(slots.get('models') or {}))]
-
-
-def verdict_target(workspace, review_file, slot):
-    """The absolute path where the review slot ``slot`` writes the verdict (its REVIEWER.md and its review
-    instruction name it): ``<workspace>/<review_file>`` when that path is already in ``slot``'s own directory,
-    else ``<workspace>/<slot>/<review_file>``."""
-    if Path(review_file).parts[0] == slot:
-        return Path(workspace) / review_file
-    return Path(workspace) / slot / review_file
-
-
-def load_verdict(workspace, review_file, slots=None):
-    """The one rule for finding a verdict (delivery gate, review cap, review_loop). Returns (verdict, writer, problem).
-
-    1. ``<workspace>/<review_file>``. Its writer is the worker whose directory it is in (``worker-2/v.json``),
-       else the review slot, else unknown (None).
-    2. Absent, and the supervisor dispatched the review (``review_slot``): ``<workspace>/<review slot>/<review_file>``.
-    3. Absent, and no review was dispatched: every worker's ``<workspace>/<slot>/<review_file>``; exactly one match
-       is the verdict, several are a problem that lists them, none is "no review was dispatched".
-
-    ``slots``: the program's record {models: {slot: model card id or None}, review_slot: slot or None}; None = no
-    record (the root path only, writer None)."""
-    ws = Path(workspace)
-    models = (slots or {}).get('models') or {}
-    review = (slots or {}).get('review_slot')
-    root = ws / review_file
-    if root.exists():
-        first = Path(review_file).parts[0]
-        writer, path = (first if first in models else review), root
-    elif review:
-        path, writer = ws / review / review_file, review
-        if not path.exists():
-            return None, None, ('review verdict not written: looked for ' + str(root) + ', ' + str(path)
-                                + ' (the review was dispatched to ' + review + ')')
-    else:
-        hits = [s for s in models if (ws / s / review_file).exists()]
-        if len(hits) > 1:
-            return None, None, ('no review was dispatched and ' + review_file + ' is in several worker directories: '
-                                + ', '.join(str(ws / s / review_file) for s in hits)
-                                + '; mark the review dispatch with "review": true or keep only one')
-        if not hits:
-            return None, None, ('no review was dispatched and no verdict was found: looked for '
-                                + ', '.join(str(p) for p in verdict_paths(ws, review_file, slots)))
-        writer, path = hits[0], ws / hits[0] / review_file
-    verdict, problem = read_verdict(path)
-    if verdict is not None:
-        verdict['path'] = str(path)
-    return verdict, writer, problem
-
-
-def read_verdict(path):
-    """The reviewer's verdict JSON: {round, verdict PASS|FAIL, issues: [{id, severity, title, status}]}; an
-    optional ``reviewer`` field is kept as written and never gates anything.
-
-    Returns (verdict, problem): verdict is None when the file is missing or malformed."""
-    try:
-        data = json.loads(Path(path).read_text(encoding='utf-8'))
-    except FileNotFoundError:
-        return None, 'review verdict ' + str(path) + ' not written'
-    except (OSError, ValueError) as exc:
-        return None, 'review verdict ' + str(path) + ' unreadable: ' + str(exc)
-    if not isinstance(data, dict) or data.get('verdict') not in ('PASS', 'FAIL'):
-        return None, 'review verdict must be a JSON object with verdict PASS or FAIL'
-    issues = data.get('issues') or []
-    if not isinstance(issues, list) or not all(isinstance(i, dict) for i in issues):
-        return None, 'review verdict issues must be a list of objects'
-    rnd = data.get('round', 1)
-    if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
-        return None, 'review verdict round must be a positive integer'
-    severities = [str(i.get('severity', '')).upper() for i in issues]
-    data.update(round=rnd, issues=issues, p0=severities.count('P0'), p1=severities.count('P1'))
-    return data, None
-
-
-def review_problem(verdict):
-    """None when the verdict is a clean PASS (zero open P0 / P1). Who reviewed is not checked (the supervisor
-    picks the reviewer).
-
-    A later round may still list a P0 / P1 that an earlier round raised and that is now resolved
-    (status fixed / closed); only the open ones block."""
-    if verdict['verdict'] != 'PASS':
-        return 'review verdict is ' + verdict['verdict'] + ' (round ' + str(verdict['round']) + ')'
-    severities = [str(i.get('severity', '')).upper() for i in outstanding(verdict)]
-    p0, p1 = severities.count('P0'), severities.count('P1')
-    if p0 or p1:
-        return 'review PASS still lists ' + str(p0) + ' P0 / ' + str(p1) + ' P1'
-    return None
-
-
-RESOLVED = ('fixed', 'closed')   # issue statuses that mean resolved; reviewers write either word
-
-
-def outstanding(verdict):
-    """Issues still open after the last round (the list handed to the user)."""
-    return [i for i in verdict.get('issues') or [] if str(i.get('status', 'open')).lower() not in RESOLVED]
 
 
 def _git(repo, *args, check=True):
@@ -267,33 +148,19 @@ def done_when_problem(spec, sha):
     return None
 
 
-def deliver(spec, workspace, *, task_id='', run='', must_pass=True, runner=subprocess.run, slots=None):
+def deliver(spec, workspace, *, task_id='', run='', runner=subprocess.run):
     """Run the dev_task gate. Returns a record {ok, steps[], problem?, sha?, queue_entry?}; never raises
     for a gate failure (that is the task's outcome, not a daemon error). Idempotent: an already merged
     sha is not moved again and an already queued sha is not queued twice.
 
-    ``slots`` (the program's record of the workers, see ``load_verdict``) says where the verdict may be and which
-    slot / model wrote it (audit only). The record keeps ``spec`` and ``slots``, so a recheck
-    (``lifecycle_recheck``) can rerun the gate from files."""
+    The record keeps ``spec``, so a recheck (``lifecycle_recheck``) can rerun the gate from files."""
     steps = []
     rec = {'ok': False, 'steps': steps, 'at': time.time(), 'spec': spec}
-    if slots is not None:
-        rec['slots'] = slots
     timeout = spec.get('test_timeout_s', 3600)
 
     def fail(problem):
         rec['problem'] = problem
         return rec
-    verdict, slot, problem = load_verdict(workspace, spec['review_file'], slots)
-    if verdict is None:
-        return fail(problem)
-    problem = review_problem(verdict)
-    rec['review'] = {k: verdict.get(k) for k in ('round', 'verdict', 'reviewer', 'p0', 'p1', 'path')}
-    if slots is not None:  # audit only: never a pass condition
-        rec['review'].update(slot=slot, model=(slots.get('models') or {}).get(slot) if slot else None)
-    if problem and must_pass:
-        return fail(problem)
-    steps.append('review')
     repo, feat, dep = spec['repo'], spec['feature_branch'], spec['deploy_branch']
     try:
         if not Path(repo).is_dir():

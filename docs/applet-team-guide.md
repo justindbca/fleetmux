@@ -53,7 +53,7 @@ Fixed facts you must design around:
 | The host runs in service mode: a root fleet started with `--lifecycle service`, or a sub-fleet entry with `mode: service`. | [existing] | A task-lifecycle fleet cannot host an applet. |
 | The host's own daemon starts, watches and restarts the applet. | [existing] | No watcher to set up, no system service. |
 | When every worker is busy, the fleet wakes or adds a worker for a lease, up to `hot_add_max`. | [existing] | Size the roster for the normal load, not for the peak. |
-| A fix handed back by a leased worker is reviewed by the fleet in another slot. | [existing] | The applet has no review code. A team that fixes things needs room for 2 workers (declared or addable). |
+| A fix handed back by a leased worker comes straight back to the applet; the fleet does not review it. | [existing] | The applet's own check decides whether a fix is used. |
 | Channels are declared on a root roster only. | [existing] | Shape B: on the root, never in the team roster. |
 | Shape B: the team's supervisor is a root worker that runs the official Claude Code CLI: an idle one, or one the root adds. | [existing] | The root fleet's workers run `--worker-cli claude`. `--supervisor-model` on the team's start picks its model. |
 | Shape B: team workers run `claude` (default) or `pi` only; one CLI per team; a `pi` team uses one `pi_model`. | [existing] | opencode and dsh workers cannot be team workers. |
@@ -70,18 +70,15 @@ Fixed facts you must design around:
 | The applet needs | Workers declared in the roster | `lease.max_active` | `lease.hot_add_max` |
 |---|---|---|---|
 | Model work that changes nothing (read, classify, summarize), one job at a time | 1 | 1 | 1 |
-| Fixes, one job at a time (each fix is reviewed in another slot) | 2 | 1 | 1 |
-| Two jobs in parallel, each fixed and reviewed | 3 | 2 | 1 |
+| Fixes, one job at a time | 1 | 1 | 1 |
+| Two jobs in parallel | 2 | 2 | 1 |
 | Rare bursts above that | as above | as above | raise it; check the limits in section 1 |
 
 Rules:
 
-- Declare the workers the normal load needs. The fleet adds one when a lease or a review finds none free, and
+- Declare the workers the normal load needs. The fleet adds one when a lease finds none free, and
   the idle reclaim puts it to sleep afterwards, so there is no need for spare workers "just in case".
-- A reviewer must be a different slot from the fixer of that job. With one declared worker and `hot_add_max: 1`
-  the fleet adds the reviewer on the first fix (a start-up delay of about a minute); declaring 2 avoids that.
-- Any worker can review: the review rules are in `REVIEWER.md`, which the fleet puts in every worker directory.
-  Do not create a reviewer role or a reviewer worker.
+- There is no fix review: do not create a reviewer role or a reviewer worker.
 - `hot_add_max` is a cost ceiling. `0` means "never add". It can be changed while the fleet runs
   (`fleetmux applet set <name> hot_add_max <n>`, or edit the roster row).
 - Shape B: a root roster `limits:` block applies to the team too (`child_workers_max`, `max_agents_total`).
@@ -93,12 +90,11 @@ Rules:
 | Host supervisor, shape A | `pi`, `codex`, `claude` (the pair with the worker CLI must be `verified` in the CLI pair table) | Leave unset: the release's default pair (the first usable model of the supervisor ranking) | It decides who gets a lease and for how long; errors here cost the most, and the default ranking puts the strongest model first. |
 | Root supervisor, shape B | as above | Leave unset | It only rules on rare `access` requests and operator input. |
 | Team supervisor, shape B | official `claude` only | The strongest Claude model you have (`--supervisor-model` on the team's start) | It grants the leases. |
-| Declared worker | shape A: the worker CLI of the pair; shape B: `claude` or `pi` | Leave unset: the first usable model of the worker ranking; `pi` + a cheaper model when the fixes are small and frequent | Fix quality decides how many attempts and review rounds a job needs. |
-| Worker the fleet adds for a lease or a review | not configurable per worker | The host's default worker CLI and the first usable model of the default worker chain; the role file of `hot_add_like` | It must work without anyone choosing. |
+| Declared worker | shape A: the worker CLI of the pair; shape B: `claude` or `pi` | Leave unset: the first usable model of the worker ranking; `pi` + a cheaper model when the fixes are small and frequent | Fix quality decides how many attempts a job needs. |
+| Worker the fleet adds for a lease | not configurable per worker | The host's default worker CLI and the first usable model of the default worker chain; the role file of `hot_add_like` | It must work without anyone choosing. |
 
 Do not hard-code models in start scripts when the default pair is acceptable; the release ranks what is installed
-and logged in (section 52) and moves down its chain when a model hits a usage wall (section 23). Review independence comes
-from the separate slot and the clean session; a different model is not required.
+and logged in (section 52) and moves down its chain when a model hits a usage wall (section 23).
 
 Thinking level: Claude workers get the release default effort (`high`, `fleet.yaml#discovery.worker_thinking`);
 `pi` workers take `pi_thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) from the sub-fleet
@@ -153,8 +149,7 @@ with the root on every start; the options above then go into the entry's keys.
 |---|---|
 | Channels **[existing]** | Need a human to approve deletions or see alerts away from the terminal -> add `channels:` to the **root** roster (`[{type, account, push?}]`, at most 8; credentials live in `~/.fleetmux/config/`, never in the roster). Otherwise none: the operator command works without any channel. |
 | Request deadline | Leave the fleet-wide one unset. Give each lease message its own `timeout_s` from an applet parameter. |
-| Lease term | `ttl_s` about the time a normal job takes x 1.5; `ttl_max_s` about the longest job you would still let run unattended. Start from 1800 / 7200 and adjust the parameters from audit data (`held_s` in `applet.lease.released`). A lease does not expire while its fix is under review; afterwards its end is at least `renew_margin_s` away. |
-| Review bounds **[existing]** | `review: {max_rounds: 3, timeout_s: 1800}` in the applet row. Raise `timeout_s` when a review must read a large change. |
+| Lease term | `ttl_s` about the time a normal job takes x 1.5; `ttl_max_s` about the longest job you would still let run unattended. Start from 1800 / 7200 and adjust the parameters from audit data (`held_s` in `applet.lease.released`). |
 | Idle reclaim | Leave the service default (`worker_idle_reclaim_min`, 30 minutes): it is what puts lease-added workers to sleep. |
 | Night roster **[existing]** | Only if workers should run cheaper models at night: `--night-roster` with the same worker names and the same `subfleets:` / `applets:` blocks. |
 | Advisor | `off`. |
@@ -263,7 +258,6 @@ team:
       cwd: .
       params: {file: rollout.yaml, block: applet}
       lease: {max_active: 1, ttl_s: 1800, ttl_max_s: 7200, max_renewals: 3, hot_add_max: 1, hot_add_like: fix-1}
-      review: {max_rounds: 3, timeout_s: 1800}
   # channels:                               # optional, root only
   #   - {type: telegram, account: ops}
 
@@ -290,7 +284,7 @@ Which values are hot, and where they live:
 |---|---|---|---|---|
 | The applet's own parameters listed under `hot:` | `rollout.yaml#applet` | `fx:applet:applet-rollout-1:params` | `fleetmux applet param` | by the applet, every `writeback_s` |
 | `hot_add_max` | `rollout.yaml#team`, the applet row's `lease` | `fx:applet:applet-rollout-1` field `hot_add_max` | `fleetmux applet set`, or a roster edit | by the host daemon, into the row |
-| Other `lease` / `review` bounds, `workers:`, `max_busy` | `rollout.yaml#team` | read from the roster on hot reload | a roster edit (section 16) | - |
+| Other `lease` bounds, `workers:`, `max_busy` | `rollout.yaml#team` | read from the roster on hot reload | a roster edit (section 16) | - |
 | `targets` | `rollout.yaml#targets` | no (cold) | restart the applet | - |
 
 ### 4.3 `rollout/applet.py`
@@ -304,8 +298,8 @@ code:
 | Every threshold is a parameter in the `applet` block. | No numeric literal for a time, count or ratio in `steps.py` outside defaults passed to `params.get`. |
 | State is written before the side effect it guards. | Kill the process at each step in a test; restart continues or verifies. |
 | The applet decides pass / fail by its own command's exit code. | No branch on a worker's `status` text alone. |
-| A worker's change is used only after the applet's own check passed and a `fix` message for it came back `review.verdict == "pass"`. | Every path in `steps.py` that merges, installs or ships a worker's change is behind both conditions. |
-| No review code: the applet never asks for a reviewer and never sends a message asking a worker to review. | `grep -rniE "review" rollout/` shows only reads of `reply.review`. |
+| A worker's change is used only after the applet's own check passed. | Every path in `steps.py` that merges, installs or ships a worker's change is behind that check. |
+| No review code: the applet never asks for a reviewer and never sends a message asking a worker to review. | `grep -rniE "review" rollout/` shows nothing. |
 | Deletion or move -> `app.escalate(cls="delete", ...)` and wait. | `grep -rnE "rmtree\|os\.remove\|unlink\|shutil\.move\|os\.rename" rollout/` shows only lines guarded by an approved ruling (atomic `os.replace` of the applet's own state files is allowed). |
 | SIGTERM -> release leases, exit 0 within `stop_grace_s`. | `kill -TERM <pid>`; `fleetmux applet leases` is empty afterwards. |
 
@@ -322,14 +316,13 @@ This fleet is the team "rollout". Its applet applet-rollout-1 runs the release t
 - "[applet escalation]" class plan / scope: rule on it. Class access: rule on it under your sandbox rules if you
   are the root supervisor; otherwise forward it with report_up and never approve it yourself. You are never asked
   about deletions.
-- Never dispatch to a worker that the board shows as leased or reviewing. Fix reviews are run by the fleet
-  program; do not arrange them.
+- Never dispatch to a worker that the board shows as leased.
 ```
 
 `roles/fixer.md`: "You fix what the applet's messages describe, inside the lease purpose. Smallest change that
 makes the stated check pass. Report what you changed; the applet runs the check."
 
-No reviewer role file: a reviewing worker follows `REVIEWER.md` in its own directory **[existing]**.
+No reviewer role file: there is no fix review.
 
 ### 4.5 Commands
 
@@ -352,7 +345,6 @@ fleetmux start --lifecycle service --name rollout \
 fleetmux status                    # the fleet, its workers, applets and leases (JSON)
 fleetmux applet list               # [existing]
 fleetmux applet leases             # [existing]
-fleetmux applet reviews            # [existing]
 fleetmux applet notices applet-rollout-1   # full text of the applet's notices
 fleetmux logs --limit 50           # audit
 
@@ -401,13 +393,12 @@ The commands are for shape A; for shape B add `--config "$TEAM_CFG"` as in 4.6.
 | 2 | The release implements applets | `fleetmux applet --help` | Usage text, exit 0. Exit 2 "unknown" -> the release has no applet support: stop, the team cannot run yet. |
 | 3 | Project layout exists | `ls rollout.yaml roles/ rollout/applet.py bin/env.sh bin/start.sh` | All listed, no error. |
 | 4 | Names are valid | `grep -nE "name: " rollout.yaml` | Every worker ends in `-<number>`; the applet matches `applet-<name>-<n>`; no name is used twice. |
-| 5 | The applet makes no model calls and has no review code | the two `grep` checks of 4.3 | No output / only `reply.review` reads. |
+| 5 | The applet makes no model calls and has no review code | the two `grep` checks of 4.3 | No output. |
 | 6 | Deterministic steps pass their tests without a fleet | `python3 -m pytest -q tests` | Exit 0. |
 | 7 | The fleet starts | `bin/start.sh` | Exit 0; prints the run directory. |
 | 8 | Agents are ready | `. bin/env.sh; fleetmux status` | The supervisor, `fix-1` and `fix-2` are listed; workers `idle`; no slot is `held`. Keep this shell for the steps below. |
 | 9 | The applet is up and visible | `fleetmux applet list`, then look at the fleet window | `applet-rollout-1`, `state: up`, heartbeat age < 60 s, `restarts: 0`; and in the daemon area's tab bar a tab `applet-rollout-1 up` whose header shows the phase, the heartbeat age and the open leases. The list alone does not count. |
 | 10 | A lease round trip works | enqueue one small real job (4.5), then `fleetmux applet leases --all` | One lease with `state: released`, `messages` >= 1. |
-| 11 | The fix was reviewed in another slot | `fleetmux applet reviews --all` | One review for that job: `verdict: pass`, and `reviewer` is a different slot from `fixer`. |
 | 12 | Exclusivity holds | while a lease is active: `echo '{"id":"probe-1","to":"fix-1","payload":{},"reply":{"required":["x"]}}' \| fleetmux request -` | Result `rejected`, reason `slot_leased`. |
 | 13 | A worker is added when none is free | keep both workers busy with direct requests (`for w in fix-1 fix-2; do echo '{"id":"busy-'$w'","to":"'$w'","payload":{},"instruction":"Run: sleep 240. Then reply.","reply":{"required":["done"]}}' \| fleetmux request - & done`), then enqueue one job; `fleetmux logs --limit 200 \| grep applet.worker_added` | One event naming `fix-3`; `fleetmux status` lists `fix-3` with `applet_added_for`. |
 | 14 | The applet survives a kill | `kill -KILL <pid from step 9>`; wait 60 s; repeat step 9 | `state: up`, `restarts: 1`; `fleetmux applet leases` shows no lease left from before the kill; the interrupted job continues or is redone. |
@@ -426,9 +417,8 @@ pass, the team is in service.
 |---|---|---|
 | `applets:` in the roster of a task-lifecycle fleet or a `mode: task` sub-fleet | Whole roster rejected | Host it on a service fleet (applets.md 1.3). |
 | The same applet row in two rosters | The second host waits (`applet.attach_wait`) | Keep one row; to move, remove first, then add. |
-| Writing review code in the applet, or adding a `review-1` worker with a reviewer role | Duplicates what the fleet does; the fleet still reviews every `fix` message | Remove it; read `reply.review`. |
-| Using a worker's change without a `fix` message | The change is never reviewed; the audit shows a lease released with no review | Hand the fix back with `fix` and use it only on `pass`. |
-| `hot_add_max: 0` with one worker and fixes | Reviews end `none` / `no_reviewer`; lease requests answer `worker_limit` when the worker is busy | Declare 2 workers or allow adding. |
+| Writing review code in the applet, or adding a `review-1` worker with a reviewer role | The fleet has no review step to feed | Remove it; the applet's own check decides. |
+| `hot_add_max: 0` with one worker | Lease requests answer `worker_limit` when the worker is busy | Declare 2 workers or allow adding. |
 | Retrying at once on `worker_limit` | Busy loop | Wait `retry_after_s`; raise `hot_add_max` if it keeps happening. |
 | Keeping a lease across jobs "to save time" | Other work starves; the supervisor will deny renewals | Release when the job is done; request again. |
 | Running `fleetmux stop` / `status` without `bin/env.sh` | The command acts on the default fleet home, possibly another fleet | Always source `bin/env.sh` first. |

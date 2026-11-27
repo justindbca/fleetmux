@@ -59,7 +59,7 @@ def _implementation_prompt(goal: str) -> str:
 def _review_prompt(goal: str) -> str:
     return (
         "Goal:\n%s\n\n"
-        "Independent review task: review the implementation currently present in the shared working tree against "
+        "Review task: review the implementation currently present in the shared working tree against "
         "this goal and applicable contributor instructions. Check correctness, regressions, safety boundaries, and "
         "test coverage. Do not deploy or start production services. Report findings in severity order with file and "
         "line references; if there are no findings, state that explicitly and list any residual risks."
@@ -123,16 +123,11 @@ def build_dispatch_plan(goal: str, registry: Optional[AgentRegistry] = None,
         implementation = route_task("Implement this code change: " + goal, registry,
                                     required_capability="test-fix" if "test-fix" in hints else "code-edit", preferred_cli=preferred_cli, host=host, occupancy=occupancy,
                                     role="implementer")
-        review = route_task("Review and safety-audit this code change: " + goal, registry,
-                            required_capability="code-review", preferred_cli=preferred_cli, host=host, occupancy=occupancy,
-                              role="reviewer")
-        subtasks = (
+        # No review step is appended: the change is read once by the supervisor when it merges.
+        return DispatchPlan(goal, "code-change", (
             DispatchSubtask("implementation", "Implement and test the change", implementation.agent_id,
                             implementation.capability, _implementation_prompt(goal)),
-            DispatchSubtask("review", "Independently review the change", review.agent_id,
-                            review.capability, _review_prompt(goal), ("implementation",)),
-        )
-        return DispatchPlan(goal, "code-change", subtasks)
+        ))
 
     if hints.intersection(("code-review", "safety-audit")):
         decision = route_task("Review and safety-audit: " + goal, registry,

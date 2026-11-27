@@ -34,6 +34,10 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = PACKAGE_DIR.parent
 
 
+# Removed profile cards an older roster or config may still name -> the card that now runs that slot.
+RETIRED_CARDS = {'claude-reviewer': 'claude-opus'}  # same CLI and model, plain worker role
+
+
 class AgentRegistryError(ValueError):
     """An agent card or registry directory is invalid."""
 
@@ -392,6 +396,8 @@ class AgentRegistry:
         for card in self._cards:
             if card.id == agent_id:
                 return card
+        if agent_id in RETIRED_CARDS:  # a roster or config written before the card was removed
+            return self.get(RETIRED_CARDS[agent_id])
         raise KeyError(agent_id)
 
     def as_list(self) -> List[Dict[str, Any]]:

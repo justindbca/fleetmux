@@ -16,8 +16,8 @@ def test_shipped_file_has_exactly_the_blocks():
 def test_cards_come_from_the_models_and_profiles_blocks():
     registry = agent_registry.AgentRegistry()
     assert registry.directory == agent_registry.PACKAGE_DIR / 'agents'  # role files stay files
-    assert registry.get('claude-reviewer').role_file == 'reviewer.md'
-    assert registry.get('claude-reviewer').model_card == 'opus'
+    assert registry.get('claude-coder').role_file == 'worker.md'
+    assert registry.get('claude-coder').model_card == 'opus'
 
 
 def test_private_block_replaces_the_shipped_block_whole(tmp_path, monkeypatch):

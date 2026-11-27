@@ -45,7 +45,7 @@ def test_public_attributes_for_the_lease_calls(app, env, private_redis_v2):
     assert app.state_dir == Path(env['FLEETMUX_APPLET_STATE']) and app.run_dir == Path(env['FLEETMUX_APPLET_RUN'])
     assert app.redis.ping() and isinstance(app.stopping, threading.Event) and not app.stopping.is_set()
     assert set(sdk.__all__) == {'INTERFACE', 'Applet', 'Params', 'Lease', 'LeaseDenied', 'LeaseEnded', 'Rejected',
-                                'Reply', 'Review', 'Ruling', 'Escalation', 'ESCALATE_NO_WAIT'}
+                                'Reply', 'Ruling', 'Escalation', 'ESCALATE_NO_WAIT'}
 
 
 def test_sdk_exports_the_no_wait_marker():

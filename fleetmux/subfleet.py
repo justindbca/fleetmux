@@ -524,7 +524,7 @@ def request(run_dir, slot, task_id, goal, workers, output=None, proposal=None, c
         spec['artifacts'] = artifacts
     if budget:
         spec['budget'] = budget
-    if job:  # §58: the job's id, name, roster, roles, deliver / review_file
+    if job:  # §58: the job's id, name, roster, roles, deliver
         spec['job'] = job
     if model_chain:  # §44 (D27): the split supervisor's chain pick, written into the child config
         spec['model_chain'] = model_chain
@@ -1041,7 +1041,7 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
     ``hours`` (P7 split): the child task's budget instead of the parent's remaining time; ``lifecycle``: the
     child's lifecycle instead of child_lifecycle(parent) (a split child runs None). ``artifacts`` / ``budget``
     (§58 job): the child task's artifacts and budget card. ``job`` (§58): the job's id, name, roster (copied into
-    the child run), roles, and the deliver / review_file of its lifecycle gate, which runs in the child."""
+    the child run), roles, and the deliver spec of its lifecycle gate, which runs in the child."""
     fleet = _fleet()
     from fleetmux import redis_runtime, runtime_v2
     service = bool(named) and named['mode'] == 'service'
@@ -1133,9 +1133,8 @@ def spawn_child(f, slot, task_id, goal, workers, output=None, proposal=None, lau
                 spec['artifacts'] = artifacts
             if budget:
                 spec['budget'] = budget
-            for k in ('deliver', 'review_file'):  # §58: the job's lifecycle gate, judged inside the child
-                if job and job.get(k) is not None:
-                    spec[k] = job[k]
+            if job and job.get('deliver') is not None:  # §58: the job's lifecycle gate, judged inside the child
+                spec['deliver'] = job['deliver']
             if tree:  # §62: the child's decomposition tree starts from this seed file
                 spec['tree'] = tree
             runtime_v2.post_event(bus, {'kind': 'task', 'request_id': 'subfleet-' + task_id, 'spec': spec},

@@ -4,4 +4,3 @@
 advisor: on
 workers:
   - {name: dev-1, role: dev-peer.md}
-  - {name: review-1, role: ../reviewer.md}

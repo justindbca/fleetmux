@@ -11,8 +11,7 @@ Redis (host)
   fx:applet:<name>:events          stream: host -> applet events (field ``data``)
   fx:applet:<name>:notices         list: the last ``notices_max`` applet.notify texts and human-class escalation
                                    notices in full (JSON per item)
-  fx:agent:<slot>                  fields applet_lease, applet_lease_holder, applet_lease_until, applet_review,
-                                   applet_added_for
+  fx:agent:<slot>                  fields applet_lease, applet_lease_holder, applet_lease_until, applet_added_for
   fx:applet:op:<id>, fx:applet:opq internal: ops waiting for a decision (not part of the interface)
   fx:applet:<name>:open            internal list of open lease ids; the tick mirrors it into ``:leases``
   fx:applet:<name>:notify          internal list of notify times (rate limit)
@@ -39,7 +38,7 @@ HOST = 'fx:applet:lhost'  # internal: last host paused flag seen by the tick (ho
 OPS = ('applet.lease.request', 'applet.lease.renew', 'applet.lease.release', 'applet.escalate',
        'applet.notify', 'applet.audit')
 REASONS = ('bad_token', 'bad_version', 'applet_not_up', 'applet_paused', 'applet_detaching', 'host_paused',
-           'host_draining', 'max_active', 'max_renewals', 'renew_pending', 'worker_limit', 'review_cap', 'invalid',
+           'host_draining', 'max_active', 'max_renewals', 'renew_pending', 'worker_limit', 'invalid',
            'lease_not_active', 'wrong_slot', 'slot_leased', 'message_in_flight', 'rate_limited', 'duplicate',
            'no_decision', 'supervisor')
 OPEN = ('requested', 'granted', 'active', 'renew_requested')
@@ -193,14 +192,9 @@ def leased(f, slot):
     return (f.r.hget('fx:agent:' + slot, 'applet_lease') or '') if slot else ''
 
 
-def reviewing(f, slot):
-    """Review id the slot is running, '' when none."""
-    return (f.r.hget('fx:agent:' + slot, 'applet_review') or '') if slot else ''
-
-
 def taken(f, slot):
-    """Leased or reviewing: off limits for the scheduler and the supervisor (applets.md section 4)."""
-    return leased(f, slot) or reviewing(f, slot)
+    """Leased: off limits for the scheduler and the supervisor (applets.md section 4)."""
+    return leased(f, slot)
 
 
 # ------------------------------------------------------------------ the op door (inside the request event)
@@ -611,9 +605,8 @@ def screen(f, spec):
     rid = spec.get('id')
     try:
         if lid is None:
-            if holder and not (holder == rid == reviewing(f, slot)):  # the host's own review request passes
-                raise Refused('slot_leased', f.label(slot) + ' is ' + ('reviewing' if reviewing(f, slot)
-                                                                       else 'leased') + ' (' + holder + ')')
+            if holder:
+                raise Refused('slot_leased', f.label(slot) + ' is leased (' + holder + ')')
             return None
         name = spec.get('applet')
         h = f.r.hgetall(hkey(name)) if isinstance(name, str) and name in specs(f) else {}
@@ -628,21 +621,18 @@ def screen(f, spec):
             raise Refused('host_paused')
         if spec.get('fix') is not None:
             from fleetmux import applet_ops
-            fix = applet_ops.check_fix(f, name, rec, spec['fix'])
+            spec['fix'] = applet_ops.check_fix(f, name, rec, spec['fix'])  # shape only: never reviewed
     except Refused as exc:
         _check_id(f, rid)
         refuse(f, rid, exc)
         return rid
-    # A resent id is a duplicate before it touches the lease record (ValueError, as request() answers one). A fix
-    # reply under review has neither a request record nor a result yet: the lease record still knows its id.
+    # A resent id is a duplicate before it touches the lease record (ValueError, as request() answers one).
     _check_id(f, rid)
-    if rid in _loads(rec.get('inflight'), []) or rid in _loads(rec.get('fixes'), {}):
+    if rid in _loads(rec.get('inflight'), []):
         raise ValueError('duplicate: request id ' + rid + ' was used; its first result stays at fx:result:' + rid)
     spec.pop('token', None)  # the request record keeps no secret
     sent = _loads(rec.get('inflight'), []) + [rid]
     fields = {'messages': int(rec.get('messages') or 0) + 1, 'last_message': rid, 'inflight': _j(sent)}
-    if spec.get('fix') is not None:
-        fields['fixes'] = _j(dict(_loads(rec.get('fixes'), {}), **{rid: {'fix': fix, 'review': ''}}))
     f.r.hset(lease_key(name, lid), mapping=fields)
     _audit(f, 'applet.message.sent', applet=name, lease=lid, id=rid, status='')
     return None
@@ -658,12 +648,6 @@ def frame(f, spec, slot):
     until = float(rec.get('expires_at') or 0)
     return ('[Applet lease ' + lid + ' · ' + name + ' · message ' + str(rec.get('messages') or 1) + ' · term ends '
             + (time.strftime('%H:%M', time.localtime(until)) if until else 'when active') + ']\n')
-
-
-def withhold(f, rid, status, fields):
-    """RuntimeV2.publish: a leased worker's reply to a ``fix`` message waits for its review (applets.md 6)."""
-    from fleetmux import applet_ops
-    return applet_ops.withhold(f, rid, status, fields)
 
 
 def take_blocked(f, slot, rid, result):
@@ -699,9 +683,6 @@ def check_decision(f, decision):
     leased slot, and every ``applet`` item answers something open within its bounds."""
     for item in decision.get('dispatch') or []:
         slot = f.resolve(item.get('to') or '')
-        if reviewing(f, slot):
-            raise ValueError('dispatch to ' + f.label(slot) + ' refused: it is reviewing a fix for an applet; '
-                             'pick another worker')
         if leased(f, slot):
             raise ValueError('dispatch to ' + f.label(slot) + ' refused: it is leased by '
                              + (f.agent(slot).get('applet_lease_holder') or 'an applet') + ' (' + leased(f, slot)
@@ -937,16 +918,21 @@ def section(f, slot):
             '- Never delete or move files. If that seems necessary, reply with "blocked" and say what and why.\n')
 
 
+REVIEW_HEAD = '\n## Applet review grant '  # written by older hosts for the removed fix review: only stripped
+
+
 def rule_files(f, slot):
     return [_fleet().agent_cwd(f.cfg, slot) / n for n in ('AGENTS.md', 'CLAUDE.md')]
 
 
 def _strip(text):
-    i = text.find(SECTION_HEAD)
-    if i < 0:
-        return text
-    j = text.find('\n## ', i + len(SECTION_HEAD))
-    return text[:i] + (text[j:] if j >= 0 else '\n')
+    for head in (SECTION_HEAD, REVIEW_HEAD):
+        i = text.find(head)
+        if i < 0:
+            continue
+        j = text.find('\n## ', i + len(head))
+        text = text[:i] + (text[j:] if j >= 0 else '\n')
+    return text
 
 
 def write_section(f, slot):
@@ -1009,9 +995,7 @@ def end(f, name, lid, state, end_reason, note):
         f.publish(rec['renew_op'], 'rejected', by='program', reason='lease_not_active',
                   note='the lease ended: ' + state + (' (' + end_reason + ')' if end_reason else ''))
     slot = rec.get('slot') or ''
-    from fleetmux import applet_ops
-    reviewed = applet_ops.under_review(f, name, rec)  # a reply already given: its review finishes and publishes
-    open_ = [m for m in inflight(f, rec) if m not in reviewed]
+    open_ = inflight(f, rec)
     f.r.hset(lease_key(name, lid), mapping={'state': state, 'end_reason': end_reason, 'ended_at': now,
                                            'end_note': note, 'inflight': '[]'})
     _keep(f, lease_key(name, lid))
@@ -1030,7 +1014,7 @@ def end(f, name, lid, state, end_reason, note):
     event(f, name, 'lease.ended', lease=lid, state=state, end_reason=end_reason, note=note)
     held = now - float(rec.get('active_at') or rec.get('granted_at') or now)
     _audit(f, 'applet.lease.' + state, applet=name, lease=lid, slot=slot, end_reason=end_reason, held_s=round(held, 1),
-           messages=int(rec.get('messages') or 0), last_review=_loads(rec.get('last_review'), None))
+           messages=int(rec.get('messages') or 0))
     return True
 
 
@@ -1057,6 +1041,9 @@ def tick(f):
     host_flag(f, names)
     for entry in specs(f).values():
         applet_ops.sync(f, entry)
+    # once, after an upgrade from a host with the review step; before the lease loop so a held reply still goes
+    # out on a lease the restart is about to end
+    applet_ops.drain_reviews(f)
     for name in sorted(names):
         h = f.r.hgetall(hkey(name))
         for lid in open_ids(f, name):
@@ -1070,7 +1057,6 @@ def tick(f):
                 end(f, name, lid, 'revoked', 'applet_down', 'applet state is ' + (h.get('state') or 'removed'))
             else:
                 lease_tick(f, name, lid, rec, now)
-    applet_ops.review_tick(f, now)
     for oid in f.r.lrange(OPQ, 0, -1):
         op_timeout(f, oid, now)
     answer_ctl(f)
@@ -1143,8 +1129,6 @@ def lease_tick(f, name, lid, rec, now):
         f.r.hset(lease_key(name, lid), mapping={'gen': info['generation'], 'label': f.label(slot)})
         event(f, name, 'worker.rotated', lease=lid, slot=slot, **{'from': rec.get('label') or slot},
               to=f.label(slot), why=info.get('rotate_why') or 'handoff')
-    if rec.get('reviewing'):
-        return  # a review of this lease's fix runs: no expiry (applets.md section 6)
     expires = float(rec.get('expires_at') or 0)
     grace = float(lc['renew_grace_s']) if rec['state'] == 'renew_requested' else 0
     if now >= expires + grace:
@@ -1167,9 +1151,7 @@ def record_results(f, name, lid, rec):
         res = _loads(raw, {})
         status = res.get('status', '')
         f.r.hset(lease_key(name, lid), mapping={'last_status': status})
-        verdict = (res.get('review') or {}).get('verdict') if isinstance(res.get('review'), dict) else None
-        event(f, name, 'message.result', lease=lid, id=mid, status=status,
-              **({'review': verdict} if verdict else {}))
+        event(f, name, 'message.result', lease=lid, id=mid, status=status)
         _audit(f, 'applet.message.result', applet=name, lease=lid, id=mid, status=status)
     if left != sent:
         f.r.hset(lease_key(name, lid), mapping={'inflight': _j(left)})
@@ -1285,9 +1267,7 @@ def annotate(r, out):
         lease = slot_row(r, slot)
         if lease:
             row['applet_lease'] = lease
-        review, added_for = r.hmget('fx:agent:' + slot, 'applet_review', 'applet_added_for')
-        if review:
-            row['applet_review'] = review
+        added_for = r.hget('fx:agent:' + slot, 'applet_added_for')
         if added_for:
             row['applet_added_for'] = added_for
 

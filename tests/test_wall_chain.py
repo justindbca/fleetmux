@@ -3,6 +3,7 @@ Astra, fable, opus sol deepseek flash,对于worker 撞墙前依次是opus, sol,s
 The chain is fleet.yaml#discovery read against a test discovery cache (never the operator's); v1 fleets on a fake
 Redis / fake cmux, the supervisor switch on the real-Redis v2 fixture."""
 import json
+import uuid
 
 import pytest
 import yaml
@@ -272,3 +273,95 @@ def test_worker_default_thinking_is_high(tmp_path):
     assert named[named.index('--effort') + 1] == 'low'  # an advised slot keeps the advisor's level
     assert '--effort' not in fleet.claude_argv(f.path, snap, 'supervisor', 0, 'hi')
     assert snap.get('pi_thinking') in (None, 'high')  # a start without --pi-thinking records high, never off
+
+
+# ------------------------------------------------------------------ one OpenAI account, two pi logins (user 2026-11-27)
+def test_chain_from_an_old_cache_drops_the_second_provider_of_one_account():
+    """The 11-11 cache listed sol under openai (dead login) and openai-codex: the chain names sol once, from the
+    preferred provider, even before the next `fleetmux setup` (the chain re-ranks the cache, it does not probe)."""
+    cached = {'gateways': {}, 'clis': {'pi': {'installed': True, 'version_ok': True, 'logged_in': True,
+                                              'models': ['openai/gpt-6.1-sol', SOL]}}}
+    entries, _ = discover.chain('worker', cfg={'cli_order': ['pi'], 'worker': ['sol']}, cached=cached)
+    assert entries == [('pi', SOL)]
+
+
+# A wall switch onto a model whose login fails at startup (11-26: M14 dev-2 / M15 dev-1 moved to pi:openai/gpt-6.1-sol,
+# pi answered "OAuth refresh failed for openai: ... invalid_grant", both sub-fleets ended blocked): the model's
+# account is marked unusable and the slot takes the next one on the chain; the run blocks only when none is left.
+DEAD_LOGIN = 'Error: OAuth refresh failed for deadlogin: 400 {"error": "invalid_grant"}'
+
+
+def chain_cache(cache, claude=(), pi=()):
+    clis = {'pi': {'installed': True, 'version_ok': True, 'logged_in': True, 'models': list(pi)}}
+    if claude:
+        clis['claude'] = {'installed': True, 'version_ok': True, 'logged_in': True, 'models': list(claude)}
+    cache.write_text(yaml.safe_dump({'version': 1, 'gateways': {}, 'clis': clis}))
+
+
+def test_a_switch_to_a_model_whose_login_fails_takes_the_next_one_v1(tmp_path, pi_bin, cache):
+    dead = 'deadlogin/gpt-6.1-sol'
+    chain_cache(cache, claude=['opus', 'sonnet'], pi=[dead, TERRA])  # worker chain: opus, dead sol, sonnet, terra
+    f = make(tmp_path, {'goal': 'x'}, worker_cli='claude', worker_model='opus', **pi_bin)
+    sent = busy_worker(f)
+    f.handle(dict(turn('worker-1', CLAUDE_ACCOUNT_WALL), msg_id='m1'))
+    assert json.loads(f.agent('worker-1')['wall_downgrade'])['to'] == dead
+    f.tick()
+    assert f.agent('worker-1')['generation'] == '1' and f.runtime_cfg('worker-1')['pi_model'] == dead
+    f.handle(dict(turn('worker-1', DEAD_LOGIN, generation=1), failed=True))  # the startup turn fails on the login
+    assert f.task().get('status') != 'blocked' and f.agent('worker-1')['state'] == 'walled'
+    assert json.loads(f.r.hget(fleet.WALLS, 'pi:' + dead))['scope'] == 'account'
+    assert json.loads(f.agent('worker-1')['wall_downgrade'])['to'] == TERRA  # sonnet: the claude account wall
+    assert log(f, 'brake.startup_unusable')
+    f.tick()
+    assert f.agent('worker-1')['generation'] == '2' and f.runtime_cfg('worker-1')['pi_model'] == TERRA
+    f.handle(turn('worker-1', 'READY', generation=2))
+    f.tick()
+    assert not f.paused() and f.task().get('status') != 'blocked' and f.agent('worker-1')['wall_downgrade'] == ''
+    assert f.r.lrange('fx:inbox:worker-1', 0, -1) == [sent]  # the walled message waits for the new model
+
+
+def test_login_failure_on_the_last_chain_entry_still_blocks(tmp_path, pi_bin, cache):
+    dead = 'deadlogin/gpt-6.1-sol'
+    chain_cache(cache, claude=['opus'], pi=[dead])
+    f = make(tmp_path, {'goal': 'x'}, worker_cli='claude', worker_model='opus', **pi_bin)
+    busy_worker(f)
+    f.handle(dict(turn('worker-1', CLAUDE_ACCOUNT_WALL), msg_id='m1'))
+    f.tick()
+    f.handle(dict(turn('worker-1', DEAD_LOGIN, generation=1), failed=True))
+    assert json.loads(f.r.hget(fleet.WALLS, 'pi:' + dead))['scope'] == 'account'
+    assert log(f, 'brake.startup_unusable') and log(f, 'brake.switch_exhausted')
+    assert f.task()['status'] == 'blocked'  # nothing left on the chain: the old stop
+
+
+def v2_startup(f, slot, **kw):
+    """The new generation's bridge registers its session, then reports its startup turn (as the fx fixture does)."""
+    metadata = session(f, slot)
+    if f.agent(slot).get('thread') != metadata['thread']:
+        event(f, dict(metadata, kind='bridge_session', request_id='register-' + uuid.uuid4().hex))
+        f.v2.bus.register_slot(slot, metadata['generation'], metadata['thread'])
+    event(f, dict(metadata, kind='startup', request_id='ready-' + uuid.uuid4().hex,
+                  **dict(dict(text='', failed=True, aborted=False), **kw)))
+
+
+def test_a_switch_to_a_model_whose_login_fails_takes_the_next_one_v2(fx, cache):
+    f = fx  # pi supervisor + pi workers, transport v2
+    dead = 'deadlogin/gpt-6.1-terra'
+    chain_cache(cache, pi=[SOL, dead, DS_PI])  # worker chain: sol, dead terra, deepseek flash
+    f.r.delete(fleet.WALL_CHAINS)
+    f.setf('worker-1', runtime_launch=json.dumps({'profile_id': 'x', 'role_text': '',
+                                                  'overrides': {'worker_cli': 'pi', 'pi_model': SOL}}))
+    f.v2.transaction('wall-' + uuid.uuid4().hex, lambda: f.on_wall('worker-1', PI_ACCOUNT_WALL, 'turn'))
+    assert f.paused() and json.loads(f.agent('worker-1')['wall_downgrade'])['to'] == dead
+    f.tick()
+    assert f.agent('worker-1')['generation'] == '1' and f.runtime_cfg('worker-1')['pi_model'] == dead
+    v2_startup(f, 'worker-1', error='OAuth refresh failed for deadlogin: invalid_grant')
+    assert f.agent('worker-1')['state'] == 'walled'
+    assert json.loads(f.r.hget(fleet.WALLS, 'pi:' + dead))['scope'] == 'account'
+    assert json.loads(f.agent('worker-1')['wall_downgrade'])['to'] == DS_PI
+    assert 'blocked' not in (f.r.hget(fleet.SERVICE, 'reason') or '')
+    f.tick()
+    assert f.agent('worker-1')['generation'] == '2' and f.runtime_cfg('worker-1')['pi_model'] == DS_PI
+    v2_startup(f, 'worker-1', text='READY', failed=False)
+    assert f.agent('worker-1')['state'] == 'idle'
+    f.tick()
+    assert not f.paused() and f.agent('worker-1')['wall_downgrade'] == ''

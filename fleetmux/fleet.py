@@ -130,13 +130,13 @@ RESUME_CLIS = ('codex', 'claude')  # CLIs whose live process proves a reattachab
 # to kill it). If the operator supplies a broker script, the daemon runs these verbs for them.
 CHROME_VERBS = {'check', 'tabs', 'newtab', 'go', 'url', 'js'}
 THREAD_RE = r'[0-9a-f-]{36}'
-DEFAULTS = {'handoff_ratio': .6, 'handoff_timeout': 900, 'window': 100000, 'stall_timeout': 1200,
+DEFAULTS = {'window': 100000, 'stall_timeout': 1200,  # context-handoff defaults: fleet.yaml#handoff
             'chrome_min_interval': 20, 'profile': 'fleet', 'worker_cli': 'codex', 'worker_model': 'sonnet',
             'supervisor_model': 'opus',
             'claude_window': 200000, 'mode': 'task', 'max_busy': 0, 'request_timeout': None,
             'apply_profiles_live': False, 'allow_profile_live_switch': False, 'profile_ready_timeout': 180,
             'transport_version': 1, 'allow_development_v2': False, 'max_attempts': 2,
-            'clear_after_result': False, 'clear_timeout': 20, **midturn.DEFAULTS}
+            'clear_after_result': False, 'clear_timeout': 20}
 CLAUDE_JSON = Path.home() / '.claude.json'
 # opencode workers: the free OpenCode Zen tier serves a 200K context (paid: 1M); the model name itself comes only
 # from config (--opencode-model). Concurrency of the free tier is untested: max_busy defaults to 2.
@@ -151,10 +151,11 @@ ITEMS = 'fx:items'  # plain task mode: {dispatch id: {to, instruction}} for disp
 SPLIT_STALE = 'fx:split:stale'  # P7: JSON {M<n>: request id} of service splits dropped because their request ended
 JOBS = 'fx:jobs'  # service mode, §58: JSON {job id: open job} of `fleetmux task` jobs, each run by its own sub-fleet
 JOB_PREFIX = 'job-'  # job ids
+JOB_RETIRED = ('review_file',)  # a job spec written before the review removal: accepted, never carried
 JOB_KEYS = ('goal', 'hours', 'budget', 'artifacts', 'lifecycle', 'workers', 'supervisor_profile', 'worker_profiles',
-            'name', 'roster', 'roles', 'deliver', 'review_file', 'overrides', 'supervisor', 'worker', 'tree', 'by')
+            'name', 'roster', 'roles', 'deliver', 'overrides', 'supervisor', 'worker', 'tree', 'by') + JOB_RETIRED
 # carried to the child (subfleet.spawn_child job=); overrides: the attached start's own settings (join.py)
-JOB_SPAWN = ('name', 'roster', 'roles', 'deliver', 'review_file', 'overrides')
+JOB_SPAWN = ('name', 'roster', 'roles', 'deliver', 'overrides')
 JOB_ROSTER_REFUSED = ('subfleets', 'channels', 'applets')  # a job sub-fleet's roster reload would refuse these
 JOB_HOT_BASE = 'worker'  # a worker added for a job is <base>-<n> (an added roster row ends with -<number>)
 JOB_TRIES = 3  # a job whose sub-fleet could not start this many times fails
@@ -590,8 +591,9 @@ def handoff_limits(cli, model, cfg, table=None, worker=None, card=None):
     Window and ratio are resolved separately, first hit wins: the roster worker entry, the
     roster ``handoff`` table (``<cli>:<model>`` then ``<cli>``), the config ``handoff`` table
     (same keys), then the running profile's agent card (``card`` = (profile id, ratio): ratio only,
-    design.md §12 model cards), then built-ins / start flags. ``window`` None means "measured" (Codex
-    rollout, Pi report). Only Claude needs a built-in: its transcript carries no window."""
+    design.md §12 model cards). The window then takes built-ins / --claude-window; the ratio takes a typed
+    --handoff-ratio (the config key ``handoff_ratio``), else fleet.yaml#handoff. ``window`` None means
+    "measured" (Codex rollout, Pi report). Only Claude needs a built-in: its transcript carries no window."""
     layers = [('worker', worker or {})]
     for where, tab in (('roster', table or {}), ('config', cfg.get('handoff') or {})):
         layers += [(where + ' ' + k, tab[k]) for k in ((cli + ':' + model) if model else None, cli) if k and k in tab]
@@ -613,7 +615,8 @@ def handoff_limits(cli, model, cfg, table=None, worker=None, card=None):
         else:
             window, wsrc = int(cfg['claude_window']), '--claude-window'
     if ratio is None:
-        ratio, rsrc = float(cfg['handoff_ratio']), '--handoff-ratio'
+        rsrc = 'fleet.yaml#handoff' if cfg.get('handoff_ratio') is None else '--handoff-ratio'
+        ratio = fleet_config.handoff_ratio(cfg)
     return window, ratio, 'window: ' + wsrc + '; ratio: ' + rsrc
 
 
@@ -1455,8 +1458,7 @@ def parse_decision(text, workers, others_active, tree_ctx=None):
             raise ValueError('dispatch.advise_note must be text')
         if 'fresh' in item and type(item['fresh']) is not bool:
             raise ValueError('dispatch.fresh must be true or false')
-        if 'review' in item and type(item['review']) is not bool:
-            raise ValueError('dispatch.review must be true or false')
+        item.pop('review', None)  # an older supervisor's review marker: read and ignored (no review gate)
         if 'leaf' in item and type(item['leaf']) is not bool:
             raise ValueError('dispatch.leaf must be true or false')
     escalations = validate_escalations(decision)
@@ -2483,14 +2485,6 @@ SUPERVISOR_SPLIT_DOC = (
     'sub-fleet\'s own result follows as `<id>.done`. If the program refuses the split (limits), that worker gets the '
     'request as a normal dispatch and you are told. Do not combine with `fresh`. A section 4, if present, says when '
     'to split, dispatch or answer.\n')
-REVIEW_POINTER = ('\n## Review instructions\n\nWhen an instruction asks you to review, audit or accept someone '
-                  'else\'s change (复核 / 审查 / 验收 / review), first read REVIEWER.md in your current directory '
-                  'and follow it for that instruction: the top principle is to go live quickly and run normally '
-                  'after go-live, rounds narrow, P2 items are deferred. It does not apply to other work.\n')
-
-VERDICT_SECTION = ('\n## Verdict file for this run\n\nThis run decides delivery from your verdict JSON (R6). Write it to '
-                   'exactly this path, every round:\n\n`<path>`\n')
-
 # Every Claude Code the fleet starts: never self-update. An isolated config (CLAUDE_CONFIG_DIR) has no
 # autoupdater setting of its own, and on 2026-10-14 01:36 such an auto-update broke the shared install.
 CLAUDE_ENV = {'DISABLE_AUTOUPDATER': '1'}
@@ -2910,7 +2904,7 @@ class Fleet:
     def running(self):
         return self.service or self.task().get('status') == 'running'
 
-    SPEC_ONLY_LIFECYCLES = ('dev_task', 'review_loop')  # their task exists only as a spec (deliver / review_file)
+    SPEC_ONLY_LIFECYCLES = ('dev_task',)  # its task exists only as a spec (deliver)
 
     def typed_task_allowed(self):
         """Design §5 task mode: typed supervisor text becomes a goal-only task when nothing runs. Not in a
@@ -3137,37 +3131,6 @@ class Fleet:
     def workspace(self):
         return self.run_dir / 'workspace'
 
-    def review_file(self):
-        """The verdict file the current task's gate reads (dev_task deliver.review_file / review_loop), or None."""
-        spec = lifecycle_close.task_spec(self.task())
-        return (spec.get('deliver') or {}).get('review_file') or spec.get('review_file')
-
-    def reviewer_doc(self, name, review_slot=None):
-        """REVIEWER.md of worker ``name``: the shared reviewer rules, plus the absolute verdict path when the task's
-        gate reads a verdict file and ``name`` is the slot the supervisor dispatched the review to
-        (lifecycle_deliver.verdict_target)."""
-        text = (HERE / 'agents' / 'reviewer.md').read_text()
-        review_file = self.review_file()
-        if not review_file or name != (review_slot or self.task().get('review_slot')):
-            return text
-        return text + VERDICT_SECTION.replace('<path>', str(lifecycle_deliver.verdict_target(self.workspace(),
-                                                                                             review_file, name)))
-
-    def mark_review(self, slot):
-        """A ``"review": true`` dispatch to ``slot``: the task records it as the review slot (the gate reads the verdict
-        from its directory), its REVIEWER.md names the absolute verdict path, and the returned line (prepended to
-        the instruction) names it too ('' when the task's gate reads no verdict file)."""
-        self.r.hset(TASK, mapping={'review_slot': slot})
-        self.log('review.slot', slot=slot, task=self.task().get('id', ''))
-        review_file = self.review_file()
-        if not review_file:
-            return ''
-        cwd = agent_cwd(self.cfg, slot)
-        cwd.mkdir(parents=True, exist_ok=True)
-        (cwd / 'REVIEWER.md').write_text(self.reviewer_doc(slot, review_slot=slot))
-        return ('[Review] This is the review the delivery gate reads. Write the verdict JSON (REVIEWER.md section R6) '
-                'to exactly ' + str(lifecycle_deliver.verdict_target(self.workspace(), review_file, slot)) + '\n')
-
     def fleet_cmd(self):
         return shlex.join([self.cfg['python'], str(Path(__file__).resolve()), 'chrome', '--config', str(self.path)])
 
@@ -3188,8 +3151,8 @@ class Fleet:
             scope += '\n## 4. Your role (' + name + ')\n\n' + extra.read_text()
         if self.contract_phase():  # successors / roster-added workers inside a contract task
             scope += '\n' + self.contract_doc(role, name)
-        if role == 'worker':  # every review inside a fleet follows the fleet copy of the review rules
-            scope += REVIEW_POINTER + applet_lease.rule_section(self, name)  # an open lease's section
+        if role == 'worker':
+            scope += applet_lease.rule_section(self, name)  # an open lease's section
         task_dir = self.cfg.get('task_dir') if self.cfg.get('parent_config') else None
         if role == 'worker':  # roster `writable:` grants extra roots beyond the own directory (user 2026-11-03)
             # §46: grants the program issued from a top ruling sit right behind the rule (set_grants rewrites them)
@@ -3268,8 +3231,8 @@ class Fleet:
             prompt = prompt.replace(' Read AGENTS.md in the current directory first.', '').replace(' Read AGENTS.md first.', '')
         else:
             (cwd / 'AGENTS.md').write_text(scope)
-        if role == 'worker':
-            (cwd / 'REVIEWER.md').write_text(self.reviewer_doc(name))
+        if role == 'worker':  # written by releases with a review gate; no review text is left behind
+            (cwd / 'REVIEWER.md').unlink(missing_ok=True)
         if is_claude(cfg, name) and advised:
             # CLAUDE.md = scope + core + domain rules. A held first generation has not started: its record
             # is written when the gate opens (release_hold with the sheet, release_default with nothing).
@@ -5475,7 +5438,7 @@ class Fleet:
                      or job.get('hot_slot') == slot), '')
 
     def job_spawn_fields(self, spec):
-        """§58: the job's own sub-fleet fields (name, roster, roles, deliver / review_file), checked now; ValueError
+        """§58: the job's own sub-fleet fields (name, roster, roles, deliver), checked now; ValueError
         when one is bad. Paths must be absolute: the daemon's directory is not the caller's."""
         out = {}
         if 'name' in spec:
@@ -5513,13 +5476,7 @@ class Fleet:
             out['deliver'] = lifecycle_deliver.validate_deliver(spec.get('deliver'))
         elif spec.get('deliver') is not None:
             raise ValueError('deliver needs lifecycle dev_task')
-        if life == 'review_loop':
-            if spec.get('review_file') is None:
-                raise ValueError('review_loop needs "review_file": the reviewer verdict JSON it reads each round')
-            out['review_file'] = lifecycle_deliver.validate_review_file(spec['review_file'])
-        elif spec.get('review_file') is not None:
-            raise ValueError('review_file needs lifecycle review_loop (dev_task: deliver.review_file)')
-        return out
+        return out  # review_file (JOB_RETIRED) of an older spec is not carried
 
     def job_settings(self, spec, fields=None):
         """The sub-fleet of a job: fleet.yaml#job_subfleet, then the job spec's own keys. ValueError when bad.
@@ -5622,7 +5579,7 @@ class Fleet:
         by = decompose.seed_by(spec['by']) if spec.get('by') is not None else None  # §62: who wrote the tree
         budget = brake.validate_budget(spec.get('budget'))
         life = spec.get('lifecycle')
-        if life is not None and (life not in lifecycle.MODE_NAMES or lifecycle.base_mode(life) != 'task'):
+        if life is not None and (not lifecycle.known(life) or lifecycle.base_mode(life) != 'task'):
             raise ValueError('lifecycle must be a task lifecycle (' + ', '.join(
                 m for m in lifecycle.MODE_NAMES if lifecycle.base_mode(m) == 'task') + ') or null')
         if life == 'dev_task' and spec.get('tree') is None and decompose.enabled():  # §62: a dev job brings its tree
@@ -5659,7 +5616,7 @@ class Fleet:
 
     def job_spawn_args(self, jid):
         """The sub-fleet request fields of job ``jid`` (escalation_apply): its hours, lifecycle, artifacts, budget,
-        and ``job`` (its id, name, roster, roles, deliver / review_file: subfleet.spawn_child)."""
+        and ``job`` (its id, name, roster, roles, deliver: subfleet.spawn_child)."""
         job = self.job_state().get(jid) or {}
         out = {'hours': (job.get('settings') or {}).get('hours') or subfleet.limits(self.cfg)['split_budget_h'],
                'lifecycle': job.get('lifecycle'),
@@ -6504,6 +6461,8 @@ class Fleet:
                 if record:
                     self.brake_notify(record)
                     return
+                if self.startup_unusable(name, ev.get('text', '') + '\n' + str(ev.get('error') or '')):
+                    return
                 self.block_profile(name, 'startup did not return READY; check its terminal', dead=True)
                 return
         if (is_claude(self.runtime_cfg(name), name) or is_pi(self.runtime_cfg(name), name)) and info.get('state') in ('busy', 'handoff', 'idle'):
@@ -6781,8 +6740,6 @@ class Fleet:
             # A busy worker records intent only; delivery re-evaluates at idle.
             # §46: a program grant is pointed to by the program's own line, ahead of the supervisor's text
             advisory = self.take_grant_note(slot) + profile_runtime.profile_advisory(slot, application)
-            if item.get('review'):
-                advisory = self.mark_review(slot) + advisory
             if self.advisor_online():
                 # Only supervisor dispatches are advised (never [contract] notices or report corrections).
                 # Registered before the depends_on hold: a held row is advised when the daemon releases it.
@@ -6950,10 +6907,6 @@ class Fleet:
         if not self.cfg.get('parent_config') or self.cfg.get('job'):
             if self.cfg.get('lifecycle') == 'dev_task':
                 life_spec['deliver'] = lifecycle_deliver.validate_deliver(spec.get('deliver'))
-            elif self.cfg.get('lifecycle') == 'review_loop':
-                if 'review_file' not in spec:
-                    raise ValueError('review_loop needs "review_file": the reviewer verdict JSON it reads each round')
-                life_spec['review_file'] = lifecycle_deliver.validate_review_file(spec['review_file'])
         registry_path = validate_agent_registry_path(spec.get('agent_registry'))
         dispatch_plan = profile_assignments = None
         if auto_agents:
@@ -7000,14 +6953,6 @@ class Fleet:
                   + ' (artifact paths are relative to it, e.g. worker-1/report.md)'
                   + '\nArtifacts pre-declared by the operator: '
                   + json.dumps(spec.get('artifacts', []), ensure_ascii=False))
-        review_file = (life_spec.get('deliver') or {}).get('review_file') or life_spec.get('review_file')
-        if review_file:
-            prompt += ('\nReview verdict: the delivery gate reads ' + str(self.workspace() / review_file) + ', else '
-                       + str(self.workspace() / '<review worker>' / review_file) + '. You choose the reviewer: add '
-                       '"review": true to the dispatch item that gives the review; the program then tells that worker '
-                       'the exact path (its REVIEWER.md, section R6). Without a review dispatch the gate searches every '
-                       'worker directory and accepts exactly one match. It checks only the verdict (PASS, zero open '
-                       'P0/P1), never who reviewed.')
         if tree_on:
             seeded = [n['id'] for n in decompose.level_nodes(seed)]
             prompt += ('\nDecomposition is on for this task: your first reply hands in the tree only ("tree": [...], '
@@ -7139,7 +7084,7 @@ class Fleet:
 
     def worker_board(self):
         """One line per dispatchable worker for a service routing message (docs/design.md §32):
-        the supervisor picks an idle worker and the reviewer by role from this, not by guessing."""
+        the supervisor picks an idle worker by role from this, not by guessing."""
         current = {}
         for rid in self.r.lrange(REQQ, 0, -1):
             req = self.r.hgetall(REQ + rid)
@@ -7460,7 +7405,7 @@ class Fleet:
         if card:  # the budget card can only tighten --max-busy
             cap = min(cap, card) if cap else card
         busy = sum(self.agent(w).get('state') in ('busy', 'handoff', 'held') or bool(applet_lease.taken(self, w))
-                   for w in self.workers)  # a leased (or reviewing) slot is busy for its whole lease
+                   for w in self.workers)  # a leased slot is busy for its whole lease
         for name in self.names:
             info = self.agent(name)
             if name in self.workers and cap and busy >= cap and not applet_lease.taken(self, name):
@@ -7512,7 +7457,7 @@ class Fleet:
             return  # not settled on the bus yet: look again next pump
         self.setf(name, idle_rotate_mark=mark)
         used, window = self.usage(name)
-        ratio = float(self.agent(name).get('handoff_ratio') or self.cfg['handoff_ratio'])
+        ratio = float(self.agent(name).get('handoff_ratio') or fleet_config.handoff_ratio(self.cfg))
         if subfleet.adopted(self.cfg, name, info.get('generation')) or not window or used < ratio * window:
             return
         if agent_cli(self.runtime_cfg(name), name) == 'codex' and active_children(info.get('thread'), self.sessions):
@@ -7863,10 +7808,10 @@ class Fleet:
         return (profile, card.handoff_ratio) if card is not None and card.handoff_ratio is not None else None
 
     def handoff_ratio(self, name):
-        """The slot's profile card ratio, else the fleet's --handoff-ratio (card layer only; the full
-        resolution incl. roster / config tables is handoff_limits)."""
+        """The slot's profile card ratio, else the fleet's last layer (a typed --handoff-ratio, else
+        fleet.yaml#handoff). Card layer only; the full resolution incl. roster / config tables is handoff_limits."""
         card = Fleet.card_handoff_ratio(self, name)
-        return card[1] if card else float(self.cfg['handoff_ratio'])
+        return card[1] if card else fleet_config.handoff_ratio(self.cfg)
 
     def deliver(self, name):
         info = self.agent(name)
@@ -7981,7 +7926,7 @@ class Fleet:
                 if self.fresh_rotation(name, used, window, source='explicit' if explicit else 'always') is False:
                     self.setf(name, fresh_always_failed=mark)  # after the restore: this dispatch goes to the old session
                 return
-        ratio = float(self.agent(name).get('handoff_ratio') or self.cfg['handoff_ratio'])  # set by usage()
+        ratio = float(self.agent(name).get('handoff_ratio') or fleet_config.handoff_ratio(self.cfg))  # usage()
         if subfleet.adopted(self.cfg, name, info.get('generation')):
             window = 0  # an adopted pane goes back to its parent fleet: never replace it with a successor
         if window and used >= ratio * window:
@@ -9032,7 +8977,7 @@ class Fleet:
         draft.write_text(handoff.partial_template())
         self.setf(name, state='handoff', handoff_id=hid, handoff_draft=draft,
                   handoff_mtime=draft.stat().st_mtime_ns,
-                  handoff_deadline=time.time() + float(self.cfg['handoff_timeout']))
+                  handoff_deadline=time.time() + fleet_config.handoff_timeout(self.cfg))
         self.log('rotate.start', agent=name, used=used, window=window, generation=info.get('generation'))
         prompt = ((prompt or handoff.DUMP_PROMPT).format(path=draft, used=used, window=window)
                   + ' This is a same-task handoff: do not open windows, do not continue the task itself.')
@@ -10103,6 +10048,30 @@ class Fleet:
         if record:
             self.setf(name, state='walled', runtime_ready=0, bridge_available=0)
         return record
+
+    def startup_unusable(self, name, text):
+        """A generation a wall switch started whose CLI could not log in (user 2026-11-27; 11-26: pi's "OAuth refresh
+        failed ... invalid_grant" blocked two sub-fleets): its account is marked on this run's wall records and the
+        pending switch moves on to the next usable model of the chain, like a refused switch (wall_target); the
+        slot waits walled for wall_tick. False: not that case, or nothing usable is left (the caller blocks)."""
+        info = self.agent(name)
+        req = json.loads(info.get('wall_downgrade') or 'null')
+        if not req or info.get('wall_switch') != req.get('at') or not runtime_v2.AUTH_ERROR.search(text or ''):
+            return False
+        here = (req['to_cli'], req['to'])
+        self.wall_mark(name, here, 'account')
+        self.log('brake.startup_unusable', agent=name, model=here[0] + ':' + here[1], error=(text or '').strip()[:300])
+        action = self.wall_decide(name, self.runtime_cfg(name), kind=req.get('kind'))
+        wall = json.loads(info.get('wall') or '{}')
+        if action['action'] != 'switch':
+            self.setf(name, wall_downgrade='', wall_switch='', wall=json.dumps(dict(wall, **action), ensure_ascii=False))
+            self.log('brake.switch_exhausted', agent=name, skipped=action['skipped'])
+            return False
+        req = dict(action, key=self.wall_key(name, action['to_cli']), from_key=self.wall_key(name, action['cli']),
+                   source=req.get('source'), at=uuid.uuid4().hex[:12], kind=req.get('kind'))
+        self.setf(name, state='walled', runtime_ready=0, bridge_available=0, wall_switch='',
+                  wall_downgrade=json.dumps(req, ensure_ascii=False), wall=json.dumps(dict(wall, **action), ensure_ascii=False))
+        return True
 
     def wall_tick(self):
         """Wall side effects (spawn / kill), outside any v2 transaction. At an idle boundary run the pending chain
@@ -11196,6 +11165,21 @@ def resume_interpreter(run, cfg):
               + ('; still running, they switch at their own next resume: ' + ', '.join(running) if running else ''))
 
 
+def require_handoff_block():
+    """Refuse to start while fleet.yaml#handoff has never been readable and valid: Python holds no number to run on.
+    The read also gives this process the last good values a later bad edit falls back to."""
+    try:
+        fleet_config.handoff()
+    except ValueError as exc:
+        raise SystemExit('cannot start: ' + str(exc)) from exc
+
+
+def handoff_flags(args):
+    """The handoff values the start command typed, as config.json keys; an untyped one stays out of config.json, so
+    the run follows fleet.yaml#handoff."""
+    return {k: getattr(args, k) for k in ('handoff_ratio', 'handoff_timeout') if getattr(args, k, None) is not None}
+
+
 def resume(run, args):
     """start --resume: reattach an unfinished v2 run. False when it turned out finished (auto starts anew)."""
     path = run / 'config.json'
@@ -11206,6 +11190,7 @@ def resume(run, args):
     i18n.pin(None)
     cfg['ui_language'] = i18n.language()
     i18n.pin(cfg['ui_language'])
+    require_handoff_block()
     cfg.setdefault('fleet_home', str(HOME.expanduser().resolve()))
     cfg.setdefault('cmux_bin', cmux_manager.CMUX)
     cfg.setdefault('cmux_state_dir', str(cfg.get('cmux_state_dir') or cmux_manager.STATE_DIR))
@@ -11356,6 +11341,7 @@ def resume(run, args):
 
 def daemon(cfg_path, resume=False):
     cfg = load(cfg_path)
+    require_handoff_block()
     fleet = None
     with (Path(cfg['run']) / 'daemon.lock').open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -11712,6 +11698,7 @@ def start_new_run(args):
     # and every process of the run reads that file (pin_paths), not whatever its environment says.
     private_config = fleet_config.from_env()
     fleet_config.pin(private_config)
+    require_handoff_block()
     # A new run without an explicit CLI takes the pair table's default combination (pi supervisor on
     # the table's model, e.g. openai-codex/gpt-6-astra thinking high, + official Claude workers); the
     # config written below always names both CLIs, so the codex fallback in pair_problem only serves
@@ -11997,7 +11984,7 @@ def start_new_run(args):
            **({'claude_hook_delivery': False} if getattr(args, 'claude_hook_delivery', True) is False else {}),
            'worker_profile': args.worker_profile, 'profile': args.profile, 'codex': codex,
            'codex_queue': queue_ok, 'codex_version': codex_version, 'redis_server': redis_server, 'codex_home': str(home),
-           'handoff_ratio': args.handoff_ratio, 'handoff_timeout': args.handoff_timeout,
+           **handoff_flags(args),
            'window': args.window, 'stall_timeout': args.stall_timeout,
            'stall_grace': args.stall_grace, 'stall_escapes': args.stall_escapes,
            'stall_window': args.stall_window, 'stall_cpu_pct': args.stall_cpu_pct,
@@ -12450,11 +12437,12 @@ def cli():
                    ' (default: $FLEETMUX_STATE or ~/.fleetmux/state)')
     s.add_argument('--codex-home', help='isolated CODEX_HOME for the agents (login + profile symlinked from yours;'
                    ' no hooks/MCP; default: <fleet home>/codex-home)')
-    s.add_argument('--handoff-ratio', type=float, default=DEFAULTS['handoff_ratio'],
-                   help='rotate a session once its context use reaches this share of the window '
-                        '(lowest-priority default; roster handoff: overrides per CLI/model, docs/design.md §22)')
-    s.add_argument('--handoff-timeout', type=float, default=DEFAULTS['handoff_timeout'],
-                   help='seconds to wait for the model to write its handoff before using the skeleton')
+    s.add_argument('--handoff-ratio', type=float, default=None,
+                   help='rotate a session once its context use reaches this share of the window (default: '
+                        'fleet.yaml#handoff.ratio; roster handoff: and agent cards rank above it, docs/design.md §22)')
+    s.add_argument('--handoff-timeout', type=float, default=None,
+                   help='seconds to wait for the model to write its handoff before using the skeleton '
+                        '(default: fleet.yaml#handoff.handoff_timeout)')
     s.add_argument('--window', type=int, default=DEFAULTS['window'],
                    help='context window fallback when the rollout has not reported one yet')
     s.add_argument('--stall-timeout', type=float, default=DEFAULTS['stall_timeout'],

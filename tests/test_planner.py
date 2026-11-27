@@ -7,16 +7,14 @@ from fleetmux.agent_registry import AgentRegistry
 from fleetmux.planner import build_dispatch_plan
 
 
-def test_code_change_plan_has_implementation_and_independent_review():
+def test_code_change_plan_is_one_implementation_without_a_review_step():
     goal = "implement feature X and add tests"
     plan = build_dispatch_plan(goal)
     assert plan.kind == "code-change"
-    assert [(task.id, task.agent_id) for task in plan.subtasks] == [
-        ("implementation", "flashnext-coder"),
-        ("review", "claude-reviewer"),
+    assert [(task.id, task.agent_id, task.depends_on) for task in plan.subtasks] == [
+        ("implementation", "flashnext-coder", ()),
     ]
-    assert plan.subtasks[1].depends_on == ("implementation",)
-    assert all(goal in task.prompt for task in plan.subtasks)
+    assert goal in plan.subtasks[0].prompt
 
 
 def test_research_plan_routes_to_researcher_with_self_contained_prompt():
@@ -30,7 +28,7 @@ def test_research_plan_routes_to_researcher_with_self_contained_prompt():
 def test_review_goal_is_not_misclassified_as_implementation():
     plan = build_dispatch_plan("review code changes for safety")
     assert plan.kind == "review"
-    assert [(task.id, task.agent_id) for task in plan.subtasks] == [("review", "claude-reviewer")]
+    assert [(task.id, task.agent_id) for task in plan.subtasks] == [("review", "claude-opus")]  # asked for: still a job
 
 
 @pytest.mark.parametrize("goal,capability", [
@@ -46,10 +44,8 @@ def test_code_change_subtasks_route_by_role_despite_goal_keywords(goal, capabili
     assert plan.kind == "code-change"
     assert [(task.id, task.agent_id, task.capability) for task in plan.subtasks] == [
         ("implementation", "flashnext-coder", capability),
-        ("review", "claude-reviewer", "code-review"),
     ]
     assert plan.subtasks[0].depends_on == ()
-    assert plan.subtasks[1].depends_on == ("implementation",)
     assert plan.goal == goal
     assert all("Goal:\n%s\n\n" % goal in task.prompt for task in plan.subtasks)
 
@@ -73,7 +69,6 @@ def test_research_role_is_not_overridden_by_review_keywords(goal):
     ("fix security bug", ["code-review", "safety-audit"], "test-fix"),
     ("fix security bug", ["code-edit", "code-review", "safety-audit"], "test-fix"),
     ("implement feature and review it", ["code-review", "safety-audit"], "code-edit"),
-    ("implement security feature", ["code-edit", "safety-audit"], "code-review"),
     ("review code changes", ["code-edit"], "code-review"),
     ("research security risks", ["safety-audit", "planning"], "web-research"),
     ("summarize current workflow", ["web-research"], "planning"),
@@ -106,7 +101,7 @@ def test_inspection_cli_does_not_connect_to_fleet(monkeypatch, capsys):
     fleet.main(["agents", "list"])
     listing = json.loads(capsys.readouterr().out)
     assert {card["id"] for card in listing["agents"]} == {
-        "flashnext-coder", "claude-coder", "claude-reviewer", "researcher",
+        "flashnext-coder", "claude-coder", "researcher",
         "claude-fable", "claude-opus", "claude-sonnet", "claude-haiku",  # advisor model cards
     }
 
@@ -115,12 +110,8 @@ def test_inspection_cli_does_not_connect_to_fleet(monkeypatch, capsys):
 
     fleet.main(["plan", "implement feature X"])
     plan = json.loads(capsys.readouterr().out)
-    assert [task["agent_id"] for task in plan["subtasks"]] == [
-        "flashnext-coder", "claude-reviewer"
-    ]
+    assert [task["agent_id"] for task in plan["subtasks"]] == ["flashnext-coder"]
 
     fleet.main(["plan", "implement feature X", "--workers", "worker-1,worker-2"])
     assigned = json.loads(capsys.readouterr().out)
-    assert [item["worker"] for item in assigned["profile_assignments"]["assignments"]] == [
-        "worker-1", "worker-2"
-    ]
+    assert [item["worker"] for item in assigned["profile_assignments"]["assignments"]] == ["worker-1"]

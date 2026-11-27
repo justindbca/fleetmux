@@ -115,8 +115,8 @@ fleetmux demo
   一个模型，`pi_model:`）。弱模型每次只看到一小块：派工项上的 `"fresh": true` 在同一槽位起一个干净的会话，上一块不会渗进下一块；
   较长的一块在小窗口溢出前就换新会话接续。弱模型做错的地方由程序把关，而不是采信它的说法：所有声明的产物都存在、长度够、含必需
   文字，任务才结束；三次误报 `COMPLETED` 即判阻塞。免费接口不稳且有上限：限流和用量墙都走撞墙表，槽位沿模型链往下换，或可续跑地
-  暂停；`--max-busy` 守住免费档的并发上限；fleet 运行中改名单 YAML 即可增减 worker。要做质量把关，给名单里某一行配一个更强的
-  `pi_model:`，让它当复核者。
+  暂停；`--max-busy` 守住免费档的并发上限；fleet 运行中改名单 YAML 即可增减 worker。最难的几块，给名单里某一行配一个更强的
+  `pi_model:`，把这几块派给它。
 - **定时研究报告**（`scheduled`）。调用方自己的定时器在工作日的固定时点启动 fleet（开启 `clock_gate` 时，fleet 在休市日会自己拒绝
   启动）：一个监工加两个 Claude Code worker，研究用的 skill 和网络搜索 MCP 经 `--worker-kit` 载入。任务目标里声明报告文件及其
   必含章节；daemon 按字面验收，给这次运行设硬性时限，结束时关闭工作区。
@@ -125,11 +125,10 @@ fleetmux demo
   校验每条回复，调用方在非工作时段用 `pause` / `resume` 把 fleet 挂起。较大的活用 `fleetmux task` 作为 job 提交，
   在它自己的 task 模式子 fleet 里运行。
   详见英文版[服务模式](README.md#service-mode-resident-fleet)。
-- **功能开发与独立复核**（`dev_task`）。监工拆分功能，worker 实现，另设复核 worker 评审；复核至多三轮，剩下的 P0 / P1 交给你，
-  而不是开第四轮。只有交付闸的 `test_cmd` 通过、代码合并并交给发布队列，任务才算完成。接口契约（`"contracts": true`）在开工前
+- **功能开发**（`dev_task`）。监工拆分功能，worker 实现；合并时监工把整个 diff 读一遍，顺手修明显错误、做简单重构。
+  没有复核轮次，也没有 verdict 文件：只有交付闸的 `test_cmd` 通过、代码合并并交给发布队列，任务才算完成。接口契约（`"contracts": true`）在开工前
   冻结共用接口。
-- **多阶段项目**（`program`）。每个阶段作为一个独立的子 `dev_task` fleet 运行；台账记录各阶段，最后一个阶段合并并复核后，项目结束。
-- **复核直到通过**（`review_loop`）。复核 → 修改 → 复核，至多三轮，之后出报告。
+- **多阶段项目**（`program`）。每个阶段作为一个独立的子 `dev_task` fleet 运行；台账记录各阶段，最后一个阶段合并后，项目结束。
 - **单个 worker 撑不下的任务**（开发中）。worker 的工作流持续忙碌超过可配置的时长时，会被要求提出拆分方案；监工批准（并选定模型）
   后，该 worker 交棒，接班者成为一个子 fleet 的监工，在父 fleet 的 worker 区实时显示。worker 也可以主动提出拆分。详见英文版
   [子 fleet](README.md#sub-fleets-a-worker-becomes-a-sub-fleet-supervisor-development)与 `docs/design.md` §44。
@@ -226,7 +225,7 @@ model = "gpt-5.5"
 `--supervisor-cli` / `--worker-cli` 时，`start` 取 `fleetmux/config/fleet.yaml#cli_pairs` 里的缺省组合：**Pi 监工跑
 `openai-codex/gpt-6-astra`（thinking high），配官方 Claude Code worker**。该表列出所有支持的组合及其状态（见英文版
 [Redis v2 development runtime](README.md#redis-v2-development-runtime)），表里没有的组合直接拒绝。`start` 还必须带
-`--lifecycle <mode>`（`service`、`dev_task`、`program`、`scheduled`、`review_loop`、`smoke`，见
+`--lifecycle <mode>`（`service`、`dev_task`、`program`、`scheduled`、`smoke`，见
 `fleetmux/config/fleet.yaml#lifecycle_modes`）；`unverified` 组合只能以 `--lifecycle smoke` 启动。英文版里 Codex 专用的配置与
 启动示例只作为 v1 旧版参考保留。
 

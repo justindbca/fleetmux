@@ -12,8 +12,10 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
+from fleetmux import fleet_config
+
 TAIL_BYTES = 65536
-DEFAULTS = {'midturn_ratio': .8, 'midturn_retry': 300, 'midturn_max_splits': 3}
+KEYS = ('midturn_ratio', 'midturn_retry', 'midturn_max_splits')  # their defaults: fleet.yaml#handoff
 PREFIX = '[FLEET MID-TURN HANDOFF fx-'
 MIDTURN_PROMPT = (
     '[FLEET MID-TURN HANDOFF {midturn_id}] Context is {used}/{window}. This is the fleet daemon\'s own '
@@ -167,7 +169,7 @@ def validate_settings(settings):
     """
     if not isinstance(settings, dict):
         raise ValueError('midturn settings must be a mapping')
-    for name in DEFAULTS.keys() & settings.keys():
+    for name in (k for k in KEYS if k in settings):
         if name == 'midturn_ratio':
             _ratio(settings[name], name)
         elif name == 'midturn_max_splits':
@@ -177,7 +179,7 @@ def validate_settings(settings):
 
 
 def resolve_settings(cli, model, cfg, table=None, worker=None, card=None):
-    """(values, sources), first hit per key: worker > roster > config > card > flag.
+    """(values, sources), first hit per key: worker > roster > config > card > flag > fleet.yaml#handoff.
 
     Tables use exact ``cli:model`` then ``cli`` keys, as in §22. ``card`` is
     (profile id, mapping of new keys). This resolves no window or handoff_ratio.
@@ -191,19 +193,20 @@ def resolve_settings(cli, model, cfg, table=None, worker=None, card=None):
     values, sources = {}, {}
     for where, entry in layers + [('flag', cfg)]:
         validate_settings(entry)
-        for key in DEFAULTS.keys() & entry.keys():
+        for key in (k for k in KEYS if k in entry):
             if key not in values:
                 values[key] = entry[key]
                 sources[key] = '--' + key.replace('_', '-') if where == 'flag' else where
-    for key, default in DEFAULTS.items():
-        if key not in values:
-            values[key], sources[key] = default, 'default'
+    missing = [key for key in KEYS if key not in values]
+    if missing:
+        block = fleet_config.handoff()
+        for key in missing:
+            values[key], sources[key] = block[key], 'fleet.yaml#handoff'
     return values, sources
 
 
-def decide(used, window, *, midturn_ratio=.8, busy=True, ready=False, guarded=False,
-           midturn_splits=0, midturn_max_splits=3, ordered=False, elapsed=0,
-           tries=1, midturn_retry=300):
+def decide(used, window, *, midturn_ratio, midturn_max_splits, midturn_retry, busy=True, ready=False,
+           guarded=False, midturn_splits=0, ordered=False, elapsed=0, tries=1):
     """Return none / steer / retry / kill / blocked; never clamp the user's ratio."""
     if guarded or not (busy or ready):
         return 'none'
@@ -537,7 +540,7 @@ def resume_clock(record, now):
     return result
 
 
-def pause_message(message, now_ms, *, midturn_retry=300, profile_ready_timeout=180):
+def pause_message(message, now_ms, *, midturn_retry, profile_ready_timeout=180):
     """Snapshot remaining bus deadline and protect the old delivery during handoff.
 
     Only the daemon renews the lease. The returned fields belong in the ordering transaction.

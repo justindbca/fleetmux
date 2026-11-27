@@ -53,7 +53,8 @@ EXCERPT_CHARS = 2000
 # README "Jobs" rule 1, without `goal` (the message text). fleet.JOB_KEYS also has overrides / supervisor /
 # worker, which the README does not list: refused here.
 JOB_KEYS = ('hours', 'artifacts', 'budget', 'lifecycle', 'workers', 'supervisor_profile', 'worker_profiles',
-            'name', 'roster', 'roles', 'deliver', 'review_file', 'tree', 'by')
+            'name', 'roster', 'roles', 'deliver', 'tree', 'by')
+JOB_RETIRED = ('review_file',)  # an older job block's key: accepted and ignored, not listed
 DEFAULT_ARTIFACT = {'path': 'worker-1/result.md', 'min_chars': 300}
 DEFAULT_NOTE = ('Write the final answer to worker-1/result.md (at least 300 characters); the program checks '
                 'this file.')
@@ -137,10 +138,10 @@ def job_spec(text):
         if 'goal' in data:
             raise PromptError('`goal` is the message text above the ```json block, not a key of it. '
                               + allowed_keys())
-        bad = sorted(set(data) - set(JOB_KEYS))
+        bad = sorted(set(data) - set(JOB_KEYS) - set(JOB_RETIRED))
         if bad:
             raise PromptError('unknown job key(s): ' + ', '.join(bad) + '. ' + allowed_keys())
-        spec = dict(data)
+        spec = {k: v for k, v in data.items() if k not in JOB_RETIRED}
     goal = goal.strip()
     if not goal:
         raise PromptError('the message has no goal text. Write the goal as the message; the optional ```json '

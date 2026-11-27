@@ -396,7 +396,7 @@ from test_subfleet import adopt_by_hook, start_tree, stop_child_like_daemon  # n
 from fleetmux import applet_ops, lifecycle_deliver  # noqa: E402
 
 DELIVER = {'repo': '/abs/repo', 'feature_branch': 'feat/x', 'deploy_branch': 'main', 'test_cmd': ['true'],
-           'queue': '/abs/queue.json', 'review_file': 'review.json'}
+           'queue': '/abs/queue.json', 'review_file': 'review.json'}  # review_file: an older spec's key, ignored
 
 
 def team(tmp_path, extra=''):
@@ -425,8 +425,7 @@ def test_job_fields_are_validated_at_entry(svc, ok_check, tmp_path):
                       ({'goal': GOAL, 'lifecycle': 'dev_task'}, 'dev_task needs "deliver"'),
                       ({'goal': GOAL, 'lifecycle': 'dev_task', 'deliver': dict(DELIVER, repo='rel')}, 'deliver.repo'),
                       ({'goal': GOAL, 'lifecycle': 'dev_task', 'deliver': {'repo': '/abs/repo'}}, 'deliver is missing'),
-                      ({'goal': GOAL, 'deliver': DELIVER}, 'deliver needs lifecycle dev_task'),
-                      ({'goal': GOAL, 'lifecycle': 'review_loop'}, 'review_file')):
+                      ({'goal': GOAL, 'deliver': DELIVER}, 'deliver needs lifecycle dev_task')):
         answer = submit(f, spec, cid='cmd-' + str(abs(hash(json.dumps(spec))) % 10**8))
         assert answer['status'] == 'rejected' and why in answer['reason'], (spec, answer)
     assert not jobs(f)
@@ -438,6 +437,9 @@ def test_job_fields_are_validated_at_entry(svc, ok_check, tmp_path):
         'name': 'feature x', 'roster': str(path.resolve()), 'roles': str(roles.resolve()),
         'deliver': lifecycle_deliver.validate_deliver(DELIVER)}
     assert fleet.job_rows(f.r)[0]['name'] == 'feature x'
+    # an old job spec that still names the removed review_loop lifecycle is accepted and runs as a plain task
+    answer = submit(f, {'goal': GOAL, 'lifecycle': 'review_loop'}, cid='cmd-old-review-loop')
+    assert answer['status'] == 'accepted', answer
 
 
 def dev_job(t, tmp_path, monkeypatch, **extra):
@@ -499,7 +501,9 @@ def test_job_child_runs_the_dev_task_gate(split_tree, tmp_path, monkeypatch, gat
     assert not cf.lifecycle_close  # closing stays with the parent
 
 
-def test_job_child_review_cap_ends_blocked_with_the_open_issues(split_tree, tmp_path, monkeypatch):
+def test_job_child_has_no_review_cap(split_tree, tmp_path, monkeypatch):
+    """An older job spec (deliver.review_file) with a round-3 FAIL verdict on disk: nothing reads it, the child
+    keeps running."""
     t, f = split_tree, split_tree.f
     jid, key, cfg, _ = dev_job(t, tmp_path, monkeypatch)
     cf, _ = adopt_by_hook(t, monkeypatch, subfleet.record(f.run_dir / 'sub' / key))
@@ -507,8 +511,7 @@ def test_job_child_review_cap_ends_blocked_with_the_open_issues(split_tree, tmp_
     (cf.workspace() / 'review.json').write_text(json.dumps({'round': 3, 'verdict': 'FAIL', 'reviewer': 'opus',
                                                             'issues': [{'id': 'P1-1', 'severity': 'P1', 'title': 'x'}]}))
     lifecycle_close.tick(cf)
-    assert cf.task()['status'] == 'blocked' and 'dev_task review' in cf.task()['reason']
-    assert (cf.run_dir / 'outstanding.json').is_file()
+    assert cf.task()['status'] == 'running' and not (cf.run_dir / 'outstanding.json').exists()
 
 
 # ------------------------------------------------------------------ no small fixed cap for jobs

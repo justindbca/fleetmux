@@ -1,14 +1,15 @@
 """Recheck of a dev_task delivery gate: ``fleetmux task --recheck <task id | job id>``.
 
 A dev_task task that the delivery gate (lifecycle_deliver) judged blocked can have the gate run again after the
-files are fixed (a verdict written, a test fixed), without a new task or job and without dispatching any work.
+files are fixed (a test fixed, a branch rebased), without a new task or job and without dispatching any work.
 
 * Targets: the run's own dev_task task while its daemon holds it, or a job (``job-...``) of this fleet whose
   sub-fleet ended blocked by its gate. Anything else is refused: a running task or job, a task blocked by
-  anything other than a failed gate (review cap, supervisor BLOCKED), cancelled, timed out.
+  anything other than a failed gate (supervisor BLOCKED, a hard timeout), cancelled, timed out.
 * Split in two, so the daemon never runs the test command inside an event:
-  1. ``compute`` (the CLI process) reruns the whole gate from files: the deliver spec and the slot record come
-     from the task (own task) or from the gate record in the sub-fleet's result.json (job: its Redis is gone).
+  1. ``compute`` (the CLI process) reruns the whole gate from files: the deliver spec comes from the task (own
+     task) or from the gate record in the sub-fleet's result.json (job: its Redis is gone). A record written
+     before the review removal may still carry ``slots`` / ``review`` / ``spec.review_file``: ignored.
   2. ``apply`` (the daemon, event ``recheck``) checks the target again, re-reads done_when from git + the queue
      for a passing record, stores the new gate record and, on pass, completes: the own task turns completed (the
      next tick closes the run like any completed dev_task); a job's result is published again as ok.
@@ -16,7 +17,7 @@ files are fixed (a verdict written, a test fixed), without a new task or job and
 import json
 from pathlib import Path
 
-from fleetmux import lifecycle, lifecycle_close, lifecycle_deliver, subfleet
+from fleetmux import lifecycle_close, lifecycle_deliver, subfleet
 
 RECHECKED = 'delivery gate passed on recheck'
 
@@ -79,47 +80,28 @@ def job_problem(run_dir, jid):
     return d, res, None
 
 
-def offline_slots(child_cfg):
-    """A slot record from a sub-fleet's config alone (its Redis is gone): each slot runs its roster card."""
-    profiles = child_cfg.get('worker_profiles') or {}
-    agents = {w: ({'runtime_launch': json.dumps({'profile_id': profiles[w]})} if profiles.get(w) else {})
-              for w in child_cfg.get('workers') or []}
-    return lifecycle_close.slot_record(child_cfg, agents, child_cfg.get('agent_registry'))
-
-
 def compute(cfg, ident, r):
     """The CLI half: rerun the gate of ``ident`` from files. Returns the ``recheck`` event; ValueError when refused."""
     fleet = _fleet()
-    review = lifecycle.get_mode('dev_task').get('review_step') or {}
-    kw = {'must_pass': review.get('must_pass', True)}
     task = r.hgetall(fleet.TASK)
     if task.get('id') and task['id'] == ident:
         problem = own_problem(cfg, task, r.hget(lifecycle_close.LIFE, 'gate:' + ident))
         if problem:
             raise ValueError(problem)
         spec = lifecycle_close.task_spec(task).get('deliver')
-        agents = {w: r.hgetall(fleet.key('agent', w)) for w in cfg.get('workers') or []}
-        slots = lifecycle_close.slot_record(cfg, agents, task.get('agent_registry'), review_slot=task.get('review_slot'))
-        rec = lifecycle_deliver.deliver(spec, Path(cfg['run']) / 'workspace', task_id=ident, run=cfg['run'],
-                                        slots=slots, **kw)
+        rec = lifecycle_deliver.deliver(spec, Path(cfg['run']) / 'workspace', task_id=ident, run=cfg['run'])
         return {'kind': 'recheck', 'id': ident, 'delivery': rec}
     d, res, problem = job_problem(cfg['run'], ident)
     if problem:
         raise ValueError(problem)
-    gate = res['delivery']
-    try:
-        child_cfg = fleet.load(d / 'config.json')
-    except (OSError, ValueError):
-        child_cfg = {}
-    slots = gate.get('slots') or offline_slots(child_cfg)
-    rec = lifecycle_deliver.deliver(gate['spec'], d / 'workspace', task_id=res.get('task_id', ''), run=str(d),
-                                    slots=slots, **kw)
+    rec = lifecycle_deliver.deliver(res['delivery']['spec'], d / 'workspace', task_id=res.get('task_id', ''),
+                                    run=str(d))
     return {'kind': 'recheck', 'id': ident, 'delivery': rec}
 
 
 def confirmed(rec, spec):
     """A passing record stays passing only if its sha is the feature branch tip and done_when holds now (git +
-    the queue); else a failed copy. The test run and the review are the CLI's: the daemon does not repeat them."""
+    the queue); else a failed copy. The test run is the CLI's: the daemon does not repeat them."""
     if not rec.get('ok'):
         return rec
     sha = str(rec.get('sha') or '')

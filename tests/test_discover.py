@@ -328,3 +328,78 @@ def test_the_wall_chain_leaves_out_a_cli_below_its_minimum():
 def test_codex_login_keeps_only_a_known_auth_method(tmp_path, said, row):
     fake_bin(tmp_path, 'codex', 'echo "%s"\n' % said)
     assert discover._login('codex', str(tmp_path / 'codex')) == row  # never the key or any other text
+
+
+# ------------------------------------------------------------------ one OpenAI account, two pi logins
+# One pi install held two logins of one OpenAI account (openai: OAuth dead with invalid_grant; openai-codex: fine)
+# and listed every model
+# under both; discovery put both in the wall chains, openai/ first.
+OAI_SOL, CODEX_SOL = 'openai/gpt-6.1-sol', 'openai-codex/gpt-6.1-sol'
+READY = '{"status":"ready","provider":"%s","authType":"oauth"}'
+INVALID = '{"status":"invalid","provider":"openai","reason":"invalid_state"}'
+
+
+def two_logins(tmp_path, gateway, openai=READY % 'openai', cfg=None):
+    """The real discovery over a fake pi that lists sol and astra under openai (first) and openai-codex, and
+    answers `pi auth check --provider <p> --json` with ``openai`` for openai, ready for the others."""
+    bindir = fake_machine(tmp_path)
+    calls = tmp_path / 'pi-calls'
+    fake_bin(bindir, 'pi', r'''echo "$@" >> %s
+case "$1" in
+--version) echo "1.5.0";;
+--list-models) cat <<EOF
+provider      model          context
+openai        gpt-6.1-sol    500K
+openai        gpt-6-astra    400K
+openai-codex  gpt-6.1-sol    500K
+openai-codex  gpt-6-astra    400K
+EOF
+;;
+auth) case "$4" in openai) echo '%s';; *) echo "{\"status\":\"ready\",\"provider\":\"$4\",\"authType\":\"oauth\"}";; esac;;
+esac
+''' % (calls, openai))
+    r = discover.run(cfg=cfg or CFG, search=str(bindir), pi_dir=pi_dir(tmp_path, gateway[0]),
+                     pairs=cli_pairs.load_pairs(), claude_models=CLAUDE_MODELS)
+    return r, calls.read_text()
+
+
+def test_same_account_providers_list_a_model_once(tmp_path, gateway):
+    from fleetmux import fleet_config
+    shipped = fleet_config.block('discovery', fleet_config.SHIPPED)
+    assert shipped['pi_provider_prefer'] == ['openai-codex']  # the default the brief names
+    cfg = dict(CFG, pi_provider_prefer=shipped['pi_provider_prefer'], pi_provider_groups=shipped['pi_provider_groups'])
+    r, _ = two_logins(tmp_path, gateway, cfg=cfg)
+    everything = r['workers'] + r['supervisors']
+    assert [c for c in r['workers'] if c.endswith('gpt-6.1-sol')] == ['pi:' + CODEX_SOL]
+    assert [c for c in r['supervisors'] if c.endswith('gpt-6-astra')] == ['pi:openai-codex/gpt-6-astra']
+    assert not any(c.startswith('pi:openai/') for c in everything)
+    assert {'cli': 'pi', 'model': OAI_SOL, 'why': 'same account as openai-codex'} in r['skipped']
+
+
+def test_provider_prefer_is_configurable(tmp_path, gateway):
+    r, _ = two_logins(tmp_path, gateway, cfg=dict(CFG, pi_provider_prefer=['openai'],
+                                                  pi_provider_groups={'openai': ['openai', 'openai-codex']}))
+    assert [c for c in r['workers'] if c.endswith('gpt-6.1-sol')] == ['pi:' + OAI_SOL]
+
+
+def test_pi_provider_with_a_broken_login_is_left_out_and_reported(tmp_path, gateway):
+    # prefer names the broken one: a login that does not work never wins the one-account choice
+    r, calls = two_logins(tmp_path, gateway, openai=INVALID, cfg=dict(CFG, pi_provider_prefer=['openai']))
+    assert r['clis']['pi']['providers']['openai']['ok'] is False
+    assert r['clis']['pi']['providers']['openai-codex']['ok'] is True
+    assert r['clis']['pi']['logged_in'] is True  # one provider still works
+    everything = r['workers'] + r['supervisors']
+    assert 'pi:' + CODEX_SOL in everything and not any(c.startswith('pi:openai/') for c in everything)
+    assert {'cli': 'pi', 'model': OAI_SOL, 'why': 'login: invalid (invalid_state)'} in r['skipped']
+    report = discover.render(r)
+    assert 'provider openai: NOT usable (invalid: invalid_state)' in report
+    assert [f for f in r['fixes'] if 'pi provider openai' in f] and 'invalid_state' in '\n'.join(r['fixes'])
+    assert 'auth check --provider openai --json' in calls and 'auth check --provider openai-codex --json' in calls
+    assert '--credentials' not in calls and '--no-refresh' not in calls  # never the key; an expired login refreshes
+
+
+def test_pi_without_auth_check_keeps_todays_behaviour(tmp_path):
+    bindir = fake_machine(tmp_path)  # this fake pi prints nothing for `auth` (a pi before `auth check`)
+    row = discover.probe_cli('pi', '1.2.0', str(bindir), CLAUDE_MODELS)
+    assert row['providers']['openai-codex'] == {'ok': None} and row['logged_in'] is True
+    assert len(row['models']) == 5

@@ -5,7 +5,8 @@ The result is a cache, not operator config: <fleet home>/discovered.yaml (mode 0
 it). `fleetmux setup` rewrites it; `start` / `gui` write it once when it is missing. Privacy (§52): login probes
 keep only logged_in / auth_method (never email / org), pi's models.json is read for provider names, base URLs and
 model ids only (never apiKey, never auth.json), and the only network calls are one GET <baseUrl>/models per pi
-custom provider, without a key and without a proxy.
+custom provider, without a key and without a proxy. pi's logins are checked per provider by pi itself (`pi auth
+check`, which may refresh an expired OAuth login); only its status and reason are kept.
 """
 import datetime
 import json
@@ -323,6 +324,29 @@ def _models(name, path, claude_models, search=None):
     return None
 
 
+def _pi_providers(path, models, search=None):
+    """{provider: {ok, status?, reason?}} per provider of pi's listed models, from `pi auth check --provider <p>
+    --json` (pi refreshes an expired OAuth login first; a refresh that fails is ``invalid``). Only status and reason
+    are kept, never a credential. ok None: no answer we read (a pi without `auth check`)."""
+    providers = list(dict.fromkeys(m.split('/', 1)[0] for m in models if '/' in m))
+
+    def check(provider):
+        code, out = _run([path, 'auth', 'check', '--provider', provider, '--json'], search=search)
+        try:
+            data = json.loads(out[out.index('{'):out.rindex('}') + 1])
+        except ValueError:
+            return {'ok': None}
+        status = data.get('status') if isinstance(data, dict) else None
+        if status not in ('ready', 'not_ready', 'invalid'):
+            return {'ok': None}
+        row = {'ok': status == 'ready'}
+        if status != 'ready':
+            row.update(status=status, reason=str(data.get('reason') or 'unknown'))
+        return row
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(providers)))) as pool:
+        return dict(zip(providers, pool.map(check, providers)))
+
+
 def probe_cli(name, need, search, claude_models):
     where = locate(name, search)
     if not where:
@@ -337,6 +361,9 @@ def probe_cli(name, need, search, claude_models):
     models = _models(name, path, claude_models, search=search)
     if models is not None:
         row['models'] = models
+        if name == 'pi':  # login per provider (user 2026-11-27): one dead login is not a logged-in pi
+            row['providers'] = _pi_providers(path, models, search=search)
+            models = [m for m in models if row['providers'].get(m.split('/', 1)[0], {}).get('ok') is not False]
         if name in ('pi', 'opencode') and row['logged_in'] is None:
             row['logged_in'] = bool(models)
     elif name == 'ollama':
@@ -404,8 +431,42 @@ def candidates(clis, gateways, cfg):
             if cli == 'pi' and gateways.get(model.split('/', 1)[0], {}).get('online') is False:
                 skipped.append({'cli': cli, 'model': model, 'why': 'gateway offline'})
                 continue
+            login = ((row.get('providers') or {}).get(model.split('/', 1)[0]) or {}) if cli == 'pi' else {}
+            if login.get('ok') is False:
+                skipped.append({'cli': cli, 'model': model,
+                                'why': 'login: ' + str(login.get('status')) + ' (' + str(login.get('reason')) + ')'})
+                continue
             out.append((cli, model))
-    return out, skipped
+    return pi_one_account(out, skipped, cfg)
+
+
+PI_PROVIDER_PREFER, PI_PROVIDER_GROUPS = ['openai-codex'], {'openai': ['openai', 'openai-codex']}  # = fleet.yaml
+
+
+def pi_one_account(pool, skipped, cfg):
+    """(pool, skipped) with a pi model id listed by several providers of one fleet.yaml#discovery.pi_provider_groups
+    group (logins of one account) kept once: the provider first in pi_provider_prefer, else the first listed.
+    A private discovery block without the keys gets the shipped values (the block is overridden whole)."""
+    prefer = cfg.get('pi_provider_prefer', PI_PROVIDER_PREFER) or []
+    groups = cfg.get('pi_provider_groups', PI_PROVIDER_GROUPS) or {}
+    group_of = {p: g for g, members in groups.items() for p in members or []}
+    best = {}
+    for cli, model in pool:
+        if cli == 'pi' and '/' in model:
+            provider, rest = model.split('/', 1)
+            if provider in group_of:
+                rank_ = prefer.index(provider) if provider in prefer else len(prefer)
+                k = (group_of[provider], rest)
+                best[k] = min(best.get(k, (rank_, provider)), (rank_, provider), key=lambda x: x[0])
+    kept = []
+    for cli, model in pool:
+        provider, _, rest = model.partition('/')
+        keep = best.get((group_of.get(provider), rest)) if cli == 'pi' else None
+        if keep and keep[1] != provider:
+            skipped.append({'cli': cli, 'model': model, 'why': 'same account as ' + keep[1]})
+            continue
+        kept.append((cli, model))
+    return kept, skipped
 
 
 def rank(pool, patterns, order, rest=False):
@@ -536,6 +597,11 @@ def fixes(clis, choice):
             out.append(name + ' is not logged in: run `' + hints[name] + '`')
         elif name == 'ollama' and row.get('installed') and not row.get('serving'):
             out.append('ollama is installed but not serving: `ollama serve` to use its models')
+        for provider, login in (row.get('providers') or {}).items():
+            if login.get('ok') is False:
+                out.append('pi provider ' + provider + ': login not usable (' + str(login.get('status')) + ': '
+                           + str(login.get('reason')) + '); its models are in no chain: run `pi`, then /login '
+                           + provider + ' (or remove that login)')
     if choice is None:
         out.append('no default pair: needs one supervisor model (fleet.yaml#discovery.supervisor) and one worker '
                    'model on a verified cli_pairs row; install / log in one of claude, pi')
@@ -586,6 +652,9 @@ def render(result):
             bits.append('serving' if row.get('serving') else 'not serving')
         lines.append(('  ok ' if row.get('version_ok') and row.get('logged_in') is not False else '  !! ') + name
                      + ': ' + ', '.join(bits) + '  [' + row['path'] + ']')
+        for provider, login in (row.get('providers') or {}).items():
+            lines.append('      provider ' + provider + ': ' + {True: 'ready', None: 'login unknown'}.get(
+                login.get('ok'), 'NOT usable (' + str(login.get('status')) + ': ' + str(login.get('reason')) + ')'))
     for p, g in (result.get('gateways') or {}).items():
         lines.append('  gateway ' + p + ': ' + ('online' if g.get('online') else 'OFFLINE'))
     for label, key in (('supervisor', 'supervisors'), ('worker', 'workers')):

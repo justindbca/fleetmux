@@ -6,7 +6,7 @@ import pytest
 
 from fleetmux.agent_registry import AgentRegistry
 from fleetmux.assignment import assign_profiles
-from fleetmux.planner import build_dispatch_plan
+from test_assignment import two_step_plan
 from fleetmux.profile_runtime import (
     ProfileRuntimeError, desired_profile, parse_recommended_profile,
     prepare_profile, profile_advisory,
@@ -16,22 +16,22 @@ from fleetmux.profile_runtime import (
 @pytest.fixture
 def task():
     return {"id": "test-task", "profile_assignments": json.dumps(assign_profiles(
-        build_dispatch_plan("implement dynamic router"), ["worker-1", "worker-2"]))}
+        two_step_plan("dynamic router"), ["worker-1", "worker-2"]))}
 
 
 def test_only_current_slot_assignments_authorize_recommendations(task):
     assert desired_profile("worker-1", "Recommended profile: flashnext-coder. Fix tests", task) == "flashnext-coder"
     with pytest.raises(ProfileRuntimeError, match="not assigned to worker-1"):
-        desired_profile("worker-1", "Recommended profile: claude-reviewer", task)
+        desired_profile("worker-1", "Recommended profile: claude-opus", task)
     with pytest.raises(ProfileRuntimeError, match="not assigned"):
         desired_profile("worker-1", "Recommended profile: flashnext-coder", {})
 
 
 def test_subtask_must_match_slot_and_profile():
-    task = {"profile_assignments": assign_profiles(build_dispatch_plan("implement router"), ["worker-1"])}
-    assert desired_profile("worker-1", "Subtask: review", task) == "claude-reviewer"
+    task = {"profile_assignments": assign_profiles(two_step_plan("router"), ["worker-1"])}
+    assert desired_profile("worker-1", "Subtask: review", task) == "claude-opus"
     with pytest.raises(ProfileRuntimeError, match="not assigned.*subtask implementation"):
-        desired_profile("worker-1", "Subtask: implementation\nRecommended profile: claude-reviewer", task)
+        desired_profile("worker-1", "Subtask: implementation\nRecommended profile: claude-opus", task)
     with pytest.raises(ProfileRuntimeError, match="not assigned"):
         desired_profile("worker-2", "Subtask: review", task)
     with pytest.raises(ProfileRuntimeError, match="ambiguous"):
@@ -42,7 +42,7 @@ def test_subtask_must_match_slot_and_profile():
     "Recommended profile:", "Recommended profile:\nflashnext-coder",
     "Recommended profile: flashnext-coder/unsafe", "Recommended profile: flashnext-coder_extra",
     "Recommended profile: " + "a" * 65,
-    "Recommended profile: flashnext-coder\nRecommended profile: claude-reviewer",
+    "Recommended profile: flashnext-coder\nRecommended profile: claude-opus",
 ])
 def test_bad_markers_cannot_be_partially_matched(marker):
     with pytest.raises(ProfileRuntimeError):
@@ -63,7 +63,7 @@ def test_cjk_punctuation_ends_the_marker(marker, task):
 
 def test_cjk_punctuation_does_not_hide_a_malformed_id():
     for marker in ("Recommended profile: flashnext-coder/unsafe。", "Recommended profile: Flashnext-coder。",
-                   "Recommended profile: flashnext-coder。\nRecommended profile: claude-reviewer"):
+                   "Recommended profile: flashnext-coder。\nRecommended profile: claude-opus"):
         with pytest.raises(ProfileRuntimeError):
             parse_recommended_profile(marker)
 

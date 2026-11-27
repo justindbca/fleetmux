@@ -160,7 +160,6 @@ export default function (pi: ExtensionAPI) {
   const artifact = Type.Object({ path: Type.String(), min_chars: Type.Optional(Type.Integer({ minimum: 1 })), contains: Type.Optional(Type.Array(Type.String())) });
   const dispatch = Type.Object({ to: Type.String(), instruction: Type.String({ minLength: 12 }),
     id: Type.Optional(Type.String()), advise_note: Type.Optional(Type.String()), fresh: Type.Optional(Type.Boolean()),
-    review: Type.Optional(Type.Boolean()),  // the review the delivery gate reads (Fleet.mark_review)
     leaf: Type.Optional(Type.Boolean()),  // §44 leaf block: never nudged to split
     // §44 监工直接开子 fleet (supervisor_split): the daemon checks the switch, the shape and the limits
     split: Type.Optional(Type.Object({ reason: Type.String({ minLength: 1 }),

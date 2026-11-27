@@ -251,7 +251,7 @@ def test_handoff_table_hot_reloads_into_status(hot):
     slots = control_view.snapshot(fleet.load(f.path))['slots']
     assert slots['worker-2']['context']['handoff_ratio'] == 0.8
     assert slots['worker-1']['context']['handoff_window'] == '1000000'
-    assert slots['worker-1']['context']['handoff_source'] == 'window: roster claude; ratio: --handoff-ratio'
+    assert slots['worker-1']['context']['handoff_source'] == 'window: roster claude; ratio: fleet.yaml#handoff'
 
 
 def test_added_rows_on_a_capped_default_model_are_rejected_whole(hot, monkeypatch):

@@ -420,14 +420,14 @@ Defined in: `docs/applet-interface.md` sections 1 to 5 and the headers of `fleet
 - **Accept** ops `{"id", "op": "applet.lease.request" | "applet.lease.renew" | "applet.lease.release" |
   "applet.escalate" | "applet.notify" | "applet.audit", "applet", "token", "v"}` at the service request door. They
   never enter the request queue and are not subject to `--request-timeout`.
-- **Refuse** a service request with `to` naming a leased or reviewing slot without the matching `lease`: result
+- **Refuse** a service request with `to` naming a leased slot without the matching `lease`: result
   `rejected`, reason `slot_leased`. A lease request is refused for lack of workers only with `worker_limit`.
 - **Publish** two more result statuses on `fx:result:<id>`: `blocked` (a leased worker's question or split
-  proposal) and `lease_ended`. The result of a message that carried `fix` also carries `review`.
-- **Write** slot fields `applet_lease`, `applet_lease_holder`, `applet_lease_until`, `applet_review` and
+  proposal) and `lease_ended`.
+- **Write** slot fields `applet_lease`, `applet_lease_holder`, `applet_lease_until` and
   `applet_added_for` on `fx:agent:<slot>` (empty when unset). The slot's `state` values are unchanged.
 - **Add** worker rows `- {name: <base>-<n>, role: <template role>}` to the host roster (and the night roster) when
-  a lease or a review needs a worker, up to the applet row's `lease.hot_add_max`; write `hot_add_max` back into
+  a lease needs a worker, up to the applet row's `lease.hot_add_max`; write `hot_add_max` back into
   the applet row on `fleetmux applet set`. Every write takes an exclusive `flock` on `<roster file>.lock` and
   replaces the file atomically.
 - **Accept** the service decision key `applet` (a list of `{"id", "decision", ...}`), which may come with empty
@@ -620,7 +620,7 @@ Rules (`jobfile.load_job`):
 | `roster.yaml`, `roles/` | Sub-fleet roster and role files | Slot names end in `-<number>` |
 | `gate.sh` | Delivery gate | Runs from the repository root; interpreter from `RELAY_PYTHON` |
 | `notes/<slot>/PROGRESS.md` | Progress file with the five headings below | Updated before each commit; included in each snapshot |
-| `notes/<slot>/...` | Plans, review verdicts | - |
+| `notes/<slot>/...` | Plans and notes | - |
 | `TAKEOVER.md` | Takeover pack, written by the program on an owner change | Read first by the new sub-fleet supervisor |
 | `notes/SALVAGE.md` | Written by the program when a salvage ref for this task appears | Read by the current sub-fleet supervisor |
 
@@ -633,7 +633,8 @@ allowed (`jobfile.ABS_PATH_RE`).
 paths.
 - Accepted keys: `goal` (required), `hours`, `budget`, `artifacts`, `workers`, `supervisor_profile`,
   `worker_profiles` and `deliver`.
-- `deliver` takes `test_cmd` (required, a non-empty list of strings), `test_timeout_s` and `review_file`.
+- `deliver` takes `test_cmd` (required, a non-empty list of strings) and `test_timeout_s`; an older spec's
+  `review_file` is accepted and ignored.
 - Any other key is refused, and so is a key the program fills.
 
 ```yaml
@@ -641,16 +642,14 @@ goal: "Read .relay/demo/core/brief.md and do it."
 hours: 8
 artifacts:
   - {path: notes/integ-1/integration.md, min_chars: 300}
-  - {path: notes/reviewer-1/verdict.json, contains: ['"verdict"']}
 deliver:
   test_cmd: ["/bin/bash", ".relay/demo/core/gate.sh"]
   test_timeout_s: 1800
-  review_file: notes/reviewer-1/verdict.json
 ```
 
 The program fills these keys on the machine that runs the task (`jobfile.PROGRAM_FILLED`):
-- `name` (the sub-fleet name) and `lifecycle: dev_task`. `roster`, `roles`, `overrides` and the top-level
-  `review_file` are reserved for the program too.
+- `name` (the sub-fleet name) and `lifecycle: dev_task`. `roster`, `roles` and `overrides` are reserved
+  for the program too.
 - `deliver.repo` (the task work tree) and `deliver.feature_branch` (the task branch).
 - `deliver.deploy_branch`: `relay/<job>/<task>/delivered`, or `relay/<job>/merged` for `merge`.
 - `deliver.queue`.
@@ -869,3 +868,26 @@ bounds, and the parameters. Exit 0 shape ok, 1 shape errors or an unreadable fil
 
 **Private fleet.yaml**: only a root fleet writes, only the `decompose` block, under `<private file>.lock` (shared with
 the relay's write-back, section 13.7); a missing file is created 0600; the shipped file is never written.
+
+## 15. Context-handoff defaults: `fleet.yaml#handoff` (design section 22)
+
+Shipped in `fleetmux/config/fleet.yaml`. A private `fleet.yaml` replaces the whole block (no key-by-key merge), so its
+block names all five keys. The block is a mapping with exactly these keys; booleans, `nan` and `inf` are refused. The
+accessor is `fleet_config.handoff()`.
+
+| Key | Shipped | Valid | Meaning | Ranks above it, first wins |
+|---|---|---|---|---|
+| `ratio` | `0.3` | number in (0, 1] | rotate before a delivery once `used >= ratio x window` | roster worker `handoff_ratio`, roster `handoff` table, `config.json` `handoff` table, agent card `handoff_ratio`, `config.json` `handoff_ratio` (typed `--handoff-ratio`) |
+| `midturn_ratio` | `0.8` | number in (0, 1) | order a handoff inside a running turn at this share of the window (section 34) | roster `handoff` table, `config.json` `handoff` table, `config.json` `midturn_ratio` |
+| `handoff_timeout` | `900` | seconds > 0 | wait for the model's handoff note, then use the skeleton | `config.json` `handoff_timeout` (typed `--handoff-timeout`) |
+| `midturn_retry` | `300` | seconds >= 0.001 | wait before the mid-turn order is typed once more, then the session is rotated | `config.json` `midturn_retry` (a `handoff` table cannot hold it) |
+| `midturn_max_splits` | `3` | integer >= 0 | mid-turn handoffs allowed on one instruction; 0 = none | `config.json` `midturn_max_splits` (a `handoff` table cannot hold it) |
+
+- Read on every check; no daemon restart.
+- Unreadable file, or an invalid, partial or removed block: the last good values stay, and each problem is logged once
+  to stderr as `fleet.yaml#handoff unreadable or invalid, keeping the last good values: <reason>`.
+- No good value yet: a `start` that begins a new run, `start --resume` and the daemon exit with `cannot start:
+  fleet.yaml#handoff unreadable or invalid: <reason>`. A `start` that only attaches to a root fleet does not read it.
+- `config.json` holds `handoff_ratio` / `handoff_timeout` only when typed at `start` (runs started by older releases
+  always have both, and keep them).
+- Agent status: `handoff_source` ends with `ratio: fleet.yaml#handoff` when the block supplies the ratio.

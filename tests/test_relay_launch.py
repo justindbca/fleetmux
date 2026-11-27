@@ -31,7 +31,7 @@ def test_render_fills_local_fields_and_passes_fleetmux_checks(tmp_path):
     assert deliver['deploy_branch'] == 'relay/demo/M3/delivered'
     assert deliver['test_cmd'] == ['/usr/bin/env', 'RELAY_PYTHON=/opt/py/bin/python',
                                    '/bin/bash', '.relay/demo/M3/gate.sh']
-    assert deliver['review_file'] == 'notes/reviewer-1/verdict.json'
+    assert 'review_file' not in deliver  # an older job.spec.yaml's key: accepted, not carried
     assert deliver['test_timeout_s'] == 1800
     assert out['roster'] == str(tmp_path / '.relay/demo/M3/roster.yaml')
     assert out['roles'] == str(tmp_path / '.relay/demo/M3/roles')

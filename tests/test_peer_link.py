@@ -174,12 +174,12 @@ def test_dev_role_has_the_peer_answer_section():
 
 
 def test_example_rosters_parse_and_point_at_the_pack():
-    for name, workers in (('field.example.yaml', ['onsite-1']), ('home-dev.example.yaml', ['dev-1', 'review-1'])):
+    for name, workers in (('field.example.yaml', ['onsite-1']), ('home-dev.example.yaml', ['dev-1'])):
         path = PACK / name
         names, roles = roster.parse(path.read_text(), path.parent)
         assert names == workers
         for role in roles.values():
-            assert Path(role).resolve().parent == PACK.resolve() or Path(role).name == 'reviewer.md'
+            assert Path(role).resolve().parent == PACK.resolve()
 
 
 def test_pack_is_ascii():

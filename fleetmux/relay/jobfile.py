@@ -17,8 +17,8 @@ NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 
 # Keys a segment's job.spec.yaml may set; the rest of the start spec is filled per machine (launch.render).
 SPEC_KEYS = ('goal', 'hours', 'budget', 'artifacts', 'workers', 'supervisor_profile', 'worker_profiles', 'deliver')
-SPEC_DELIVER_KEYS = ('test_cmd', 'test_timeout_s', 'review_file')
-PROGRAM_FILLED = ('name', 'lifecycle', 'roster', 'roles', 'overrides', 'review_file',
+SPEC_DELIVER_KEYS = ('test_cmd', 'test_timeout_s', 'review_file')  # review_file: an older spec's, ignored
+PROGRAM_FILLED = ('name', 'lifecycle', 'roster', 'roles', 'overrides',
                   'deliver.repo', 'deliver.feature_branch', 'deliver.deploy_branch', 'deliver.queue')
 
 # A machine's own absolute path: a home or volume directory, `~/`, `$HOME`, or a drive letter. System paths such
@@ -199,6 +199,4 @@ def load_spec(repo, job, seg):
     cmd = deliver.get('test_cmd')
     if not isinstance(cmd, list) or not cmd or not all(isinstance(x, str) and x for x in cmd):
         raise JobError('job.spec.yaml deliver.test_cmd must be a non-empty argv list')
-    if not isinstance(deliver.get('review_file'), str):
-        raise JobError('job.spec.yaml deliver.review_file must be a relative path')
     return spec

@@ -4,7 +4,7 @@
 #   $FLEETMUX_CONFIG, else ~/.fleetmux/fleet.yaml   (never part of this repository)
 # A top-level block there replaces the shipped block as a whole (no deep merge). Only these blocks may
 # be overridden there: accounts, tools, walls, lifecycle_modes, pi_context, daemon_watch, fresh_dispatch,
-# discovery, remote, job_subfleet, gui, bare, relay (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
+# discovery, remote, job_subfleet, gui, bare, relay, handoff (fleet_config.USER_BLOCKS). cli_pairs (the real-smoke gate),
 # watchdog_prompts (the dialog whitelist), models, profiles and capability_matrix change only here,
 # through a reviewed commit.
 #
@@ -20,6 +20,7 @@
 #   tools              tool pools reached through thin MCP servers (empty here)
 #   pi_context         context window written into each run's pi models.json            (pi_adapter.py)
 #   fresh_dispatch     when a reused worker earns the supervisor a "fresh" hint               (fleet_config.py)
+#   handoff            context-handoff defaults: rotation and mid-turn thresholds, waits     (fleet_config.py)
 #   dsh                dsh workers: the model when `start --dsh-model` is not given             (fleet_config.py)
 #   gui                the root fleet daemon keeps its `fleetmux gui` window open               (gui_keep.py)
 #   bare               the root fleet bare `fleetmux` starts when none runs                   (open_window.py)
@@ -137,12 +138,8 @@ lifecycle_modes:
       base: task
       done_when: merged_to_deploy_branch_and_enqueued
       require_integrator_worker: true
-      # master design v2 §4.14. Review rounds are capped (10/13 codex-notype ran to r16):
-      # a FAIL verdict at round max_rounds stops the rounds; the open P0/P1 go to the user in the result
-      # (outstanding.json / .md), no new round. Reviewers in a fleet follow fleetmux/agents/reviewer.md.
-      # Who reviews is the supervisor's decision: the gate checks the verdict (PASS, zero open P0/P1), never the
-      # reviewer's model.
-      review_step: {must_pass: true, max_rounds: 3, on_cap: stop_and_report}
+      # master design v2 §4.14: the gate runs deliver.test_cmd, fast-forwards the deploy branch and enqueues.
+      # There is no review step (no verdict file, no rounds); older review keys in a table are ignored.
       on_complete: stop_and_close
       notify: [tg, parent]
     program:
@@ -150,7 +147,7 @@ lifecycle_modes:
       resident: false
       child_mode: dev_task
       ledger: program_ledger.json
-      done_when: last_phase_merged_and_review_pass
+      done_when: last_phase_merged
     scheduled:
       base: task
       hard_timeout_min: 150            # sector rotation: 150-minute budget, task dispatched within 90 min
@@ -158,11 +155,6 @@ lifecycle_modes:
       on_fail: stop_and_close
       clock_gate: true                 # trading-day gate via global_clock; market closed -> not launched
       clock_market: US
-    review_loop:
-      base: task
-      max_rounds: 3
-      on_pass: stop_and_close
-      on_cap: stop_and_report
     smoke:
       base: task
       bases: [task, service]           # pair acceptance (A cli_pairs): `--mode service` smokes a service pair
@@ -320,7 +312,7 @@ capability_matrix:
     code-edit:
       sonnet: {verdict: enough_simple, note: "单文件、路径已明"}
       opus: {verdict: enough}
-      fable: {verdict: reserve, note: "只做复核 / 会诊"}
+      fable: {verdict: reserve, note: "合并时读代码 / 会诊"}
     review:
       opus: {verdict: enough}
       sonnet: {verdict: not_enough}
@@ -626,21 +618,9 @@ profiles:
     - code-edit
     - test-fix
     - planning
-    role_file: worker.md
-    model: opus
-    model_card: opus
-  claude-reviewer:
-    id: claude-reviewer
-    display_name: Claude Reviewer
-    cli: claude
-    capabilities:
     - code-review
     - safety-audit
-    - planning
-    role_file: reviewer.md
-    cost_rank: 3
-    latency_rank: 3
-    risk_rank: 1
+    role_file: worker.md
     model: opus
     model_card: opus
   claude-sonnet:
@@ -788,6 +768,17 @@ fresh_dispatch:
   # Override the whole block in the private file (~/.fleetmux/fleet.yaml).
   fresh_hint_ratio: 0.3
 
+handoff:
+  # Context-handoff defaults (docs/design.md §22 and §34). Read on every check: an edit needs no daemon restart.
+  # An unreadable or invalid block keeps the last good values; with none yet, start and the daemon refuse.
+  # Roster and config.json `handoff:` tables, roster workers, agent cards (ratio) and typed flags rank above it.
+  # Override the whole block, all five keys, in the private file (~/.fleetmux/fleet.yaml).
+  ratio: 0.3  # rotate before a delivery once context use reaches this share of the window, in (0, 1]
+  midturn_ratio: 0.8  # order a handoff inside a running turn at this share of the window, in (0, 1)
+  handoff_timeout: 900  # seconds to wait for the model's handoff note before using the skeleton, > 0
+  midturn_retry: 300  # seconds before the mid-turn order is typed again, then the session is rotated, >= 0.001
+  midturn_max_splits: 3  # mid-turn handoffs allowed on one instruction, an integer >= 0 (0 = none)
+
 dsh:
   # dsh workers (docs/design.md §41). `start` without --dsh-model runs this pi models.json entry
   # (provider/model) and records it as the run's dsh_model; --dsh-model overrides it (e.g. flashnext/...).
@@ -820,6 +811,13 @@ discovery:
   only_via: {claude: claude, fable: claude, opus: claude, sonnet: claude, haiku: claude, gpt: pi}
   # Found and shown in the table, never a default candidate (no model listing, or not in the default pairs).
   report_only: [codex, dsh, gemini, ollama]
+  # One account, one entry (user 2026-11-27: 「为什么就出现两个安装路径，然后导致一些程序识别成两个」). pi lists every
+  # model once per login; the providers of one group are logins of the same account (openai = the OpenAI API OAuth,
+  # openai-codex = ChatGPT/Codex). A model id listed by several providers of one group stays once, from the first
+  # provider in pi_provider_prefer whose login works (`pi auth check`); a provider not listed comes after them.
+  # Discovery and every wall chain read these. [] turns the choice off.
+  pi_provider_prefer: [openai-codex]
+  pi_provider_groups: {openai: [openai, openai-codex]}
 
 remote:
   # `fleetmux remote` (design.md section 55): the machine that runs your fleet when this one is only a screen

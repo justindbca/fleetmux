@@ -57,6 +57,7 @@ from fleetmux import session_env
 
 NAME_RE = r'[a-z][a-z0-9-]{0,30}'  # same as fleet.WORKER_NAME_RE: no dots (dots mark generations)
 PROFILE_RE = r'[a-z][a-z0-9-]{0,63}'  # same as agent_registry.AGENT_ID_RE
+RETIRED_ROLES = ('reviewer.md',)  # removed with the review gates; an older roster's row loads as a plain worker
 # A new worker slot's name ends with -<number> (docs/design.md §3, 2026-10-28): generations read proto-1 ->
 # proto-1.1 like worker-1 -> worker-1.1. Checked only where a slot is first created (start, an added row);
 # names a run already has are never re-checked, so resume and the stored roster keep working.
@@ -147,6 +148,8 @@ def parse_entries(raw, base):
         if item.get('role') is not None:
             role = item['role']
             path = (Path(base) / Path(role).expanduser()) if isinstance(role, str) and role.strip() else None
+            if path is not None and not path.is_file() and path.name in RETIRED_ROLES:
+                continue  # a removed role file of an older roster: the slot runs as a plain worker
             if path is None or not path.is_file():
                 errors.append(where + ' (' + name + '): role file not found: ' + str(role))
                 continue
@@ -729,7 +732,7 @@ def tabs(raw, base):
 
 # ------------------------------------------------------------------ applets (docs/applet-interface.md section 1)
 APPLET_KEYS = {'name', 'command', 'cwd', 'env', 'params', 'autostart', 'interface', 'heartbeat_s', 'stale_after_s',
-               'stop_grace_s', 'detach_wait_s', 'lease', 'review', 'notify', 'session_env', 'durable_state', 'waits'}
+               'stop_grace_s', 'detach_wait_s', 'lease', 'notify', 'session_env', 'durable_state', 'waits'}
 APPLET_NAME_RE = r'applet-[a-z][a-z0-9]*(-[a-z0-9]+)*-[0-9]+'
 APPLET_NAME_MAX = 48
 APPLET_DEFAULTS = {'autostart': True, 'interface': 1, 'heartbeat_s': 10, 'stale_after_s': 60, 'stop_grace_s': 30,
@@ -737,7 +740,7 @@ APPLET_DEFAULTS = {'autostart': True, 'interface': 1, 'heartbeat_s': 10, 'stale_
 APPLET_LEASE = {'max_active': 2, 'ttl_s': 1800, 'ttl_max_s': 7200, 'max_renewals': 3, 'renew_margin_s': 300,
                 'renew_grace_s': 0, 'prepare_timeout_s': 300, 'eligible': None, 'decision_wait_s': 600,
                 'hot_add_max': 2, 'hot_add_like': None}
-APPLET_REVIEW = {'max_rounds': 3, 'timeout_s': 1800}
+APPLET_RETIRED = ('review',)  # an older roster's fix-review bounds: accepted and ignored (no fix review)
 APPLET_NOTIFY = {'max_per_hour': 6}
 APPLET_WAITS = ('request_lease', 'renew', 'send', 'release', 'notify')  # SDK calls with a local bound
 APPLET_WAIT_GRACE_S = 60  # past the host's own bound (the SDK's ESCALATE_GRACE_S): the host times out on its tick
@@ -792,20 +795,7 @@ def applet_lease(value, workers):
     return (None, bad) if bad else (out, [])
 
 
-def applet_review(value):
-    """(review bounds with every key of applet-interface.md section 1.3, errors)."""
-    value = {} if value is None else value
-    if not isinstance(value, dict) or not set(value) <= set(APPLET_REVIEW):
-        return None, ['review must be a mapping with keys ' + ', '.join(sorted(APPLET_REVIEW)) + ' only']
-    out, bad = dict(APPLET_REVIEW, **value), []
-    if not (_count(out['max_rounds']) and out['max_rounds'] >= 1):
-        bad.append('review.max_rounds must be an integer >= 1')
-    if not (_number(out['timeout_s']) and 60 <= out['timeout_s'] <= 86400):
-        bad.append('review.timeout_s must be a number from 60 to 86400')
-    return (None, bad) if bad else (out, [])
-
-
-def applet_waits(value, lease, review):
+def applet_waits(value, lease):
     """(local bounds of the SDK calls, applet-interface.md section 1.1, errors). Defaults: the host's own bound of
     each call plus APPLET_WAIT_GRACE_S, so the host answers first while it runs."""
     value = {} if value is None else value
@@ -813,7 +803,7 @@ def applet_waits(value, lease, review):
         return None, ['waits must be a mapping with keys ' + ', '.join(APPLET_WAITS) + ' only']
     grace = APPLET_WAIT_GRACE_S
     out = {'request_lease': lease['decision_wait_s'] + grace, 'renew': lease['decision_wait_s'] + grace,
-           'send': lease['prepare_timeout_s'] + lease['ttl_max_s'] + review['timeout_s'] + grace,
+           'send': lease['prepare_timeout_s'] + lease['ttl_max_s'] + grace,
            'release': grace, 'notify': grace}
     out.update(value)
     bad = ['waits.' + k + ' must be a number > 0' for k in APPLET_WAITS if not (_number(out[k]) and out[k] > 0)]
@@ -864,9 +854,7 @@ def _applet_fields(item, base, workers):
         bad.append('detach_wait_s must be a number >= 0')
     lease, more = applet_lease(item.get('lease'), workers)
     bad += more
-    review, more = applet_review(item.get('review'))
-    bad += more
-    waits, more = applet_waits(item.get('waits'), lease, review) if lease and review else (None, [])
+    waits, more = applet_waits(item.get('waits'), lease) if lease else (None, [])
     bad += more
     notify = dict(APPLET_NOTIFY, **(item.get('notify') or {})) if isinstance(item.get('notify') or {}, dict) else None
     if notify is None or set(notify) != set(APPLET_NOTIFY) or not _count(notify['max_per_hour']):
@@ -874,7 +862,7 @@ def _applet_fields(item, base, workers):
     if bad:
         return None, bad
     out.update(command=list(command), cwd=str(path.resolve()), env=dict(env), params=params, lease=lease,
-               review=review, notify=notify, waits=waits)
+               notify=notify, waits=waits)
     if 'session_env' in item:  # accepted as is; validated by the session environment code
         out['session_env'] = item['session_env']
     return out, []
@@ -883,7 +871,7 @@ def _applet_fields(item, base, workers):
 def applet_entries(value, base, workers, others=()):
     """(entries, errors) of the optional ``applets:`` list (docs/applet-interface.md section 1). Each entry has
     every key of section 1.1 resolved (``cwd`` and ``params.file`` absolute, defaults filled in, ``params`` None
-    when absent) plus ``lease`` and ``review`` with every key of sections 1.2 and 1.3, ``waits`` with every key and
+    when absent) plus ``lease`` with every key of section 1.2, ``waits`` with every key and
     ``durable_state``; ``session_env`` is kept
     as written when present. ``others`` are further names an applet may not take (sub-fleet names)."""
     if value is None:
@@ -893,7 +881,7 @@ def applet_entries(value, base, workers, others=()):
     entries, errors, names = [], [], set()
     for i, item in enumerate(value):
         where = 'applets[' + str(i) + ']'
-        if not isinstance(item, dict) or not set(item) <= APPLET_KEYS or 'name' not in item:
+        if not isinstance(item, dict) or not set(item) <= APPLET_KEYS | set(APPLET_RETIRED) or 'name' not in item:
             errors.append(where + ': must be a mapping with "name" and keys ' + ', '.join(sorted(APPLET_KEYS))
                           + ' only')
             continue

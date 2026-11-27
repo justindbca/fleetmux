@@ -160,8 +160,8 @@ planifié, le service résident et le développement de fonctionnalités tournen
   trois fausses déclarations `COMPLETED` la bloquent. Les points d'accès gratuits sont instables et plafonnés : limites de
   débit et plafonds d'usage passent par la table des plafonds, qui fait descendre l'emplacement le long de sa chaîne de modèles
   ou met l'exécution en pause de façon reprenable ; `--max-busy` reste sous la limite de concurrence de l'offre gratuite ; on
-  ajoute ou retire des workers en modifiant le YAML du roster pendant que la flotte tourne. Pour une passe de qualité, donnez à
-  une ligne du roster un `pi_model:` plus puissant et utilisez-la comme relecteur.
+  ajoute ou retire des workers en modifiant le YAML du roster pendant que la flotte tourne. Pour les pièces les plus difficiles, donnez à
+  une ligne du roster un `pi_model:` plus puissant et envoyez-lui ces pièces.
 - **Rapport de recherche planifié** (`scheduled`). Le planificateur de l'appelant démarre une flotte à heures fixes dans la
   journée ouvrée (avec `clock_gate` activé, la flotte refuse elle-même de se lancer un jour de fermeture du marché) : un
   superviseur et deux workers Claude Code dotés de skills de recherche et d'un MCP de recherche web via `--worker-kit`.
@@ -173,14 +173,13 @@ planifié, le service résident et le développement de fonctionnalités tournen
   flotte en dehors de ses heures de travail avec `pause` / `resume`. Un travail plus gros entre avec `fleetmux task` comme
   un job exécuté dans sa propre sous-flotte en mode task. Voir
   [Service mode](README.md#service-mode-resident-fleet) dans le README en anglais.
-- **Développement de fonctionnalités avec revue indépendante** (`dev_task`). Le superviseur découpe la fonctionnalité, des
-  workers la construisent et des workers relecteurs distincts la jugent ; la revue est limitée à trois tours et les P0 / P1
-  restants vous reviennent au lieu d'un quatrième tour. La tâche n'est terminée que lorsque le `test_cmd` de la porte de
+- **Développement de fonctionnalités** (`dev_task`). Le superviseur découpe la fonctionnalité et des workers la
+  construisent ; à la fusion, le superviseur lit le diff une fois, corrige les erreurs simples et refactorise légèrement.
+  Pas de tour de revue ni de fichier de verdict : la tâche n'est terminée que lorsque le `test_cmd` de la porte de
   livraison est passé et que le travail est fusionné et remis à la file de publication. Les contrats d'interface
   (`"contracts": true`) figent les interfaces partagées avant le début du travail.
 - **Programme en plusieurs phases** (`program`). Chaque phase tourne comme sa propre flotte enfant `dev_task` ; un registre
-  consigne les phases, et le programme se termine quand la dernière phase est fusionnée et revue.
-- **Revue jusqu'à validation** (`review_loop`). Revue → correction → revue, trois tours au plus, puis un rapport.
+  consigne les phases, et le programme se termine quand la dernière phase est fusionnée.
 - **Une tâche qui dépasse un seul worker** (en développement). Quand un worker reste occupé par un flux de travail au-delà
   d'une durée configurable, on lui demande de proposer un découpage ; avec l'accord du superviseur (et les modèles choisis),
   le worker passe le relais et son successeur devient le superviseur d'une flotte enfant, affichée en direct dans la zone des
@@ -293,7 +292,7 @@ nouveaux démarrages exigent Redis v2 et une activation explicite du mode dével
 `openai-codex/gpt-6-astra` (thinking high) avec des workers Claude Code officiels**. Cette table liste chaque paire prise en
 charge et son statut (voir [Redis v2 development runtime](README.md#redis-v2-development-runtime) dans le README en
 anglais) ; une paire absente de la table est refusée. `start` exige aussi `--lifecycle <mode>` (`service`, `dev_task`,
-`program`, `scheduled`, `review_loop`, `smoke` ; voir `fleetmux/config/fleet.yaml#lifecycle_modes`) ; une paire
+`program`, `scheduled`, `smoke` ; voir `fleetmux/config/fleet.yaml#lifecycle_modes`) ; une paire
 `unverified` ne démarre qu'avec `--lifecycle smoke`. Les exemples de configuration et de lancement propres à Codex, dans le
 README en anglais, ne sont conservés qu'à titre de référence v1 historique.
 

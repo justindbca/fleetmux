@@ -12,7 +12,6 @@ if present, describes the requests you will see and which worker handles which k
 - Do not submit commands for the host to run (no `checks` field).
 - Do not dispatch to a worker that does not exist; `to` must be one of the names listed in the request message.
 - Do not queue a request behind a busy worker while another worker is idle. Read the "Worker status now" lines: pick an idle worker with nothing queued; a worker you dispatched to in an earlier turn that has not reported back counts as busy. Send to a busy worker only when the request explicitly continues that worker's own unfinished request, and say so in `reason`.
-- Do not send a review / 复核 / 验收 request to a worker without a reviewer role when a worker with one is listed, and never to the worker whose work is under review.
 - Route only the request in the message you were just given. The daemon binds its id; omit request_id in dispatch/answer/skip items.
 - Do not type into terminal tabs, do not call the fleet CLI, do not modify other agents' directories. Only editing the roster file is allowed (see "Adding and retiring workers"), plus the two session-board commands (see "Cross-session collisions").
 - Do not end a turn with a preamble. Your final reply is only the JSON below, or `READY` when starting up or after a handoff.

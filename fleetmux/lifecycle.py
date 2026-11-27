@@ -5,6 +5,10 @@ onto ``cfg['mode']`` (task | service), which everything below the daemon keeps r
 ``cfg['lifecycle']`` carries the lifecycle name itself (the cli_pairs table reads it to admit
 unverified pairs under ``smoke`` only). The table is re-read whenever its mtime changes, so an edit
 (e.g. ``hold_hours``) takes effect on the next read without restarting the daemon.
+
+``review_loop`` was removed with the review gates. A run, job or table written before that may still name it:
+the name keeps loading and runs as a plain task (``PLAIN_TASK``: base task, closed when completed, held when
+blocked, no verdict and no rounds); a new ``start`` does not offer it.
 """
 import copy
 import importlib
@@ -17,7 +21,9 @@ from pathlib import Path
 
 from fleetmux import fleet_config
 
-MODE_NAMES = ('service', 'dev_task', 'program', 'scheduled', 'review_loop', 'smoke')
+MODE_NAMES = ('service', 'dev_task', 'program', 'scheduled', 'smoke')
+RETIRED_MODES = ('review_loop',)  # older runs / jobs / tables: loaded and run as PLAIN_TASK
+PLAIN_TASK = {'base': 'task'}
 BASE_MODES = ('task', 'service')
 DEFAULT_PATH = None  # None = the lifecycle_modes block of fleet.yaml; a path = that file (blocks or a bare table)
 CLOCK_ENV = 'FLEETMUX_GLOBAL_CLOCK'  # path to global_clock.py (or its directory)
@@ -33,6 +39,8 @@ def _validate(table):
     modes = table.get('modes')
     if not isinstance(modes, dict):
         raise ValueError('fleet.yaml#lifecycle_modes: modes must be a mapping')
+    for name in RETIRED_MODES:  # an older table still lists it: dropped, never an error
+        modes.pop(name, None)
     missing = [m for m in MODE_NAMES if m not in modes]
     unknown = sorted(set(modes) - set(MODE_NAMES))
     if missing or unknown:
@@ -86,15 +94,23 @@ def _merge(base, over):
 
 
 def validate_lifecycle(name, path=None):
-    """The lifecycle name, or ValueError listing the valid ones."""
+    """The lifecycle name, or ValueError listing the valid ones (a retired name is not offered)."""
     if name not in MODE_NAMES or name not in load_modes(path)['modes']:
         raise ValueError('unknown --lifecycle ' + repr(name) + '; choose one of: ' + ', '.join(MODE_NAMES))
     return name
 
 
+def known(name):
+    """True for a lifecycle a run or job may carry: a current mode or a retired one (run as PLAIN_TASK)."""
+    return name in MODE_NAMES or name in RETIRED_MODES
+
+
 def get_mode(name, path=None):
-    """The effective policy of one lifecycle: ``common`` deep-merged with ``modes.<name>``."""
+    """The effective policy of one lifecycle: ``common`` deep-merged with ``modes.<name>``; a retired name gets
+    ``common`` + PLAIN_TASK under its own name."""
     table = load_modes(path)
+    if name in RETIRED_MODES:
+        return dict(_merge(table.get('common') or {}, PLAIN_TASK), name=name)
     validate_lifecycle(name, path)
     return dict(_merge(table.get('common') or {}, table['modes'][name]), name=name)
 

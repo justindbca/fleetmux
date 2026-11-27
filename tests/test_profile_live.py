@@ -11,7 +11,7 @@ import pytest
 from fleetmux import fleet, pi_adapter, profile_launch
 from fleetmux.agent_registry import AgentRegistry
 from test_fleet import decision, fx, received, traffic, turn
-from test_profile_integration import dispatch
+from test_profile_integration import dispatch, two_step
 from test_pi import pfx
 
 
@@ -25,7 +25,7 @@ def live(fx, monkeypatch, tmp_path):
     monkeypatch.setattr(fx, 'preflight_profile', lambda launch: None)
     monkeypatch.setattr(fleet, 'connect', lambda cfg: fx.r)
     fx.submit({'goal': 'implement dynamic router', 'auto_agents': True, 'apply_profiles_live': True})
-    return fx
+    return two_step(fx)
 
 
 def ready(f, **extra):
@@ -121,7 +121,7 @@ def test_failure_blocks_and_late_ready_cannot_resurrect(live, monkeypatch, failu
 
 
 @pytest.mark.parametrize('text,flags', [('not ready', {}), ('READY', {'failed': True}), ('READY', {'aborted': True})])
-@pytest.mark.parametrize('profile', ['flashnext-coder', 'claude-reviewer'])
+@pytest.mark.parametrize('profile', ['flashnext-coder', 'claude-opus'])
 def test_strict_ready_and_outcomes_for_each_switched_cli(live, profile, text, flags):
     dispatch(live, profile)
     live.deliver('worker-1')
@@ -176,14 +176,14 @@ def test_registry_model_drift_does_not_claim_applied(live, monkeypatch):
 def test_fifo_switches_to_official_claude_and_reuses_ready_runtime(live, monkeypatch):
     f = live
     dispatch(f)
-    dispatch(f, 'claude-reviewer')
+    dispatch(f, 'claude-opus')
     f.deliver('worker-1')
     ready(f)
     f.deliver('worker-1')
     f.handle(dict(turn('worker-1', 'done', 1), msg_id=f.agent('worker-1')['msg_id']))
     f.deliver('worker-1')
     assert f.agent('worker-1')['generation'] == '2'
-    assert f.agent('worker-1')['runtime_profile'] == 'claude-reviewer'
+    assert f.agent('worker-1')['runtime_profile'] == 'claude-opus'
     assert f.mgr.spawned[-1]['metadata']['cli_type'] == 'claude'
     assert 'FLEETMUX_PI_CALLBACK' not in f.mgr.spawned[-1]['env_vars']
     cfg_path = f.run_dir / 'runtime/worker-1-g2.json'
@@ -200,7 +200,7 @@ def test_fifo_switches_to_official_claude_and_reuses_ready_runtime(live, monkeyp
     f.deliver('worker-1')
     count = f.mgr.n
     f.handle(dict(turn('worker-1', 'review done', 2), msg_id=f.agent('worker-1')['msg_id']))
-    dispatch(f, 'claude-reviewer')
+    dispatch(f, 'claude-opus')
     f.deliver('worker-1')
     assert f.mgr.n == count  # same READY runtime needs no respawn
 
@@ -243,7 +243,7 @@ def test_native_children_defer_switch(live, monkeypatch):
 
 
 def test_handoff_preserves_applied_runtime_mapping(live):
-    dispatch(live, 'claude-reviewer')
+    dispatch(live, 'claude-opus')
     live.deliver('worker-1')
     ready(live)
     live.deliver('worker-1')
@@ -254,10 +254,10 @@ def test_handoff_preserves_applied_runtime_mapping(live):
     assert live.agent('worker-1')['generation'] == '2'
     assert live.agent('worker-1')['current_profile'] == ''
     ready(live)
-    assert live.agent('worker-1')['current_profile'] == 'claude-reviewer'
+    assert live.agent('worker-1')['current_profile'] == 'claude-opus'
 
 
-@pytest.mark.parametrize('profile', ['flashnext-coder', 'claude-reviewer', 'researcher'])
+@pytest.mark.parametrize('profile', ['flashnext-coder', 'claude-opus', 'researcher'])
 def test_launch_mapping_defaults_and_overrides(live, profile):
     registry = AgentRegistry()
     card = registry.get(profile)
@@ -438,13 +438,13 @@ def test_unknown_and_wrong_profiles_do_not_spawn(live):
 
 def test_profile_role_file_reaches_spawned_process_scope(live, monkeypatch):
     registry = AgentRegistry()
-    registry._cards = tuple(replace(c, role_file='review.md') if c.id == 'claude-reviewer' else c for c in registry)
+    registry._cards = tuple(replace(c, role_file='review.md') if c.id == 'claude-opus' else c for c in registry)
     root = live.run_dir / 'test-registry'
     root.mkdir()
     (root / 'review.md').write_text('Only inspect code; write findings, never implement changes.')
     registry.directory = root
     monkeypatch.setattr(fleet, 'AgentRegistry', lambda *args: registry)
-    dispatch(live, 'claude-reviewer')
+    dispatch(live, 'claude-opus')
     live.deliver('worker-1')
     scope = fleet.agent_cwd(live.cfg, 'worker-1') / 'CLAUDE.md'
     assert 'Only inspect code; write findings' in scope.read_text()

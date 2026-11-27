@@ -109,14 +109,14 @@ def test_respawn_lets_a_waiting_old_hook_go_and_its_late_stop_never_settles(afx)
     assert any(json.loads(x).get('kind') == 'turn.stale' for x in f.r.lrange(fleet.LOG, -20, -1))
 
 
-# ------------------------------------------------------------------ batch review rules x advised layout
-def test_advised_respawn_keeps_the_fleet_review_rules(afx):
-    """REVIEWER.md (batch 816c28a1) is written before the advised kit; Kit.clear only touches .claude/."""
+# ------------------------------------------------------------------ worker directory x advised layout
+def test_advised_respawn_leaves_no_review_rules(afx):
+    """An advised respawn writes the kit; no REVIEWER.md is written or left behind (no review gate)."""
     f = afx
     f.advisor_runner = Runner({'model': 'opus', 'effort': 'high', 'domains': ['research_web']})
     send_decision(f, [item()])
     f.pump()  # advised respawn: worker-1 -> worker-1.1 with the research_web kit
     cwd = fleet.agent_cwd(f.cfg, 'worker-1')
     assert f.agent('worker-1')['generation'] == '1' and 'RULES OF research_web' in (cwd / 'CLAUDE.md').read_text()
-    assert (cwd / 'REVIEWER.md').is_file() and 'REVIEWER.md' in (cwd / 'CLAUDE.md').read_text()
+    assert not (cwd / 'REVIEWER.md').exists() and 'REVIEWER.md' not in (cwd / 'CLAUDE.md').read_text()
 

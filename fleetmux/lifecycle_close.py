@@ -2,14 +2,14 @@
 run is done, stuck or out of time, per the mode table (config/fleet.yaml#lifecycle_modes, re-read every tick).
 
 * task modes, terminal state:
-  - ``completed``: dev_task first passes the trusted-Python gate (lifecycle_deliver); review_loop needs a
-    clean PASS verdict. Then stop + close (``closed_by: auto``). A failed gate turns the task blocked.
+  - ``completed``: dev_task first passes the trusted-Python gate (lifecycle_deliver: tests, merge, enqueue).
+    Then stop + close (``closed_by: auto``). A failed gate turns the task blocked.
   - ``blocked`` / ``budget_exhausted``: hold the run as it is for ``hold_hours`` (default 12), then
     ``stop_keep_resumable`` (``closed_by: timeout``, result.json ``resumable: true``: start --resume
     reopens it). scheduled (``on_fail``) and smoke (``on_any_end``) close at once instead.
-  - a review_loop that reaches ``max_rounds`` FAIL verdicts (dev_task: ``review_step.max_rounds`` with
-    ``on_cap: stop_and_report``) is ended blocked and closed with an outstanding-issues list; scheduled past ``hard_timeout_min`` is ended
-    ``budget_exhausted`` and closed (``closed_by: timeout``).
+  - scheduled past ``hard_timeout_min`` is ended ``budget_exhausted`` and closed (``closed_by: timeout``).
+  - there is no review step and no review round: no verdict file is read, nothing is capped (an older run's
+    ``review_loop`` runs as a plain task, lifecycle.PLAIN_TASK).
 * service: idle workers are reclaimed and respawned on demand; optional ``idle_stop_hours``
   (lifecycle_hold).
 * Closing reuses the explicit-stop tail of RuntimeV2.run (descendants first, every runtime retired and
@@ -18,8 +18,8 @@ run is done, stuck or out of time, per the mode table (config/fleet.yaml#lifecyc
   closes this run's cmux workspace (registry ownership checked). A stop that cannot be confirmed keeps
   the workspace and Redis and raises an alarm instead.
 * Sub-fleets are not closed here: their parent collects and closes them (subfleet.tick).
-* A job's sub-fleet (design §58, ``job`` in its config) runs its lifecycle's running checks (review cap,
-  hard timeout) and completion gate here, exactly as a root run does; the gate record goes into its
+* A job's sub-fleet (design §58, ``job`` in its config) runs its lifecycle's running checks (hard
+  timeout) and completion gate here, exactly as a root run does; the gate record goes into its
   result.json as ``delivery``. Closing, hold and notifications stay with the parent.
 * Runs without a lifecycle (older runs) are untouched.
 """
@@ -148,36 +148,9 @@ def _hset(f, **fields):
     f.r.hset(LIFE, mapping=fields)
 
 
-def slot_record(cfg, agents, registry_dir=None, models=True, review_slot=None):
-    """The program's record of the worker slots for the review gate (lifecycle_deliver.load_verdict):
-    {models: {slot: model card id or None}, review_slot: the slot the supervisor dispatched the review to, or None}.
-    ``agents`` is {slot: agent hash}. With ``models``, each slot's model card (model_usage.slot_card) is added for
-    the audit only: the gate never checks who reviewed, so a lookup that fails leaves None and never raises."""
-    out = {'models': dict.fromkeys(agents), 'review_slot': review_slot or None}
-    if models:
-        try:
-            from fleetmux import model_usage
-            from fleetmux.agent_registry import AgentRegistry
-            from fleetmux.pi_adapter import for_agent
-            registry = AgentRegistry(registry_dir or None)
-            for slot, info in agents.items():
-                out['models'][slot] = model_usage.slot_card(info, for_agent(cfg, slot), registry)[1]
-        except Exception:  # noqa: BLE001  (audit data only: a broken registry never stops the gate)
-            pass
-    return out
-
-
-def fleet_slots(f, models=False):
-    """slot_record of a live fleet (``models``: also each slot's model card, for the gate record). The review slot
-    is the one the supervisor's last ``"review": true`` dispatch went to (Fleet.mark_review)."""
-    task = f.task()
-    return slot_record(f.cfg, {w: f.agent(w) for w in f.workers}, task.get('agent_registry'), models=models,
-                       review_slot=task.get('review_slot'))
-
-
 def acceptance_verdict(f, mode, task_id, ok, problem='', claimed_by='supervisor', **extra):
     """launch-demo brief §1.2: one audit event per "reported done -> judged by the program" point, so the number
-    of bounces can be counted across the modes (dev_task / review_loop / task_artifacts). Bookkeeping only: it
+    of bounces can be counted across the modes (dev_task / task_artifacts). Bookkeeping only: it
     is written after the judgement and never changes it. ``problem`` is cut to its first line."""
     line = (str(problem or '').strip().splitlines() or [''])[0][:500]
     f.log('acceptance.verdict', mode=mode, task_id=task_id, ok=bool(ok), problem='' if ok else line,
@@ -203,7 +176,7 @@ def set_task_status(f, status, reason):
     f.log('lifecycle.status', status=status, reason=reason)
 
 
-def request_close(f, closed_by, reason, *, resumable=False, report=None, via=None):
+def request_close(f, closed_by, reason, *, resumable=False, via=None):
     """Stop the run through the explicit-stop tail of RuntimeV2.run; finalize() runs after retirement.
 
     ``via`` records who asked (``'fleetmux-sidebar'`` for the sidebar's close button): finalize() copies it
@@ -211,7 +184,7 @@ def request_close(f, closed_by, reason, *, resumable=False, report=None, via=Non
     """
     if f.lifecycle_close:
         return
-    f.lifecycle_close = {'closed_by': closed_by, 'reason': reason, 'resumable': resumable, 'report': report}
+    f.lifecycle_close = {'closed_by': closed_by, 'reason': reason, 'resumable': resumable}
     if via:
         f.lifecycle_close['via'] = via
     f.explicit_stop = f.stopping = True
@@ -290,41 +263,6 @@ def running_checks(f, policy, task, now):
     if limit is not None and awake.between_wall(float(started), now) >= float(limit) * 60:  # awake time (§35)
         _hset(f, **{'timeout:' + tid: 1})
         f.finish('budget_exhausted', 'hard_timeout_min ' + str(limit) + ' exceeded (' + policy['name'] + ')')
-        return
-    spec = task_spec(task)
-    if policy['name'] == 'review_loop' and spec.get('review_file'):
-        review_cap(f, tid, spec['review_file'], int(policy.get('max_rounds') or 3), 'review_loop')
-    review = policy.get('review_step') or {}
-    if (policy['name'] == 'dev_task' and review.get('max_rounds') and review.get('on_cap') == 'stop_and_report'
-            and (spec.get('deliver') or {}).get('review_file')):
-        # dev_task review rounds are capped too (10/13 codex-notype ran to r16): at the cap no new round
-        # starts; the open P0/P1 go to the user in the result instead.
-        review_cap(f, tid, spec['deliver']['review_file'], int(review['max_rounds']), 'dev_task review')
-
-
-def review_cap(f, tid, review_file, cap, label):
-    """A FAIL verdict at round >= cap ends the task blocked with the outstanding-issues list."""
-    verdict, _, _ = lifecycle_deliver.load_verdict(f.workspace(), review_file, fleet_slots(f))
-    if verdict and verdict['verdict'] == 'FAIL' and verdict['round'] >= cap:
-        report = write_outstanding(f, verdict, cap, label)
-        _hset(f, **{'cap:' + tid: str(report)})
-        left = len(lifecycle_deliver.outstanding(verdict))
-        f.finish('blocked', label + ': round ' + str(verdict['round']) + ' of max_rounds ' + str(cap)
-                 + ' still FAIL; ' + str(left) + ' open issue(s) handed to the user: ' + str(report))
-
-
-def write_outstanding(f, verdict, cap, label='review_loop'):
-    """The outstanding-issues list (挂账清单) of a capped review loop: JSON + a readable Markdown."""
-    items = lifecycle_deliver.outstanding(verdict)
-    data = {'task_id': f.task().get('id', ''), 'round': verdict['round'], 'max_rounds': cap,
-            'reviewer': verdict.get('reviewer'), 'issues': items, 'at': time.time()}
-    out = f.run_dir / 'outstanding.json'
-    out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
-    lines = ['# 挂账清单：' + label + ' 第 ' + str(verdict['round']) + ' 轮仍 FAIL（max_rounds ' + str(cap) + '）', '']
-    lines += ['- [' + str(i.get('severity', '?')) + '] ' + str(i.get('id', '')) + ' ' + str(i.get('title', ''))
-              for i in items] or ['- （verdict 未列出具体问题）']
-    (f.run_dir / 'outstanding.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    return out
 
 
 def terminal(f, policy, task, now):
@@ -341,8 +279,6 @@ def terminal(f, policy, task, now):
     f.write_result()
     if status == 'cancelled':
         return request_close(f, 'auto', name + ' cancelled: ' + task.get('reason', ''))
-    if _hget(f, 'cap:' + tid):
-        return request_close(f, 'auto', task.get('reason', ''), report=_hget(f, 'cap:' + tid))
     if _hget(f, 'timeout:' + tid):
         return request_close(f, 'timeout', task.get('reason', ''))
     if policy.get('on_any_end') == 'stop_and_close' or policy.get('on_fail') == 'stop_and_close':
@@ -360,9 +296,7 @@ def completion_problem(f, policy, task, spec):
             if not deliver:
                 rec = {'ok': False, 'problem': 'dev_task has no deliver spec: done_when cannot be judged'}
             else:
-                review = policy.get('review_step') or {}
-                rec = lifecycle_deliver.deliver(deliver, f.workspace(), task_id=task['id'], run=str(f.run_dir),
-                                                must_pass=review.get('must_pass', True), slots=fleet_slots(f, models=True))
+                rec = lifecycle_deliver.deliver(deliver, f.workspace(), task_id=task['id'], run=str(f.run_dir))
             _hset(f, **{'gate:' + task['id']: json.dumps(rec, ensure_ascii=False)})
             tests = rec.get('tests') or {}
             f.log('lifecycle.gate', ok=rec['ok'], problem=rec.get('problem', ''), steps=rec.get('steps', []),
@@ -373,27 +307,7 @@ def completion_problem(f, policy, task, spec):
         else:
             rec = json.loads(raw)
         return None if rec['ok'] else 'dev_task done_when not met: ' + rec.get('problem', '')
-    if name == 'review_loop' and spec.get('review_file'):
-        verdict, _, problem = lifecycle_deliver.load_verdict(f.workspace(), spec['review_file'], fleet_slots(f))
-        if verdict is None:
-            result = 'review_loop done_when not met: ' + problem
-        else:
-            problem = lifecycle_deliver.review_problem(verdict)
-            result = 'review_loop done_when not met: ' + problem if problem else None
-        _review_verdict_once(f, task['id'], verdict, result)
-        return result
     return None
-
-
-def _review_verdict_once(f, tid, verdict, result):
-    """review_loop has no gate cache and a job child re-enters completion_problem every tick: log the verdict
-    only when this judgement differs from the last one logged (round / verdict / outcome). Never touches the
-    result."""
-    sig = json.dumps([(verdict or {}).get('round'), (verdict or {}).get('verdict'), result], ensure_ascii=False)
-    if _hget(f, 'verdict:' + tid) == sig:
-        return
-    _hset(f, **{'verdict:' + tid: sig})
-    acceptance_verdict(f, 'review_loop', tid, result is None, (result or '').split(': ', 1)[-1])
 
 
 # ------------------------------------------------------------------ after retirement (RuntimeV2.run tail)
@@ -412,8 +326,6 @@ def closing_text(f, closing, res, stopped):
                 + f.cfg['run'])
     else:
         body = res.get('status', 'stopped') + '：' + (closing.get('reason') or res.get('reason') or '')
-    if closing.get('report'):
-        body += '；挂账清单 ' + str(closing['report'])
     return head + body + '（closed_by=' + closing['closed_by'] + '）'
 
 
@@ -438,8 +350,6 @@ def finalize(f, stopped):
             res['closed_via'] = closing['via']
         if closing.get('resumable'):
             res['resumable'] = True
-        if closing.get('report'):
-            res['outstanding'] = str(closing['report'])
         raw = None if f.service else _hget(f, 'gate:' + (res.get('task_id') or ''))
         if raw:
             res['delivery'] = json.loads(raw)

@@ -64,8 +64,12 @@ def submit(f, spec):
 
 
 def complete(f, spec):
-    """The supervisor's real COMPLETED decision through the v2 settle path."""
-    submit(f, dict(spec, artifacts=[{'path': 'reviewer/verdict.json'}]))  # COMPLETED needs a verified artifact
+    """The supervisor's real COMPLETED decision through the v2 settle path (COMPLETED needs a verified artifact:
+    a plain worker note)."""
+    note = f.workspace() / 'worker-1' / 'notes.md'
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text('done\n')
+    submit(f, dict(spec, artifacts=[{'path': 'worker-1/notes.md'}]))
     assert f.task()['status'] == 'running'
     f.pump(); env = receive(f, 'supervisor')
     settle(f, 'supervisor', env, {'status': 'COMPLETED', 'completion': 100, 'dispatch': [], 'reason': 'verified'})
@@ -108,25 +112,13 @@ def repo(tmp_path):
 def deliver_spec(repo, tmp_path, test_cmd=None):
     return {'repo': str(repo), 'feature_branch': 'feat/x', 'deploy_branch': 'main',
             'test_cmd': test_cmd or [sys.executable, '-c', 'print("12 passed")'],
-            'queue': str(tmp_path / 'queue' / 'deploy-queue.jsonl'), 'review_file': 'reviewer/verdict.json'}
-
-
-def make_reviewer(f, slot='worker-2', profile='claude-reviewer'):
-    """``slot``'s generation runs the ``claude-reviewer`` card (model opus; recorded in the gate record, audit only)."""
-    f.setf(slot, runtime_launch=json.dumps({'profile_id': profile}))
-
-
-def write_verdict(f, verdict='PASS', reviewer='opus', rnd=1, issues=(), name='reviewer/verdict.json'):
-    path = f.workspace() / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({'round': rnd, 'verdict': verdict, 'reviewer': reviewer, 'issues': list(issues)}))
+            'queue': str(tmp_path / 'queue' / 'deploy-queue.jsonl')}
 
 
 # ------------------------------------------------------------------ dev_task: gate, auto stop, close
 def test_dev_task_completed_merges_tests_enqueues_then_stops_closes_and_notifies(fx, table, notes, repo, tmp_path):
     f = as_task(fx, 'dev_task')
     spec = deliver_spec(repo, tmp_path)
-    write_verdict(f)
     complete(f, {'goal': 'ship feature x', 'deliver': spec})
     sha = git(repo, 'rev-parse', 'feat/x')
     f.tick()
@@ -140,7 +132,7 @@ def test_dev_task_completed_merges_tests_enqueues_then_stops_closes_and_notifies
     out = result_json(f)
     assert out['status'] == 'completed' and out['mode'] == 'dev_task' and out['closed_by'] == 'auto'
     assert out['closed_at'] >= out['at'] and out['workspace'] == 'closing' and 'resumable' not in out
-    assert out['delivery']['ok'] and out['delivery']['steps'] == ['review', 'fast_forward_check', 'tests', 'merged', 'enqueued']
+    assert out['delivery']['ok'] and out['delivery']['steps'] == ['fast_forward_check', 'tests', 'merged', 'enqueued']
     assert [n['channel'] for n in notes] == ['tg', 'parent']
     assert '已入队待批' in notes[0]['text'] and '已上线' not in notes[0]['text']
     assert notes[1]['initiator'] == {'kind': 'claude', 'id': 'origin-session'}
@@ -152,8 +144,6 @@ def test_dev_task_completed_merges_tests_enqueues_then_stops_closes_and_notifies
 def test_dev_task_gate_runs_once_and_is_idempotent(fx, table, notes, repo, tmp_path):
     spec = deliver_spec(repo, tmp_path)
     (tmp_path / 'ws').mkdir()
-    (tmp_path / 'ws' / 'reviewer').mkdir()
-    (tmp_path / 'ws' / 'reviewer' / 'verdict.json').write_text(json.dumps({'verdict': 'PASS', 'reviewer': 'opus'}))
     first = lifecycle_deliver.deliver(spec, tmp_path / 'ws')
     second = lifecycle_deliver.deliver(spec, tmp_path / 'ws')
     assert first['ok'] and second['ok']
@@ -162,8 +152,6 @@ def test_dev_task_gate_runs_once_and_is_idempotent(fx, table, notes, repo, tmp_p
 
 @pytest.mark.parametrize('case,expect', [
     ('tests_fail', 'tests failed'),
-    ('review_fail', 'review verdict is FAIL'),
-    ('p1_left', '1 P1'),
     ('not_ff', 'not a fast-forward'),
     ('deploy_checked_out', 'is checked out in'),
     ('dirty', 'uncommitted changes'),
@@ -171,13 +159,9 @@ def test_dev_task_gate_runs_once_and_is_idempotent(fx, table, notes, repo, tmp_p
 def test_dev_task_gate_refuses_and_never_moves_the_deploy_branch(tmp_path, repo, case, expect):
     spec = deliver_spec(repo, tmp_path)
     ws = tmp_path / 'ws'
-    verdict = {'verdict': 'PASS', 'reviewer': 'opus', 'issues': []}
+    ws.mkdir()
     if case == 'tests_fail':
         spec['test_cmd'] = [sys.executable, '-c', 'raise SystemExit(1)']
-    elif case == 'review_fail':
-        verdict['verdict'] = 'FAIL'
-    elif case == 'p1_left':
-        verdict['issues'] = [{'id': 'X-1', 'severity': 'P1', 'title': 'open'}]
     elif case == 'not_ff':
         git(repo, 'checkout', '-q', 'main'); (repo / 'b.txt').write_text('x'); git(repo, 'add', '.')
         git(repo, 'commit', '-qm', 'diverge'); git(repo, 'checkout', '-q', 'feat/x')
@@ -185,8 +169,6 @@ def test_dev_task_gate_refuses_and_never_moves_the_deploy_branch(tmp_path, repo,
         git(repo, 'worktree', 'add', '-q', str(tmp_path / 'deploy-wt'), 'main')
     elif case == 'dirty':
         (repo / 'a.txt').write_text('uncommitted\n')
-    (ws / 'reviewer').mkdir(parents=True)
-    (ws / 'reviewer' / 'verdict.json').write_text(json.dumps(verdict))
     before = git(repo, 'rev-parse', 'main')
     rec = lifecycle_deliver.deliver(spec, ws)
     assert not rec['ok'] and expect in rec['problem']
@@ -195,7 +177,6 @@ def test_dev_task_gate_refuses_and_never_moves_the_deploy_branch(tmp_path, repo,
 
 def test_dev_task_failed_gate_turns_blocked_and_holds_instead_of_closing(fx, table, notes, repo, tmp_path):
     f = as_task(fx, 'dev_task')
-    write_verdict(f)
     complete(f, {'goal': 'ship', 'deliver': deliver_spec(repo, tmp_path, [sys.executable, '-c', 'raise SystemExit(3)'])})
     f.tick()
     assert f.task()['status'] == 'blocked' and 'tests failed (exit 3)' in f.task()['reason']
@@ -237,7 +218,7 @@ def test_lifecycle_run_refuses_typed_text_once_its_task_ended(fx, table, tmp_pat
 
 
 def test_spec_only_lifecycle_takes_no_task_from_typed_text(fx, table):
-    """dev_task / review_loop tasks exist only as a spec (deliver / review_file): typed text is refused
+    """dev_task tasks exist only as a spec (deliver): typed text is refused
     up front with the way in, not after a failed validation; smoke keeps the typed-goal path."""
     f = as_task(fx, 'dev_task')
     answer = typed(f, 'ship it', 'typed')
@@ -325,33 +306,6 @@ def test_scheduled_hard_timeout_ends_and_closes(fx, table, notes):
     lifecycle_close.tick(f, now=t0 + limit * 60 + 1)
     assert f.task()['status'] == 'budget_exhausted' and 'hard_timeout_min ' + str(limit) in f.task()['reason']
     assert f.lifecycle_close['closed_by'] == 'timeout'
-
-
-def test_review_loop_cap_ends_with_outstanding_list(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    submit(f, {'goal': 'fix review findings', 'review_file': 'reviewer/verdict.json'})
-    issues = [{'id': 'P1-02', 'severity': 'P1', 'title': 'race in finish()'},
-              {'id': 'P2-01', 'severity': 'P2', 'title': 'naming', 'status': 'fixed'}]
-    write_verdict(f, 'FAIL', rnd=2, issues=issues)
-    f.tick()
-    assert f.task()['status'] == 'running'  # round 2 < max_rounds 3
-    write_verdict(f, 'FAIL', rnd=3, issues=issues)
-    f.tick()
-    assert f.task()['status'] == 'blocked' and 'max_rounds 3' in f.task()['reason']
-    listing = json.loads((f.run_dir / 'outstanding.json').read_text())
-    assert [i['id'] for i in listing['issues']] == ['P1-02']
-    assert 'P1-02' in (f.run_dir / 'outstanding.md').read_text()
-    assert f.lifecycle_close['closed_by'] == 'auto' and f.lifecycle_close['report'].endswith('outstanding.json')
-    stop_tail(f)
-    assert result_json(f)['outstanding'].endswith('outstanding.json')
-
-
-def test_review_loop_completed_needs_a_clean_pass(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    write_verdict(f, 'PASS', reviewer='whoever')
-    complete(f, {'goal': 'fix', 'review_file': 'reviewer/verdict.json'})
-    f.tick()
-    assert f.lifecycle_close['closed_by'] == 'auto' and f.task()['status'] == 'completed'
 
 
 # ------------------------------------------------------------------ service: reclaim, respawn, idle stop

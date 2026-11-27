@@ -13,7 +13,18 @@ from test_pi import callback, operator_input, pfx, pi_turn
 def routed(fx):
     fx.finish('cancelled', 'replace fixture task')
     fx.submit({'goal': 'implement dynamic router', 'auto_agents': True})
-    return fx
+    return two_step(fx)
+
+
+def two_step(f):
+    """The task's plan as an implementation plus a review the user asked for (the planner no longer appends one):
+    two different profiles for the same slot."""
+    from fleetmux.assignment import assign_profiles
+    from test_assignment import two_step_plan
+    plan = two_step_plan('dynamic router')
+    f.r.hset(fleet.TASK, mapping={'dispatch_plan': json.dumps(plan.to_dict()),
+                                  'profile_assignments': json.dumps(assign_profiles(plan, ['worker-1']))})
+    return f
 
 
 def dispatch(f, profile='flashnext-coder', **kwargs):
@@ -82,7 +93,7 @@ def test_fifo_profile_intent_and_different_profile_remains_pending(routed, monke
     f = routed
     forbid_process_changes(monkeypatch, f)
     dispatch(f)
-    dispatch(f, 'claude-reviewer')
+    dispatch(f, 'claude-opus')
     assert f.agent('worker-1')['desired_profile'] == 'flashnext-coder'
     f.deliver('worker-1')
     assert 'profile: flashnext-coder]' in last_to(f, 'worker-1')
@@ -90,9 +101,9 @@ def test_fifo_profile_intent_and_different_profile_remains_pending(routed, monke
     f.deliver('worker-1')
     info = f.agent('worker-1')
     assert info['advisory_profile'] == 'flashnext-coder'
-    assert info['desired_profile'] == 'claude-reviewer' and info['profile_state'] == 'pending'
+    assert info['desired_profile'] == 'claude-opus' and info['profile_state'] == 'pending'
     assert info['generation'] == '0' and info['label'] == 'worker-1'
-    assert 'Capabilities: code-review, safety-audit, planning' in last_to(f, 'worker-1')
+    assert 'Capabilities: code-edit, test-fix, planning, code-review, safety-audit' in last_to(f, 'worker-1')
     assert 'No CLI/model switch' in last_to(f, 'worker-1')
 
 
@@ -103,7 +114,7 @@ def test_wrong_worker_profile_rejected_before_any_part_of_decision_is_queued(rou
     f.r.hset(fleet.TASK, mapping={'profile_assignments': json.dumps(assignments)})
     f.on_supervisor(decision(dispatch=[
         {'to': 'worker-1', 'instruction': 'Recommended profile: flashnext-coder'},
-        {'to': 'worker-1', 'instruction': 'Recommended profile: claude-reviewer'},
+        {'to': 'worker-1', 'instruction': 'Recommended profile: claude-opus'},
     ]))
     assert f.r.llen('fx:inbox:worker-1') == 0
     assert f.agent('worker-1')['profile_state'] == 'blocked'

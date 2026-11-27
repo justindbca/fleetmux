@@ -35,11 +35,6 @@ def cmd_set(cfg, r, args):
     return _ask(r, {'action': 'set', 'name': args.name, 'key': args.key, 'value': args.value}, args.wait)
 
 
-def cmd_reviews(cfg, r, args):
-    from fleetmux import applet_ops
-    return applet_cli.OK, {'status': 'ok', 'reviews': applet_ops.review_rows(r, all_=args.all)}
-
-
 def cmd_revoke(cfg, r, args):
     return _ask(r, {'action': 'revoke', 'lease': args.lease, 'note': args.note}, args.wait)
 
@@ -83,10 +78,6 @@ def _setup_set(p):
     _wait(p)
 
 
-def _setup_reviews(p):
-    p.add_argument('--all', action='store_true', help='every kept review, not only running ones')
-
-
 def _setup_revoke(p):
     p.add_argument('lease')
     p.add_argument('--note', required=True)
@@ -105,7 +96,6 @@ applet_cli.register('pause', cmd_pause('pause'), _setup_pause, 'pause an applet:
 applet_cli.register('resume', cmd_pause('resume'), _setup_pause, 'resume a paused applet')
 applet_cli.register('leases', cmd_leases, _setup_leases, 'open (or, with --all, all kept) lease records')
 applet_cli.register('set', cmd_set, _setup_set, 'change hot_add_max while the fleet runs (written back to the roster)')
-applet_cli.register('reviews', cmd_reviews, _setup_reviews, 'running (or, with --all, all kept) fix reviews')
 applet_cli.register('revoke', cmd_revoke, _setup_revoke, 'end one lease now (operator)')
 applet_cli.register('notices', cmd_notices, _setup_notices,
                     'the full text of the notices the host kept: applet.notify and human escalations (the audit line '

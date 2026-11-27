@@ -12,8 +12,10 @@ a file whose top-level keys are all block names is read as blocks, anything else
 import contextlib
 import copy
 import fcntl
+import math
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -26,11 +28,12 @@ SHIPPED = HERE / 'config' / 'fleet.yaml'
 USER_ENV = 'FLEETMUX_CONFIG'
 USER_FILE = None  # None: paths.default_home() / 'fleet.yaml' (never follows FLEETMUX_HOME), resolved on use
 BLOCKS = ('cli_pairs', 'lifecycle_modes', 'walls', 'watchdog_prompts', 'capability_matrix', 'models',
-          'profiles', 'accounts', 'tools', 'pi_context', 'daemon_watch', 'fresh_dispatch', 'dsh',
+          'profiles', 'accounts', 'tools', 'pi_context', 'daemon_watch', 'fresh_dispatch', 'handoff', 'dsh',
           'discovery', 'remote', 'session_env', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose',
           'ui')
 USER_BLOCKS = ('accounts', 'tools', 'walls', 'lifecycle_modes', 'pi_context', 'daemon_watch', 'fresh_dispatch',
-               'discovery', 'remote', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose', 'ui')
+               'discovery', 'remote', 'job_subfleet', 'gui', 'bare', 'relay', 'restart_resume', 'decompose', 'ui',
+               'handoff')
 
 NONE = 'none'  # recorded when there is no private file
 
@@ -211,6 +214,61 @@ def fresh_hint_ratio():
     if type(value) not in (int, float) or not 0 < value <= 1:
         raise ValueError('fleet.yaml#fresh_dispatch.fresh_hint_ratio must be a number in (0, 1], got ' + repr(value))
     return value
+
+
+def _finite(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+# fleet.yaml#handoff: key -> (check, what a good value is). The numbers themselves live only in the YAML.
+HANDOFF_KEYS = {
+    'ratio': (lambda v: _finite(v) and 0 < v <= 1, 'a number in (0, 1]'),
+    'midturn_ratio': (lambda v: _finite(v) and 0 < v < 1, 'a number in (0, 1)'),
+    'handoff_timeout': (lambda v: _finite(v) and v > 0, 'seconds > 0'),
+    'midturn_retry': (lambda v: _finite(v) and v >= .001, 'seconds >= 0.001'),
+    'midturn_max_splits': (lambda v: type(v) is int and v >= 0, 'an integer >= 0'),
+}
+_handoff_good = None  # the last valid block this process read
+_handoff_noted = None  # the problem already logged; cleared by the next good read
+
+
+def handoff():
+    """fleet.yaml#handoff (docs/design.md §22), read on every call, so an edit needs no daemon restart. An
+    unreadable or invalid block keeps the last good values and logs each problem once; with no good value yet it
+    raises ValueError."""
+    global _handoff_good, _handoff_noted
+    try:
+        raw = block('handoff')
+        if not isinstance(raw, dict) or set(raw) != set(HANDOFF_KEYS):
+            raise ValueError('must be a mapping with exactly: ' + ', '.join(HANDOFF_KEYS) + '; got ' + repr(raw))
+        for key, (good, want) in HANDOFF_KEYS.items():
+            if not good(raw[key]):
+                raise ValueError(key + ' must be ' + want + ', got ' + repr(raw[key]))
+    except (OSError, ValueError, TypeError) as exc:
+        problem = str(exc)[:300]
+        if _handoff_good is None:
+            raise ValueError('fleet.yaml#handoff unreadable or invalid: ' + problem) from exc
+        if _handoff_noted != problem:
+            _handoff_noted = problem
+            print('fleet.yaml#handoff unreadable or invalid, keeping the last good values: ' + problem,
+                  file=sys.stderr, flush=True)
+        return dict(_handoff_good)
+    _handoff_good, _handoff_noted = dict(raw), None
+    return raw
+
+
+def handoff_ratio(cfg):
+    """The last layer of the rotation ratio: the run's `handoff_ratio` (a typed --handoff-ratio) when it has one,
+    else fleet.yaml#handoff.ratio."""
+    value = cfg.get('handoff_ratio')
+    return float(handoff()['ratio'] if value is None else value)
+
+
+def handoff_timeout(cfg):
+    """Seconds to wait for a handoff note: the run's `handoff_timeout` (a typed --handoff-timeout) when it has one,
+    else fleet.yaml#handoff.handoff_timeout."""
+    value = cfg.get('handoff_timeout')
+    return float(handoff()['handoff_timeout'] if value is None else value)
 
 
 JOB_SUBFLEET = {'workers': 2, 'supervisor_profile': None, 'worker_profiles': [], 'hours': 4,

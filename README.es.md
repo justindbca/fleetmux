@@ -159,7 +159,7 @@ programado, el servicio residente y el desarrollo de funcionalidades funcionan a
   Los endpoints gratuitos son inestables y tienen tope: los límites de tasa y de uso pasan por la tabla de límites, que baja
   la ranura por su cadena de modelos o pausa la ejecución de forma reanudable; `--max-busy` se mantiene por debajo de la
   concurrencia del plan gratuito; los workers se añaden o se quitan editando el YAML del roster mientras la flota está en
-  marcha. Para una pasada de calidad, asigna a una fila del roster un `pi_model:` más potente y úsala como revisora.
+  marcha. Para las piezas más difíciles, asigna a una fila del roster un `pi_model:` más potente y envíale esas piezas.
 - **Informe de investigación programado** (`scheduled`). El programador de tareas de quien llama arranca una flota a horas
   fijas del día hábil (con `clock_gate` activado, la propia flota se niega a arrancar en un día de mercado cerrado): un
   supervisor y dos workers de Claude Code con skills de investigación y un MCP de búsqueda web a través de `--worker-kit`. El
@@ -171,14 +171,13 @@ programado, el servicio residente y el desarrollo de funcionalidades funcionan a
   la flota fuera de su horario de trabajo con `pause` / `resume`. El trabajo más grande entra con `fleetmux task` como
   un job que se ejecuta en su propia subflota en modo task.
   Consulta [Service mode](README.md#service-mode-resident-fleet) en el README en inglés.
-- **Desarrollo de funcionalidades con revisión independiente** (`dev_task`). El supervisor divide la funcionalidad, los
-  workers la construyen y workers revisores independientes la evalúan; la revisión se limita a tres rondas y los P0 / P1 que
-  queden pasan a ti en lugar de abrir una cuarta ronda. La tarea solo está terminada cuando el `test_cmd` de la puerta de
+- **Desarrollo de funcionalidades** (`dev_task`). El supervisor divide la funcionalidad y los workers la construyen; al
+  fusionar, el supervisor lee el diff una vez, corrige los errores simples y refactoriza un poco. Sin rondas de revisión ni
+  archivo de veredicto: la tarea solo está terminada cuando el `test_cmd` de la puerta de
   entrega ha pasado y el trabajo está fusionado y entregado a la cola de publicación. Los contratos de interfaz
   (`"contracts": true`) congelan las interfaces compartidas antes de empezar.
 - **Programa en varias fases** (`program`). Cada fase se ejecuta como su propia flota hija `dev_task`; un registro anota las
-  fases y el programa termina cuando la última fase está fusionada y revisada.
-- **Revisar hasta aprobar** (`review_loop`). Revisión → corrección → revisión, como máximo tres rondas, y después un informe.
+  fases y el programa termina cuando la última fase está fusionada.
 - **Una tarea que se le queda grande a un worker** (en desarrollo). Cuando un worker mantiene ocupado un flujo de trabajo más
   allá de un tiempo configurable, se le pide que proponga una división; con la aprobación del supervisor (y los modelos
   elegidos), el worker cede el relevo y su sucesor pasa a ser el supervisor de una flota hija, que se muestra en directo en la
@@ -290,7 +289,7 @@ requieren Redis v2 y una autorización explícita del modo de desarrollo. Sin `-
 el par por defecto de `fleetmux/config/fleet.yaml#cli_pairs`: **un supervisor Pi con `openai-codex/gpt-6-astra` (thinking
 high) y workers oficiales de Claude Code**. Esa tabla enumera todos los pares admitidos y su estado (consulta
 [Redis v2 development runtime](README.md#redis-v2-development-runtime) en el README en inglés); un par que no figure en ella
-se rechaza. `start` también exige `--lifecycle <mode>` (`service`, `dev_task`, `program`, `scheduled`, `review_loop`,
+se rechaza. `start` también exige `--lifecycle <mode>` (`service`, `dev_task`, `program`, `scheduled`,
 `smoke`; consulta `fleetmux/config/fleet.yaml#lifecycle_modes`); un par `unverified` solo arranca con `--lifecycle smoke`.
 Los ejemplos de configuración y arranque específicos de Codex del README en inglés se conservan únicamente como referencia
 heredada de v1.

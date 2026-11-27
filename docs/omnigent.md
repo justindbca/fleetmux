@@ -87,7 +87,7 @@ does not stop a job that was already submitted.
 
    - Only a block at the very end of the message counts. A JSON block anywhere else stays part of the goal.
    - Allowed keys: `hours`, `artifacts`, `budget`, `lifecycle`, `workers`, `supervisor_profile`,
-     `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `review_file`, `tree`, `by`. They have the
+     `worker_profiles`, `name`, `roster`, `roles`, `deliver`, `tree`, `by`. They have the
      meanings given in the README section "Jobs: submit work to a running root fleet". With the decompose
      switch on, a `lifecycle: dev_task` job needs `tree` (run `fleetmux tree check <file>` first).
    - `goal` is not a key: the message text is the goal.

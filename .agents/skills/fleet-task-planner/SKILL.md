@@ -10,7 +10,7 @@ Goal of this skill: **the main model only plans, submits, validates and summariz
 Triggers:
 - "split this task" / "plan and dispatch" / "let the fleet agents do it"
 - "like Claude Code's Task/subagent mechanism"
-- a large task that needs parallel research, implementation, verification, review
+- a large task that needs parallel research, implementation, verification
 - the user explicitly runs `/skill:fleet-task-planner ...`
 
 Not for:

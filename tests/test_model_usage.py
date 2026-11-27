@@ -8,6 +8,7 @@ from fleetmux.agent_registry import AgentRegistry
 from fleetmux.assignment import assign_profiles
 from fleetmux.planner import build_dispatch_plan
 from fleetmux.router import route_task
+from test_assignment import two_step_plan
 from test_fleet import fx  # noqa: F401  (fixture)
 from test_profile_integration import dispatch
 from test_profile_live import live  # noqa: F401  (fixture)
@@ -80,13 +81,13 @@ def test_planning_occupancy_frees_a_model_already_running_on_a_reusable_slot():
 
 
 def test_assignment_prefers_the_slot_already_running_the_model():
-    plan = build_dispatch_plan('implement dynamic router', REG)
-    assert [s.agent_id for s in plan.subtasks] == ['flashnext-coder', 'claude-reviewer']
+    plan = two_step_plan('dynamic router', REG)
+    assert [s.agent_id for s in plan.subtasks] == ['flashnext-coder', 'claude-opus']
     plain = assign_profiles(plan, ['w1', 'w2', 'w3'], REG)['assignments']
     assert [a['worker'] for a in plain] == ['w1', 'w2']
     reused = assign_profiles(plan, ['w1', 'w2', 'w3'], REG,
                              running={'w1': 'opus', 'w2': None, 'w3': 'flashnext'})['assignments']
-    assert [(a['agent_id'], a['worker']) for a in reused] == [('flashnext-coder', 'w3'), ('claude-reviewer', 'w1')]
+    assert [(a['agent_id'], a['worker']) for a in reused] == [('flashnext-coder', 'w3'), ('claude-opus', 'w1')]
 
 
 def test_planner_passes_each_step_role_to_the_router(tmp_path):
@@ -94,7 +95,7 @@ def test_planner_passes_each_step_role_to_the_router(tmp_path):
     for card in REG:
         data = card.to_dict()
         data.pop('model_card')  # self-contained copies (no models/ dir here)
-        if card.id == 'claude-reviewer':
+        if card.id == 'claude-opus':  # the shipped code-review card: left out, the test brings its own
             continue
         if card.id == 'flashnext-coder':
             data.update(capabilities=['code-edit', 'test-fix', 'planning', 'code-review'], risk_rank=0,
@@ -105,8 +106,8 @@ def test_planner_passes_each_step_role_to_the_router(tmp_path):
         'id': 'other-reviewer', 'display_name': 'R', 'cli': 'claude', 'capabilities': ['code-review'],
         'risk_rank': 5}))
     registry = AgentRegistry(tmp_path)
-    plan = build_dispatch_plan('implement dynamic router', registry)
-    assert [s.agent_id for s in plan.subtasks] == ['flashnext-coder', 'other-reviewer']
+    assert [s.agent_id for s in build_dispatch_plan('implement dynamic router', registry).subtasks] == ['flashnext-coder']
+    assert [s.agent_id for s in build_dispatch_plan('review dynamic router', registry).subtasks] == ['other-reviewer']
 
 
 def test_roster_check_counts_slots_per_model_and_checks_hosts():
@@ -188,7 +189,7 @@ def test_submit_plans_against_current_occupancy(fx):
     f.desired.remove('worker-3')  # both FlashNext slots are retiring: none can be reused
     f.submit({'goal': 'implement dynamic router', 'auto_agents': True})
     plan = json.loads(f.task()['dispatch_plan'])
-    assert [s['agent_id'] for s in plan['subtasks']] == ['claude-coder', 'claude-reviewer']
+    assert [s['agent_id'] for s in plan['subtasks']] == ['claude-coder']
     f.finish('cancelled', 'again')
     f.desired.append('worker-3')  # worker-3 can be reused: FlashNext stays eligible and takes it
     f.submit({'goal': 'implement dynamic router', 'auto_agents': True})

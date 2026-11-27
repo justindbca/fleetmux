@@ -40,7 +40,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fleetmux import applet_host, awake, job_chain, roster, subfleet
+from fleetmux import applet_host, awake, fleet_config, job_chain, roster, subfleet
 
 OPS = ('subfleet.up', 'subfleet.down', 'subfleet.attach', 'subfleet.detach')
 HASH = 'fx:subfleet:'
@@ -710,7 +710,7 @@ def stop_child(f, d, rec, cfg, reason):
 def over_threshold(f, slot):
     """(used, window) when ``slot``'s session is past its handoff ratio, else None (design §22)."""
     used, window = f.usage(slot)
-    ratio = float(f.agent(slot).get('handoff_ratio') or f.cfg['handoff_ratio'])
+    ratio = float(f.agent(slot).get('handoff_ratio') or fleet_config.handoff_ratio(f.cfg))
     return (used, window) if window and used >= ratio * window else None
 
 

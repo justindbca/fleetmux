@@ -161,7 +161,7 @@ def test_the_spec_has_every_applet_default(tmp_path, monkeypatch):
     spec, = relay_applet.specs(dict(run=str(tmp_path), mode='service', transport_version=2), ['worker-1'])
     assert spec['command'] == ['{python}'] + COMMAND
     assert spec['autostart'] is True and spec['stale_after_s'] > spec['heartbeat_s']
-    assert {'lease', 'review', 'notify', 'waits'} <= set(spec)
+    assert {'lease', 'notify', 'waits'} <= set(spec) and 'review' not in spec
 
 
 def test_a_switch_change_takes_effect_at_the_next_roster_reload(root, monkeypatch):

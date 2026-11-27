@@ -27,8 +27,7 @@ An **applet** is that deterministic core, run as a process of a fleet next to it
 - It gives the worker back as soon as the job is done and applies again next time. If the job is not finished
   when the term runs out, it asks for a renewal; the supervisor decides.
 - Its verdicts are its own: whether a fix worked is decided by the applet's checks, never by the worker's claim.
-- **Independent review is not its job.** When a leased worker hands back a fix, the fleet has a worker in another
-  slot review it and gives the applet one final result (section 6).
+- **No fix review.** A fix a leased worker hands back comes straight back to the applet (section 6).
 
 Name format: `applet-<name>-<n>`, for example `applet-rollout-1`. (Not "kit": a worker kit, section 30, is a read-only
 data package. Not a `tabs:` program, section 31: a tab is opened once and never watched.)
@@ -37,13 +36,12 @@ data package. Not a `tabs:` program, section 31: a tab is opened once and never 
 
 | Role | Does | Does not |
 |---|---|---|
-| Host supervisor | Acts at two moments: grants a lease (which worker, what scope, how long) and takes it back (deny a renewal, revoke). Rules on what the applet escalates. | Take part in the back-and-forth inside a lease. Dispatch other work to a leased or reviewing slot. Pick or instruct the reviewer of a fix. |
-| Applet | Runs the deterministic loop; keeps every threshold as a parameter; judges results by program; requests, renews and releases leases; marks the message that hands back a fix; escalates anything outside its scope. | Call a model. Widen its own scope. Approve its own escalations. Delete or move files on its own decision. Arrange reviews. |
+| Host supervisor | Acts at two moments: grants a lease (which worker, what scope, how long) and takes it back (deny a renewal, revoke). Rules on what the applet escalates. | Take part in the back-and-forth inside a lease. Dispatch other work to a leased slot. |
+| Applet | Runs the deterministic loop; keeps every threshold as a parameter; judges results by program; requests, renews and releases leases; marks the message that hands back a fix; escalates anything outside its scope. | Call a model. Widen its own scope. Approve its own escalations. Delete or move files on its own decision. |
 | Leased worker | Works inside the lease's stated purpose and paths for the applet that holds the lease. | Decide whether the work passed. Take work from anyone else during the lease. Do out-of-scope work (it replies `blocked`). |
-| Reviewer | A worker in another slot, picked by the host daemon. Reviews one handed-back fix, read-only, by the fleet's review rules (`REVIEWER.md`). | Edit files. Fix anything. Review a job it held a lease for. |
 | Root supervisor | Rules on `access` escalations (section 46). For a sub-fleet host they are passed up to it; on a root host it is the host supervisor. | Approve deletions. |
 | Human owner | Chooses the host. The only one who approves deletions and moves of files, and the steps an applet marks `human`. | |
-| Host daemon | Starts, watches and restarts the host's applets; enforces every rule below; adds a worker when a lease needs one; runs fix reviews; delivers messages; records audit. | Trust a model's or an applet's claim without checking state. |
+| Host daemon | Starts, watches and restarts the host's applets; enforces every rule below; adds a worker when a lease needs one; delivers messages; records audit. | Trust a model's or an applet's claim without checking state. |
 
 ### 1.2 What is reused and what is new
 
@@ -54,11 +52,10 @@ data package. Not a `tabs:` program, section 31: a tab is opened once and never 
 | Start / watch / restart a process | The daemon's handling of its channel actor: spawn, heartbeat, restart (section 53) | Restart rule of section 2; the applet survives a daemon outage and is adopted on resume |
 | Applet -> fleet requests | Service request entry and the external-op pattern of `subfleet.up` (program gate first, then a supervisor decision field, op queue re-asked on resume; section 29) | Ops `applet.*`; decision key `applet` |
 | Applet -> worker messages | Service request with `to`: dispatched straight to that worker, reply by `fleet_result`, result at `fx:result:<id>` (section 53 "Direct to a worker") | The `lease` and `fix` fields and their checks |
-| "This slot is taken" | Slot hash `fx:agent:<slot>`; the scheduler's existing guards for `delegated` / `held` slots | Fields `applet_lease*` and `applet_review` on the slot; the guards read them |
-| A worker when none is free | Wake of a reclaimed worker; roster hot add of a worker row (section 16); model from the default worker chain (section 52) | The daemon writes the row for a granted lease or a review; `hot_add_max` |
+| "This slot is taken" | Slot hash `fx:agent:<slot>`; the scheduler's existing guards for `delegated` / `held` slots | Fields `applet_lease*` on the slot; the guards read them |
+| A worker when none is free | Wake of a reclaimed worker; roster hot add of a worker row (section 16); model from the default worker chain (section 52) | The daemon writes the row for a granted lease; `hot_add_max` |
 | Giving such a worker up again | Idle reclaim of service workers (`worker_idle_reclaim_min`) | Also applied to lease-added slots of a sub-fleet host (today the rule runs in root fleets only) |
-| Independent review of a fix | `REVIEWER.md` in every worker directory and its pointer in the rule file; verdict rule PASS = zero P0 and zero P1; a capped number of rounds (the `review_step` of the `dev_task` lifecycle mode) | The daemon dispatches the reviewer in a service fleet and attaches the verdict to the message result |
-| Clean context at lease start and end | `fresh` rotation (section 37) | Triggered by lease start / end and by a review |
+| Clean context at lease start and end | `fresh` rotation (section 37) | Triggered by lease start / end |
 | Extra write paths for the lease | Program grants written into the worker's rule file (section 46) | Issued and cleared by the lease |
 | Surviving rotation | Handoff note + next generation in the same slot (section 4, section 34), frozen resume (section 43), model chain on a wall (section 23) | A "Lease" block in the note and the start prompt |
 | Out-of-scope requests | `report_up` to the root supervisor and its ruling (section 46) | Op `applet.escalate` in front of it |
@@ -178,7 +175,7 @@ read-only tail of the log (applet-interface.md section 2.6).
 |---|---|---|
 | Start, signal, restart the process; count crashes; decide crashloop | Host daemon | On its tick, per roster row: pid alive, heartbeat age, exit code. |
 | End the leases of an applet that is not `up` | Host daemon | On its tick (`applet_down`). |
-| Gate ops, ask the supervisor, deliver messages, add workers, run reviews, emit events, expire leases | Host daemon | Sections 3 to 6. |
+| Gate ops, ask the supervisor, deliver messages, add workers, emit events, expire leases | Host daemon | Sections 3 to 5. |
 | Bring the host daemon back | Sub-fleet host: the parent daemon (section 29). Root host: its supervisor or an operator, `start --resume` (section 36). | Unchanged. |
 | Carry an `access` escalation up and its ruling down (sub-fleet host) | Host supervisor + both daemons | `report_up` notice files and ruling files (section 46), unchanged. |
 | Carry a `delete` escalation to the human | Host daemon; from a sub-fleet host up to the top-level daemon | A root host records the pending item itself, shows it in `status` and pushes it on its channels. A sub-fleet host writes a notice of kind `applet_delete` into the parent's notice directory (the section 20 / section 46 channel; middle levels pass it up unchanged); the top-level daemon does the same recording and push. The human's answer comes back as a ruling file to the originating host, which emits `escalation.ruled` with `by: human`. No supervisor at any level is asked. |
@@ -191,7 +188,6 @@ While the host daemon is down:
 | Ops submitted | Stay `pending`; no answer. | Processed in order. The applet may resend with the same `id`. Requests that were waiting for the supervisor are asked again (as for `subfleet.up`, section 29). |
 | Lease messages | Not delivered. | Resume rules of section 17: a message that was in flight is stopped and delivered again when its `replay` allows, otherwise it is answered `timeout`; a turn the worker finished during the outage is done again. A worker that cannot be reattached starts its next generation (`worker.rotated`); the lease stays with the slot. |
 | Lease clocks | Keep running (awake time: a sleep of the machine does not count, design.md section 35). | Leases past their end expire at once. |
-| Reviews | Nothing new starts. | A review that was in flight is redone by the same rules; waiting ones start. |
 | Host Redis gone as well (the host was stopped or reclaimed without a clean applet stop) | The applet cannot reach Redis; after `stale_after_s` the SDK exits `0`. | The next host start starts the applet again. |
 
 Consequence for authors: **Redis is not the applet's memory.** Job queues, attempt counters and "where was I" go
@@ -228,7 +224,7 @@ into `FLEETMUX_APPLET_STATE`. Leases do not carry across a host down/up or a mov
 | `renew_requested` -> `active` (renewed) | **Host supervisor** | Grants the asked time or less. The program denies by itself past `max_renewals`. |
 | `renew_requested` -> `active` (denied / unanswered) | Host supervisor / program | The lease keeps its current end. `renew_grace_s` (default 0) is the only extension an unanswered renewal can get. |
 | `active` -> `released` | Applet | Op `applet.lease.release`. No supervisor turn. Expected as soon as the job is done. |
-| `active` -> `expired` | Program (clock) | `expires_at` (awake time) passed. Checked on the daemon tick; a daemon outage past the end means expiry on resume. Not enforced while a review of this lease's fix runs (section 6). |
+| `active` -> `expired` | Program (clock) | `expires_at` (awake time) passed. Checked on the daemon tick; a daemon outage past the end means expiry on resume. |
 | any open except `requested` -> `revoked` | Host supervisor (`revoke`), operator (`fleetmux applet revoke`), or program (`host_down`, `applet_down`, `applet_detached`, `slot_held`, `slot_retired`) | Immediate. |
 
 The lease clock counts awake time (design.md section 35): it stops only while the machine sleeps, not for a paused
@@ -248,7 +244,7 @@ tells the supervisor what it found:
 
 | Step | Condition | What happens on a grant |
 |---|---|---|
-| 1 | An eligible slot is idle, READY, has nothing queued and is neither leased nor reviewing. | The supervisor names it. |
+| 1 | An eligible slot is idle, READY, has nothing queued and is not leased. | The supervisor names it. |
 | 2 | An eligible slot is asleep (state `reclaimed` by the idle reclaim). | The supervisor names it; the program wakes it (the existing respawn) and the lease starts when it is READY. |
 | 3 | Neither, and the applet has fewer than `hot_add_max` lease-added rows in the roster, and the fleet's own limits allow one more worker. | The supervisor grants without naming a slot. The host daemon writes a new row into the host roster (and the night roster, if any) and section 16 starts it: name = the base of the template worker + the next unused number (`fix-1` -> `fix-2`; names are never reused in a run), `role` = the template's role file, nothing else. CLI and model are the host's defaults for a worker: the first usable model of the default worker chain (`fleet.yaml#discovery.worker`, section 52), moving down the chain on a wall (section 23). |
 | 4 | None of the above. | Not asked. `rejected`, reason `worker_limit`, with `retry_after_s`. See 13.1 "Worker limit". |
@@ -262,8 +258,7 @@ wakes it (step 2) before any new row is added. The row leaves the roster when so
 (section 16). In a sub-fleet host the idle reclaim does not run today; applying the same rule there to
 lease-added slots is part of this design.
 
-`hot_add_max` counts lease-added rows present in the host roster, awake or asleep, including those added for a
-review (section 6). It is a parameter of the applet's roster row and a hot value (applet-interface.md 1.2). The
+`hot_add_max` counts lease-added rows present in the host roster, awake or asleep. It is a parameter of the applet's roster row and a hot value (applet-interface.md 1.2). The
 fleet's own limits still apply and are real limits: `child_workers_max` and `max_agents_total` (section 19) for a
 sub-fleet host, `max_agents_total` for a root host, and `max_busy` for delivery.
 
@@ -273,10 +268,8 @@ A leased slot is marked by fields on its slot hash (`applet_lease`, `applet_leas
 value of the slot's `state`. The reason: a leased worker still moves through `idle` -> `busy` -> `idle` for every
 message, can be `held`, and goes through `handoff` and `starting` on rotation; every existing branch on `state`
 stays correct. "Leased" is an owner mark on top of those states. In displays it reads `leased by applet-rollout-1`.
-A slot that reviews a fix carries `applet_review` and is treated the same way for the length of the review; it
-reads `reviewing for applet-rollout-1`.
 
-How every existing mechanism treats a slot whose `applet_lease` (or `applet_review`) is set:
+How every existing mechanism treats a slot whose `applet_lease` is set:
 
 | Mechanism | Behavior for a leased slot |
 |---|---|
@@ -295,8 +288,7 @@ How every existing mechanism treats a slot whose `applet_lease` (or `applet_revi
 | Operator pause of the fleet | Delivery stops for everyone, leased slots included; the lease clock keeps running. |
 
 Only two parties can send a leased worker anything: the applet holding the lease (messages) and the daemon itself
-(READY, handoff and mid-turn rotation prompts, which are fleet housekeeping). A reviewing slot receives only the
-daemon's review message.
+(READY, handoff and mid-turn rotation prompts, which are fleet housekeeping).
 
 Version 1 builds these rows: supervisor `dispatch` / `fresh` refused, `slot_leased`, `max_busy` and idle counts,
 clean session after every result suspended, split proposal and `blocked` returned to the applet, and roster removal
@@ -323,45 +315,14 @@ rotation of the host's supervisor, which today is implemented as a down/up of th
 running jobs time to finish; see open question 2. A root host has no such rotation: its supervisor rotates in
 place and leases continue.
 
-## 6. Independent review of a fix (done by the fleet)
+## 6. Fix review (removed)
 
-Every fix a leased worker hands back is reviewed by a worker in a different slot. Arranging that is the fleet's
-duty. The applet does not request a reviewer, does not talk to one and does not hold a lease on one; it marks
-which message hands back a fix and receives one final result.
-
-### 6.1 What the applet does
-
-- It sets `fix` on the lease message whose reply hands the change back (`fix` names the directory, the base
-  revision, the head revision or the working tree, and optionally the files; applet-interface.md 3.8). A message
-  without `fix` is plain work or information and is never reviewed.
-- Two ways to use it. Small fix: the one message that asks for the change carries `fix`. Longer fix: plain
-  messages and the applet's own check first, then a last message with `fix` that asks the worker to state what it
-  changed. The second way spends a review only on a change that already passes the applet's check.
-- The result of that message arrives once, after the review, with a `review` object: `pass`, or `fail` with the
-  reviewer's findings, or `none` with a reason when no verdict could be had.
-- Rule for authors: **a worker's change is used (merged, installed, shipped) only after the applet's own check
-  passed and a `fix` message for it came back `pass`.** A change made after a passed review needs a new hand-back.
-- On `fail` the applet sends the findings to the fixer under the same lease (same session), re-runs its own
-  check, and hands back again. That is the next round.
-
-### 6.2 What the fleet does
-
-| Step | Rule |
-|---|---|
-| Trigger | The leased worker's reply to a `fix` message has status `ok`. Other statuses are published at once, without a review. The result is withheld; event `review.started`. |
-| Reviewer | Picked by the host daemon, with no supervisor turn (the purpose, the scope and the read-only rule are fixed, so there is nothing to decide). Any worker of the host qualifies except: the slot that made the fix and every slot that held a lease of this applet with the same `job`. Only a different **slot** is required, not a different model. |
-| No free reviewer | The same order as 3.3: an idle slot, else an asleep slot, else a new row under `hot_add_max` and the fleet limits. At the limit the review waits for a slot, at most `review.timeout_s`. |
-| Session | Clean session (section 37) before the review, so the reviewer has none of the fixer's context, and after it. The slot carries `applet_review` meanwhile (section 4). |
-| Instructions | One program-written message: the scope from `fix`, the previous round's findings from round 2 on, and a pointer to `REVIEWER.md` in the worker's directory (the fleet's review rules: read-only, review only the given scope, each P0 / P1 finding with file, line and a reproduction). The reviewer gets no write grant. |
-| Verdict | `PASS` = zero P0 and zero P1, the existing rule. A reply that says PASS but lists a P0 or P1 counts as FAIL. |
-| Result | The withheld message result is published with `review` attached (applet-interface.md 3.9). The applet never sees the reviewer's session. |
-| Rounds | Counted per `job`. Round 2 and later go to the same reviewer slot when it is free and only re-run the reproductions of the open findings. After `review.max_rounds` (default 3) FAIL verdicts the result says `capped`; further `fix` messages of that job are refused `review_cap`. The applet then bounces the job or escalates (`plan`). |
-| No verdict | Reviewer timeout, an unusable reply after the correction rounds, or no slot within `review.timeout_s`: `review.verdict` is `none` with a `reason`. It is not a round. The applet may hand back again. |
-| Lease clock | While a review of its fix runs, the fix lease does not expire. When the review ends, the lease's end is at least `renew_margin_s` away, so the applet can send findings or release. Bounded by `review.timeout_s`. |
-| Record | The lease record keeps the last review (`last_review`); `applet.lease.released` carries it, so a lease released without a passed review is visible in the audit. |
-
-What stays the applet's rule: whether a failed review blocks the job, how many fix attempts a job gets, and what
-happens to a bounced job.
+The fleet no longer reviews a fix a leased worker hands back. A message may still carry `fix` (applet-interface.md
+3.8): its shape is checked and the reply is published at once, like any other reply, without a `review` object.
+Whether a worker's change is used is the applet's own check; where the change is merged, the merging supervisor
+reads the diff once. A host upgraded while an older release still held a fix reply for review publishes that reply
+once on its next applet tick (`applet_ops.drain_reviews`). The roster key `review` of an older applet row is
+accepted and ignored.
 
 ## 7. Escalation
 
@@ -404,8 +365,8 @@ items** (enqueue this branch), not for plan changes.
 | Leased worker stuck in a turn | Watchdog (section 24) | Rotation; lease continues | |
 | Leased worker hits a wall | Wall table (section 23) | Model chain; lease continues | End of chain: resume the fleet |
 | Message deadline passes | `timeout_s` | Slot held, lease revoked | Release the held slot per existing rules |
-| Reviewer times out or replies unusably | `review.timeout_s`, reply check | Result with `review.verdict: none`; the reviewer slot is rotated or held by the existing rules | |
-| Review fails `max_rounds` times | Round count | `capped`; further hand-backs of the job refused | The applet's bounce or escalation |
+
+
 | Applet forgets to release | Lease term | Expiry returns the worker | |
 | Applet dies holding a lease | Process exit | Lease ended at once | |
 | Applet is detached while it works | Roster reload | 2.1: drain, revoke, stop | |
@@ -430,10 +391,9 @@ program where stated and by rule files otherwise, as elsewhere in fleetmux (sect
 
 | Party | May | May not | Enforced by |
 |---|---|---|---|
-| Applet | Read and write its state and run directories and whatever its own project needs. Submit `applet.*` ops and lease messages. Read its own `fx:applet:<name>:*` keys and `fx:result:<its ids>`. Listen on the one loopback port it declares in `session_env` (distributed-development.md, session environment). | Call a model or start an agent CLI. Write any other `fx:*` key. Message a worker without an active lease on it. Message a reviewer. Delete or move files without a human approval. Install launchd / cron / systemd entries. Bind any other network port for fleet purposes, or bind its declared port on a non-loopback address. | Program: lease and token checks on every op and message. Review + the team guide's checklist for the rest (an applet is ordinary code running as the fleet user; the roster entry that names its command is the authorization). |
+| Applet | Read and write its state and run directories and whatever its own project needs. Submit `applet.*` ops and lease messages. Read its own `fx:applet:<name>:*` keys and `fx:result:<its ids>`. Listen on the one loopback port it declares in `session_env` (distributed-development.md, session environment). | Call a model or start an agent CLI. Write any other `fx:*` key. Message a worker without an active lease on it. Delete or move files without a human approval. Install launchd / cron / systemd entries. Bind any other network port for fleet purposes, or bind its declared port on a non-loopback address. | Program: lease and token checks on every op and message. Review + the team guide's checklist for the rest (an applet is ordinary code running as the fleet user; the roster entry that names its command is the authorization). |
 | Leased worker | Write its own directory and the lease's granted paths. Use its normal tools. | Work outside the purpose. Write elsewhere. Delete or move. Take instructions from anyone but the lease holder. Judge the result. | Rule file section + program grants (section 46). Hard sandboxing depends on the worker CLI and is not added by this design. |
-| Reviewer | Read the fix's scope. Write its report in its own directory. | Edit the reviewed files. Take instructions from the applet or the fixer. | `REVIEWER.md`; no write grant is issued. |
-| Host supervisor | Grant, deny, renew, revoke; rule on `plan` / `scope`; on a root host also `access`. | Dispatch to a leased or reviewing slot. Approve `delete`. Approve `access` on a sub-fleet host. Widen paths beyond the request. | Program checks on the decision. |
+| Host supervisor | Grant, deny, renew, revoke; rule on `plan` / `scope`; on a root host also `access`. | Dispatch to a leased slot. Approve `delete`. Approve `access` on a sub-fleet host. Widen paths beyond the request. | Program checks on the decision. |
 | Outside callers | `fleetmux applet send` (work items), `fleetmux request` to non-leased workers, operator text to the supervisor. | Message a leased worker. Submit ops for an applet (no token). | Program. |
 
 Secrets: an applet's credentials (deploy keys, API tokens for its own deterministic calls) stay in the applet
@@ -442,11 +402,10 @@ audit `detail`; those are shown to models and written to logs.
 
 ## 10. Observability
 
-- **Audit**: every transition in sections 2, 3 and 6 writes an event (`applet.*`, `applet.lease.*`,
-  `applet.review.*`; list in applet-interface.md section 6). The applet's own milestones are `applet.event`
+- **Audit**: every transition in sections 2 and 3 writes an event (`applet.*`, `applet.lease.*`; list in applet-interface.md section 6). The applet's own milestones are `applet.event`
   records, free of model turns.
 - **Status tree**: `fleetmux status` shows, under each fleet that hosts applets, its applets (state, phase text,
-  open leases) and, on each slot, the lease or review that holds it and whether the row was added for a lease.
+  open leases) and, on each slot, the lease that holds it and whether the row was added for a lease.
 - **Supervisor view**: lease requests, renewals and escalations arrive as tagged messages; `applet.notify` lines
   are rate limited so an applet cannot flood the supervisor's context. A hot-added worker appears in the next
   `[Roster change]` list (section 16).
@@ -455,8 +414,8 @@ audit `detail`; those are shown to models and written to logs.
   abnormal state). The tab shows a header with the state, phase, heartbeat age, restarts and crashes, open leases
   and the time of the last state change, above a live, read-only tail of `applet.log` (applet-interface.md
   section 2.6). A sub-fleet host's applets are in that sub-fleet's page.
-- **History**: the leased worker's and the reviewer's generations, screens and handoff notes are recorded as for
-  any worker; lease and review start and end appear in the slot's timeline.
+- **History**: the leased worker's generations, screens and handoff notes are recorded as for
+  any worker; lease start and end appear in the slot's timeline.
 
 ## 11. Versioning
 
@@ -477,13 +436,13 @@ This shows that the interface can express a real applet end to end. It is not th
 | The whole batch is tested once | Applet (test command) | none |
 | A failing test is attributed | Applet (deterministic) | A test that failed in the batch but passed on every branch alone = caused by the merge. A test that already fails on one branch alone = that branch's own problem. |
 | Merge-caused failure | Applet -> leased worker | Plain messages until the applet's own test run passes or `max_fix_attempts` is used; `renew` if the term is short. If every worker is busy the fleet adds one for the lease. |
-| The fix is handed back | Applet -> leased worker, then the fleet | A last message with `fix` (the batch work tree, base and head). The fleet has another slot review it; the applet gets `review.verdict`. On `fail` the findings go to the fixer and the step repeats. |
+| The fix is handed back | Applet -> leased worker | A last message with `fix` (the batch work tree, base and head). The reply comes straight back; the applet's own check decides whether the batch goes on. |
 | A branch's own failure | Applet | The branch leaves the batch and goes back to its author (`applet.audit batch.bounced`, plus the applet's own notification); the rest of the batch continues. If dropping it changes the agreed plan: `applet.escalate` (`plan`). |
 | Install | Applet | none (its own install command, local or over SSH). Removing an old release directory: `applet.escalate` (`delete`) -> human. |
 | Health check, rollback | Applet | none; `applet.audit release.healthy` / `release.rolled_back`; `applet.notify` once on rollback. |
 | Publish and watch CI | Applet | none |
 
-Nothing in the train needs the applet to call a model, to arrange a review, or a worker to decide pass or fail.
+Nothing in the train needs the applet to call a model, or a worker to decide pass or fail.
 
 ## 13. Decisions and open questions
 
@@ -493,13 +452,11 @@ Nothing in the train needs the applet to call a model, to arrange a review, or a
 |---|---|---|
 | Host | An applet is hot-loadable and its host is the owner's choice: a root fleet or a named sub-fleet, in service mode. | 1.3, 2.1 |
 | Watcher | The host's own daemon watches the applet process, for both kinds of host. | 2.3 |
-| Review | Independent review of a fix is done by the fleet, not by the applet. The reviewer must be a different slot; a different model is not required. | 6 |
+| Review | No fix review: a fix reply goes straight back to the applet; the applet's own check decides. | 6 |
 | No free worker | The fleet wakes or hot-adds a worker and grants the lease on it; it does not refuse and does not queue. | 3.3 |
 | Lease shape | One slot per lease, one job per lease, on demand; renew when the term is short. | 3 |
-| Worker limit | At `hot_add_max` (or a fleet limit) the lease request is refused with `worker_limit` and `retry_after_s`; the applet retries from its own loop. A review waits for a slot, up to `review.timeout_s`. One rate-limited line tells the supervisor. Raising the limit is a hot parameter change. | 3.3 |
-| Reviewer choice | The program picks the reviewer; it costs no supervisor turn. | 6 |
+| Worker limit | At `hot_add_max` (or a fleet limit) the lease request is refused with `worker_limit` and `retry_after_s`; the applet retries from its own loop. One rate-limited line tells the supervisor. Raising the limit is a hot parameter change. | 3.3 |
 | Sleeping hot-added slots | A hot-added slot that idle reclaim put to sleep stays in the roster and counts toward `hot_add_max`; removing it is a manual roster edit. | 3.3 |
-| Lease during review | The fix lease does not expire while its review runs; after the review at least `renew_margin_s` remains. | 6 |
 | Project YAML writers | The host daemon and the SDK both take an exclusive lock on `<file>.lock` before writing the project YAML. | applet-interface.md 2.5 |
 
 ### 13.2 Open

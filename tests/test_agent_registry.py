@@ -8,11 +8,11 @@ from fleetmux.agent_registry import AgentRegistry, AgentRegistryError
 def test_default_registry_loads_initial_cards():
     registry = AgentRegistry()
     assert [card.id for card in registry.cards] == [
-        "claude-coder", "claude-fable", "claude-haiku", "claude-opus", "claude-reviewer",
+        "claude-coder", "claude-fable", "claude-haiku", "claude-opus",
         "claude-sonnet", "flashnext-coder", "researcher"
     ]
     assert registry.get("flashnext-coder").cli == "pi"
-    assert registry.get("claude-reviewer").cli == "claude"
+    assert registry.get("claude-reviewer").id == "claude-opus"  # a removed card id of an older roster
     assert "web-research" in registry.get("researcher").capabilities
 
 
@@ -43,7 +43,7 @@ def test_json_registry_uses_only_stdlib_format_support(tmp_path):
 
 def test_optional_launch_mapping_is_data_only_and_backward_compatible(tmp_path):
     assert AgentRegistry().get("researcher").model is None
-    assert AgentRegistry().get("claude-reviewer").profile is None
+    assert AgentRegistry().get("claude-opus").profile is None
     card = {"id": "mapped-agent", "display_name": "Mapped", "cli": "claude",
             "capabilities": ["code-review"], "model": "sonnet", "profile": "review",
             "role_file": "worker.md"}

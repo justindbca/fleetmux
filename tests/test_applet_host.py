@@ -95,8 +95,7 @@ def test_roster_accepts_applets_and_fills_every_default(tmp_path):
         'lease': {'max_active': 2, 'ttl_s': 1800, 'ttl_max_s': 7200, 'max_renewals': 3, 'renew_margin_s': 300,
                   'renew_grace_s': 0, 'prepare_timeout_s': 300, 'eligible': ['worker-1', 'worker-2'],
                   'decision_wait_s': 600, 'hot_add_max': 2, 'hot_add_like': 'worker-1'},
-        'review': {'max_rounds': 3, 'timeout_s': 1800},
-        'waits': {'request_lease': 660, 'renew': 660, 'send': 9360, 'release': 60, 'notify': 60}}
+        'waits': {'request_lease': 660, 'renew': 660, 'send': 7560, 'release': 60, 'notify': 60}}
     path = tmp_path / 'roster.yaml'
     path.write_text(text)
     assert roster.load_applets(path) == [entry]
@@ -124,9 +123,6 @@ def test_roster_without_applets_has_none(tmp_path):
     ('{name: applet-a-1, command: [x], lease: {max_active: 0}}', 'lease.max_active'),
     ('{name: applet-a-1, command: [x], lease: {hot_add_max: -1}}', 'lease.hot_add_max'),
     ('{name: applet-a-1, command: [x], lease: {hot_add_like: nobody-1}}', 'lease.hot_add_like'),
-    ('{name: applet-a-1, command: [x], review: {max_rounds: 0}}', 'review.max_rounds'),
-    ('{name: applet-a-1, command: [x], review: {timeout_s: 5}}', 'review.timeout_s'),
-    ('{name: applet-a-1, command: [x], review: {other: 1}}', 'review must be a mapping'),
     ('{name: applet-a-1, command: [x], lease: {ttl_s: 30}}', 'lease.ttl_s'),
     ('{name: applet-a-1, command: [x], lease: {ttl_max_s: 59}}', 'lease.ttl_max_s'),
     ('{name: applet-a-1, command: [x], lease: {renew_margin_s: 1800}}', 'lease.renew_margin_s'),

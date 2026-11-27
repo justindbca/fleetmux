@@ -1,18 +1,15 @@
 """acceptance.verdict (launch-demo brief §1.2): one audit event at every "the supervisor reports done -> the
-program judges" point, in the three modes: task artifacts (Fleet.on_supervisor COMPLETED), dev_task (the
-lifecycle delivery gate) and review_loop (the verdict file). Bookkeeping only: every judgement, return value
+program judges" point, in the two modes: task artifacts (Fleet.on_supervisor COMPLETED) and dev_task (the
+lifecycle delivery gate). Bookkeeping only: every judgement, return value
 and status is asserted unchanged next to the new event.
 
 Fake cmux and fake Pi agents on a private Redis (the tests/test_runtime_v2.py fixture), as in
 tests/test_lifecycle_close.py."""
-import json
 import sys
 
 from test_message_bus_v2 import private_redis_v2  # noqa: F401  (fixture)
 from test_runtime_v2 import audits, fx, receive, settle  # noqa: F401  (fx fixture)
-from test_lifecycle_close import (as_task, complete, deliver_spec, notes, repo, submit, table,  # noqa: F401
-                                  write_verdict)
-from fleetmux import lifecycle, lifecycle_close, lifecycle_deliver
+from test_lifecycle_close import as_task, complete, deliver_spec, notes, repo, submit, table  # noqa: F401
 import test_complete_needs_settled_workers as settled_workers
 
 FIELDS = {'mode', 'task_id', 'ok', 'problem', 'claimed_by', 'event', 'run_id', 'at'}
@@ -80,7 +77,6 @@ def test_unsettled_refusal_writes_no_verdict(fx):
 # ------------------------------------------------------------------ dev_task
 def test_dev_task_failed_gate_writes_one_verdict_next_to_lifecycle_gate(fx, table, notes, repo, tmp_path):
     f = as_task(fx, 'dev_task')
-    write_verdict(f)
     complete(f, {'goal': 'ship', 'deliver': deliver_spec(repo, tmp_path, [sys.executable, '-c', 'raise SystemExit(3)'])})
     f.tick()
     f.tick()
@@ -96,7 +92,6 @@ def test_dev_task_failed_gate_writes_one_verdict_next_to_lifecycle_gate(fx, tabl
 
 def test_dev_task_passing_gate_writes_ok_verdict(fx, table, notes, repo, tmp_path):
     f = as_task(fx, 'dev_task')
-    write_verdict(f)
     complete(f, {'goal': 'ship', 'deliver': deliver_spec(repo, tmp_path)})
     f.tick()
     [v] = verdicts(f, 'dev_task')
@@ -104,64 +99,3 @@ def test_dev_task_passing_gate_writes_ok_verdict(fx, table, notes, repo, tmp_pat
     [art] = verdicts(f, 'task_artifacts')  # the COMPLETED claim itself passed the literal check first
     assert art['ok'] == 'true'
     assert f.lifecycle_close['closed_by'] == 'auto'
-
-
-# ------------------------------------------------------------------ review_loop
-def expected_review_problem(f, spec):
-    """The pre-change formula of completion_problem's review_loop branch, recomputed from its parts."""
-    verdict, _, problem = lifecycle_deliver.load_verdict(f.workspace(), spec['review_file'],
-                                                         lifecycle_close.fleet_slots(f))
-    if verdict is None:
-        return 'review_loop done_when not met: ' + problem
-    problem = lifecycle_deliver.review_problem(verdict)
-    return 'review_loop done_when not met: ' + problem if problem else None
-
-
-def test_review_loop_fail_writes_verdict_and_returns_the_same_problem(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    write_verdict(f, 'FAIL', rnd=1)
-    complete(f, {'goal': 'fix', 'review_file': 'reviewer/verdict.json'})
-    spec = lifecycle_close.task_spec(f.task())
-    policy = lifecycle.get_mode('review_loop')
-    want = expected_review_problem(f, spec)
-    assert want == 'review_loop done_when not met: review verdict is FAIL (round 1)'
-    got = [lifecycle_close.completion_problem(f, policy, f.task(), spec) for _ in range(3)]
-    assert got == [want] * 3  # return value unchanged, every call
-    [v] = verdicts(f, 'review_loop')  # the dedupe only decides whether to log
-    assert v['mode'] == 'review_loop' and v['ok'] == 'false' and v['claimed_by'] == 'supervisor'
-    assert v['problem'] == 'review verdict is FAIL (round 1)'
-
-
-def test_review_loop_pass_writes_one_ok_verdict_even_when_rechecked(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    write_verdict(f, 'PASS', reviewer='whoever')
-    complete(f, {'goal': 'fix', 'review_file': 'reviewer/verdict.json'})
-    spec = lifecycle_close.task_spec(f.task())
-    policy = lifecycle.get_mode('review_loop')
-    assert [lifecycle_close.completion_problem(f, policy, f.task(), spec) for _ in range(3)] == [None] * 3
-    [v] = verdicts(f, 'review_loop')
-    assert v['ok'] == 'true' and v['problem'] == ''
-
-
-def test_review_loop_new_verdict_round_is_logged_again(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    write_verdict(f, 'FAIL', rnd=1)
-    complete(f, {'goal': 'fix', 'review_file': 'reviewer/verdict.json'})
-    spec = lifecycle_close.task_spec(f.task())
-    policy = lifecycle.get_mode('review_loop')
-    lifecycle_close.completion_problem(f, policy, f.task(), spec)
-    write_verdict(f, 'PASS', rnd=2)
-    assert lifecycle_close.completion_problem(f, policy, f.task(), spec) is None
-    assert [v['ok'] for v in verdicts(f, 'review_loop')] == ['false', 'true']
-
-
-def test_review_loop_missing_verdict_file_is_a_failed_verdict(fx, table, notes):
-    f = as_task(fx, 'review_loop')
-    write_verdict(f, 'PASS')  # the COMPLETED claim declares this file; it disappears before the lifecycle check
-    complete(f, {'goal': 'fix', 'review_file': 'reviewer/verdict.json'})
-    (f.workspace() / 'reviewer' / 'verdict.json').unlink()
-    spec = lifecycle_close.task_spec(f.task())
-    want = expected_review_problem(f, spec)
-    assert lifecycle_close.completion_problem(f, lifecycle.get_mode('review_loop'), f.task(), spec) == want
-    [v] = verdicts(f, 'review_loop')
-    assert v['ok'] == 'false' and v['problem'] == want.split(': ', 1)[1][:500]  # the audit line is cut at 500

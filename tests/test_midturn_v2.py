@@ -273,7 +273,7 @@ def test_real_worker_handoff_split_rotates_and_preserves_fifo(mixed):
     info = f.agent(slot)
     msg = f.v2.bus.message(f.r.hget(f.v2.bus.lease_key(slot), 'message_id'))
     later = f.v2.queue(slot, 'later', request_id=msg['request_id'])
-    f.midturn_order(slot, msg, 800000, 1000000, midturn.DEFAULTS)
+    f.midturn_order(slot, msg, 800000, 1000000, midturn.resolve_settings('claude', '', {})[0])
     f.midturn_timeouts()
     draft = Path(f.agent(slot)['midturn_draft'])
     draft.write_text('## Done (facts)\n- part done\n## In progress\n- stopped in step 2\n## Next steps (in order)\n- finish step 2\n')
@@ -291,7 +291,7 @@ def test_real_pi_service_split_and_offer_resumes_request_clock(fx):
     f = fx
     req(f); f.pump(); env = receive(f, SLOT)
     msg = f.v2.bus.message(env['message_id'])
-    f.midturn_order(SLOT, msg, 160000, 200000, midturn.DEFAULTS)
+    f.midturn_order(SLOT, msg, 160000, 200000, midturn.resolve_settings('pi', '', {})[0])
     bridge_settle(f, SLOT, env, candidates=[])
     assert f.v2.bus.message(env['message_id'])['outcome'] == 'handoff_split'
     assert f.r.hget(fleet.REQ+'r1', 'clock_paused_at')

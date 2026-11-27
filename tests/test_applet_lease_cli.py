@@ -14,7 +14,7 @@ from test_message_bus_v2 import private_redis_v2  # noqa: F401
 from test_runtime_v2 import event, fx  # noqa: F401
 from test_applet_lease import NAME, TOKEN, ack, decide, events, grant, host, message, rec  # noqa: F401
 from fleetmux import applet_cli, applet_lease as al, fleet
-from fleetmux.applet import Lease, LeaseDenied, LeaseEnded, Rejected, Reply, Review, Ruling  # noqa: F401
+from fleetmux.applet import Lease, LeaseDenied, LeaseEnded, Rejected, Reply, Ruling  # noqa: F401
 from fleetmux.applet.lease import LeaseCalls
 
 

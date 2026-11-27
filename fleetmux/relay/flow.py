@@ -302,7 +302,7 @@ class Flow:
 
     # ------------------------------------------------------------------ delivery (the dev_task gate passed)
     def _delivery_watch(self):
-        """The dev_task gate appends a queue row only after review, tests and the fast-forward passed."""
+        """The dev_task gate appends a queue row only after the tests and the fast-forward passed."""
         for seg in sorted(self.owned):
             e = self.owned[seg]
             if not e.get('queue') or not e.get('deploy'):
