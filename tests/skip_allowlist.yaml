@@ -115,18 +115,6 @@
 - file: tests/test_m4_drain_s_contract.py
   reason: "M4 not in gate"
   why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
-- file: tests/test_m4_e2e_hygiene.py
-  reason: "M4 not in gate"
-  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
-- file: tests/test_m4_e2e_ops.py
-  reason: "M4 not in gate"
-  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
-- file: tests/test_m4_fake_cli.py
-  reason: "M4 not in gate"
-  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
-- file: tests/test_m4_profile_switch.py
-  reason: "M4 not in gate"
-  why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
 - file: tests/test_m4_tmux_cleanup.py
   reason: "M4 not in gate"
   why: "user decision (milestone 4 not in this delivery): M4 is not run in this delivery; the skip is accepted, M4 is not accepted"
